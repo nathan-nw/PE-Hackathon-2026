@@ -1,0 +1,25 @@
+[project]
+name = "pe-hackathon-repo"
+version = "0.0.0"
+requires-python = ">=3.13"
+dependencies = [
+    "mlh-pe-hackathon",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.9",
+]
+
+[tool.uv.sources]
+mlh-pe-hackathon = { path = "url-shortener", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["url-shortener"]
+addopts = "-v --cov=app --cov-report=term-missing"
+markers = [
+    "integration: HTTP tests against real URLs (set TEST_LOAD_BALANCER_URL / TEST_NGINX_STUB_STATUS_URL)",
+]

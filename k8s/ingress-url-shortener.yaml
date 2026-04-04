@@ -1,0 +1,29 @@
+# TLS terminates at the ingress controller (cert-manager example).
+# Replace host and tls.secretName; ensure your ingress class (nginx, traefik, etc.) is installed.
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: url-shortener
+  namespace: pe-hackathon
+  annotations:
+    # Example for ingress-nginx + cert-manager:
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - api.example.com
+      secretName: url-shortener-tls
+  rules:
+    - host: api.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: url-shortener
+                port:
+                  name: http

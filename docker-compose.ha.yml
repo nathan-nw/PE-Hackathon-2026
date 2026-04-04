@@ -1,0 +1,17 @@
+# Second edge NGINX (same upstream pool) on :8082 for DNS round-robin / external global LB tests.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.ha.yml up --build
+
+services:
+  load-balancer-b:
+    build:
+      context: ./load-balancer
+      dockerfile: Dockerfile
+    networks:
+      - app_net
+    ports:
+      - "8082:80"
+    depends_on:
+      url-shortener-a:
+        condition: service_healthy
+      url-shortener-b:
+        condition: service_healthy

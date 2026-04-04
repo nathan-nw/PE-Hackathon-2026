@@ -1,0 +1,8 @@
+FROM python:3.13-slim
+
+RUN pip install --no-cache-dir confluent-kafka>=2.3
+
+WORKDIR /app
+COPY kafka_consumer.py .
+
+CMD ["python", "-u", "kafka_consumer.py"]
