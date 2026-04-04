@@ -5,6 +5,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template
 
+from app.cache import init_cache
 from app.circuit_breaker import db_circuit_breaker
 from app.database import db, init_db
 from app.middleware import register_middleware
@@ -24,7 +25,7 @@ def create_app():
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # Rate limiting
+    # Rate limiting — backed by Redis so limits are shared across containers
     from flask_limiter import Limiter
     from flask_limiter.util import get_remote_address
 
@@ -37,9 +38,14 @@ def create_app():
     app.limiter = limiter
 
     init_db(app)
+    init_cache()
     register_middleware(app)
 
     from app import models  # noqa: F401 - registers models with Peewee
+
+    # Ensure load_test_results table exists (safe=True is a no-op if it already exists)
+    with app.app_context():
+        db.create_tables([models.LoadTestResult], safe=True)
 
     # Register before API blueprints so `/` and `/health` are not shadowed by `/<short_code>`.
     @app.route("/")

@@ -13,14 +13,14 @@ WORKDIR /app
 # Copy dependency files first (better Docker layer caching)
 COPY pyproject.toml uv.lock* ./
 
-# Install dependencies
-RUN uv sync --no-dev --frozen 2>/dev/null || uv sync --no-dev
+# Install dependencies (as root, before switching user)
+RUN uv sync --no-dev --frozen || uv sync --no-dev
 
 # Copy application code
 COPY . .
 
-# Create non-root user for security
-RUN useradd --create-home appuser
+# Create non-root user for security and give ownership of app dir
+RUN useradd --create-home appuser && chown -R appuser:appuser /app
 USER appuser
 
 EXPOSE 5000
@@ -29,5 +29,5 @@ EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:5000/health || exit 1
 
-# Run with gunicorn in production
-CMD ["uv", "run", "gunicorn", "--config", "gunicorn.conf.py", "run:app"]
+# Run with gunicorn (no re-sync needed)
+CMD ["uv", "run", "--no-sync", "gunicorn", "--config", "gunicorn.conf.py", "run:app"]
