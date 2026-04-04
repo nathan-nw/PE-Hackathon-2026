@@ -44,6 +44,8 @@ feature branches → staging → main
 
 ## Development Setup
 
+The repo tracks `uv.lock` for reproducible installs (CI uses `uv sync --group dev --frozen`). After changing dependencies in `pyproject.toml`, run `uv lock` and commit the updated lockfile.
+
 ```bash
 # Install dependencies (including dev tools)
 uv sync --group dev
@@ -62,6 +64,16 @@ uv run ruff format .
 # Run tests
 uv run pytest -v
 ```
+
+## Continuous Integration
+
+GitHub Actions workflow **CI** (`.github/workflows/ci.yml`) runs on pushes and pull requests to `main` and `staging`, and can be run manually (**Actions** → **CI** → **Run workflow**). It:
+
+- runs **Ruff** (`check` + `format --check`)
+- **bytecode-compiles** `app/`, `run.py`, `scripts/`, and `tests/` (catches syntax errors)
+- runs **pytest** against a **PostgreSQL 16** service (matches production-like DB; sets `CI=true` for the test harness)
+
+Dependabot (`.github/dependabot.yml`) opens weekly update PRs for **GitHub Actions** and **uv** dependencies.
 
 ## Pull Request Checklist
 

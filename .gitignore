@@ -13,8 +13,8 @@ build/
 # Environment variables
 .env
 
-# uv
-uv.lock
+# pytest / CI artifacts
+junit.xml
 
 # IDE
 .vscode/
