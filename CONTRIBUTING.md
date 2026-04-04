@@ -39,7 +39,7 @@ feature branches → staging → main
 ### Rules
 
 - Never push directly to `main` or `staging` — always use pull requests.
-- Keep feature branches short-lived. Merge or close them within a few days.
+- Keep feature branches short-lived. 
 - Rebase or merge from `staging` regularly to avoid large conflicts.
 
 ## Development Setup
