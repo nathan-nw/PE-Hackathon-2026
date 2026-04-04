@@ -13,6 +13,7 @@ name: CI
 # This ensures every PR is validated before merge.
 # ------------------------------------------------------------------------------
 on:
+  push:
   pull_request:
     branches: [main, staging]
 
