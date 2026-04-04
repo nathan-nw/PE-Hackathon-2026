@@ -215,6 +215,22 @@ services:
     ports:
       - "3001:80"
 
+  dashboard-backend:
+    build:
+      context: ./dashboard/backend
+    restart: unless-stopped
+    networks:
+      - app_net
+    ports:
+      - "8000:8000"
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_LOG_TOPIC: app-logs
+      CACHE_MAX_ENTRIES: "1000"
+    depends_on:
+      kafka:
+        condition: service_healthy
+
   user-frontend:
     build:
       context: ./user-frontend
