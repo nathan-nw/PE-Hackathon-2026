@@ -22,6 +22,56 @@ services:
       timeout: 3s
       retries: 5
 
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: hackathon_zookeeper
+    restart: unless-stopped
+    networks:
+      - app_net
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: hackathon_kafka
+    restart: unless-stopped
+    networks:
+      - app_net
+    ports:
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    depends_on:
+      - zookeeper
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  kafka-log-consumer:
+    build:
+      context: ./url-shortener
+      dockerfile: Dockerfile.kafka-consumer
+    container_name: hackathon_kafka_log_consumer
+    restart: unless-stopped
+    networks:
+      - app_net
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_LOG_TOPIC: app-logs
+    depends_on:
+      kafka:
+        condition: service_healthy
+
   url-shortener-a:
     build:
       context: ./url-shortener
@@ -42,8 +92,11 @@ services:
       DATABASE_USER: postgres
       DATABASE_PASSWORD: postgres
       FLASK_DEBUG: "false"
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
       db:
+        condition: service_healthy
+      kafka:
         condition: service_healthy
     expose:
       - "5000"
@@ -69,8 +122,11 @@ services:
       DATABASE_USER: postgres
       DATABASE_PASSWORD: postgres
       FLASK_DEBUG: "false"
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
       db:
+        condition: service_healthy
+      kafka:
         condition: service_healthy
     expose:
       - "5000"

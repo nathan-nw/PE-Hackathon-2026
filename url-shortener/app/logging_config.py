@@ -52,3 +52,12 @@ def configure_logging() -> None:
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
+
+    # Add Kafka log handler if configured
+    kafka_servers = os.environ.get("KAFKA_BOOTSTRAP_SERVERS")
+    if kafka_servers:
+        from app.kafka_logging import KafkaLogHandler
+
+        kafka_handler = KafkaLogHandler(bootstrap_servers=kafka_servers)
+        kafka_handler.setLevel(level)
+        logging.getLogger().addHandler(kafka_handler)
