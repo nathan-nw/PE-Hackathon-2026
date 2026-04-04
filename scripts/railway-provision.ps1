@@ -72,20 +72,25 @@ Set Root Directory in the Railway dashboard for each Git-linked service (or run 
   dashboard           dashboard
   dashboard-backend   dashboard/backend
 
-Recommended shared variables (use Railway Variable References from Postgres/Redis where possible):
+Recommended shared variables (automated: `$env:SYNC_VARIABLES = '1'; node setup-railway.js` — see RAILWAY.md):
 
   url-shortener:
-    DATABASE_URL = ${{ Postgres.DATABASE_URL }}
+    DATABASE_URL = ${{ Postgres.DATABASE_PRIVATE_URL }}   (internal; or DATABASE_URL if you set SYNC_VARIABLES_USE_PUBLIC_DATABASE_URL=1)
     RATE_LIMIT_STORAGE = ${{ Redis.REDIS_URL }}
     INSTANCE_ID = 1
     FLASK_DEBUG = false
 
   dashboard-backend:
-    DASHBOARD_DB_* from Postgres (create dashboard_db once), or a second Postgres plugin.
+    DASHBOARD_DATABASE_URL = ${{ Postgres.DATABASE_PRIVATE_URL }}
+    DASHBOARD_DB_NAME = dashboard_db
+    (Create database dashboard_db once in Postgres — RAILWAY.md.)
     Leave KAFKA_* unset (Kafka consumer stays off).
 
   dashboard:
-    DASHBOARD_BACKEND_URL = <URL of dashboard-backend service>
+    DASHBOARD_BACKEND_URL = https://${{ dashboard-backend.RAILWAY_PUBLIC_DOMAIN }}
+
+  user-frontend (optional):
+    NEXT_PUBLIC_API_URL = https://${{ url-shortener.RAILWAY_PUBLIC_DOMAIN }}
 
 Accept the Railway GitHub app for the repo if prompted (Settings -> Deploy -> GitHub).
 

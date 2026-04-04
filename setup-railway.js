@@ -22,6 +22,10 @@
  *   DRY_RUN=1
  *   SKIP_REDEPLOY=1  — skip serviceInstanceDeploy after configuration
  *   FORCE_CLEAR_PREDEPLOY=1  — set preDeployCommand to [] even when already empty (rare)
+ *   SYNC_VARIABLES=1  — upsert shared variable references (Postgres private URL, Redis, service URLs)
+ *   SKIP_DEPLOY_ON_VARIABLE_SYNC=1  — pass skipDeploys to variableCollectionUpsert (default: true)
+ *   RAILWAY_POSTGRES_SERVICE_NAME=Postgres  — plugin service name (default: Postgres)
+ *   RAILWAY_REDIS_SERVICE_NAME=Redis  — plugin service name (default: Redis)
  */
 
 const fs = require("fs");
@@ -226,6 +230,99 @@ const M_SERVICE_INSTANCE_DEPLOY = `
   }
 `;
 
+const M_VARIABLE_COLLECTION_UPSERT = `
+  mutation VariableCollectionUpsert($input: VariableCollectionUpsertInput!) {
+    variableCollectionUpsert(input: $input)
+  }
+`;
+
+/** Railway template: ${{ ServiceName.VARIABLE_NAME }} */
+function varRef(serviceName, variableName) {
+  return "${{ " + serviceName + "." + variableName + " }}";
+}
+
+/**
+ * Sets DATABASE_URL / Redis / cross-service URLs using private Postgres URL where available.
+ * See https://docs.railway.com/reference/variables (DATABASE_PRIVATE_URL on Postgres plugin).
+ */
+async function syncInternalDatabaseVariables(projectId, environmentId, byName, dry) {
+  const postgresService = (
+    process.env.RAILWAY_POSTGRES_SERVICE_NAME || "Postgres"
+  ).trim();
+  const redisService = (process.env.RAILWAY_REDIS_SERVICE_NAME || "Redis").trim();
+  const usePublicDbUrl =
+    process.env.SYNC_VARIABLES_USE_PUBLIC_DATABASE_URL === "1" ||
+    process.env.SYNC_VARIABLES_USE_PUBLIC_DATABASE_URL === "true";
+  const dbUrlKey = usePublicDbUrl ? "DATABASE_URL" : "DATABASE_PRIVATE_URL";
+
+  if (!byName.has(postgresService)) {
+    console.warn(
+      `\n(Variable sync) No service named "${postgresService}" — set RAILWAY_POSTGRES_SERVICE_NAME or add Postgres. Skipping DATABASE_* references.`
+    );
+    return;
+  }
+
+  const skipDeployOnVarSync =
+    process.env.SKIP_DEPLOY_ON_VARIABLE_SYNC !== "0" &&
+    process.env.SKIP_DEPLOY_ON_VARIABLE_SYNC !== "false";
+
+  const upsert = async (serviceName, variables) => {
+    const svc = byName.get(serviceName);
+    if (!svc) {
+      console.warn(`  (Variable sync) Service "${serviceName}" not found; skipping.`);
+      return;
+    }
+    const keys = Object.keys(variables);
+    console.log(`\n(Variable sync) ${serviceName}: ${keys.join(", ")}`);
+    if (dry) return;
+    await gql(M_VARIABLE_COLLECTION_UPSERT, {
+      input: {
+        projectId,
+        environmentId,
+        serviceId: svc.id,
+        replace: false,
+        skipDeploys: skipDeployOnVarSync,
+        variables,
+      },
+    });
+    console.log(`  variableCollectionUpsert OK`);
+  };
+
+  const pg = postgresService;
+  const redis = redisService;
+
+  await upsert("url-shortener", {
+    DATABASE_URL: varRef(pg, dbUrlKey),
+    ...(byName.has(redis)
+      ? { RATE_LIMIT_STORAGE: varRef(redis, "REDIS_URL") }
+      : {}),
+  });
+
+  if (!byName.has(redis)) {
+    console.warn(
+      `(Variable sync) No service named "${redis}" — set RAILWAY_REDIS_SERVICE_NAME or add Redis. url-shortener RATE_LIMIT_STORAGE not set.`
+    );
+  }
+
+  await upsert("dashboard-backend", {
+    DASHBOARD_DATABASE_URL: varRef(pg, dbUrlKey),
+    DASHBOARD_DB_NAME: "dashboard_db",
+  });
+
+  if (byName.has("dashboard")) {
+    await upsert("dashboard", {
+      DASHBOARD_BACKEND_URL:
+        "https://" + varRef("dashboard-backend", "RAILWAY_PUBLIC_DOMAIN"),
+    });
+  }
+
+  if (byName.has("user-frontend")) {
+    await upsert("user-frontend", {
+      NEXT_PUBLIC_API_URL: "https://" + varRef("url-shortener", "RAILWAY_PUBLIC_DOMAIN"),
+    });
+  }
+}
+
 function normalizeRepo(s) {
   const t = (s || "").trim();
   const m = t.match(/github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?$/i);
@@ -420,6 +517,19 @@ async function main() {
     }
   } else if (skipRedeploy && !dry) {
     console.log("\n(SKIP_REDEPLOY: not triggering redeploys)");
+  }
+
+  const syncVariables =
+    process.env.SYNC_VARIABLES === "1" || process.env.SYNC_VARIABLES === "true";
+  if (syncVariables) {
+    console.log("\n--- Variable references (internal DB URL, Redis, service URLs) ---");
+    byName = await fetchServicesMap(projectId);
+    await syncInternalDatabaseVariables(projectId, environmentId, byName, dry);
+    if (!dry) {
+      console.log(
+        "\n(Create database dashboard_db in Postgres once if it does not exist — see RAILWAY.md.)"
+      );
+    }
   }
 
   console.log("\nDone. If GitHub linking failed, install the Railway GitHub app for the org/repo and retry.");

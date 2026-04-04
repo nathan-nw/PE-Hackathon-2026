@@ -38,8 +38,8 @@ cache = LogCache(max_entries=CACHE_MAX_ENTRIES)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Start Kafka consumer and DB flush loop on startup."""
-    # Initialize database tables
-    init_db()
+    # Do not block HTTP readiness on Postgres retries (Railway healthcheck hits PORT immediately).
+    threading.Thread(target=init_db, daemon=True).start()
 
     # Kafka log stream (optional — disabled when no broker / DISABLED)
     if KAFKA_ENABLED:

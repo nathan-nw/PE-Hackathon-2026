@@ -12,19 +12,42 @@ import logging
 import os
 import time
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 import psycopg2
 from psycopg2.extras import execute_values
 
 logger = logging.getLogger(__name__)
 
-DB_CONFIG = {
-    "dbname": os.environ.get("DASHBOARD_DB_NAME", "dashboard_db"),
-    "user": os.environ.get("DASHBOARD_DB_USER", "postgres"),
-    "password": os.environ.get("DASHBOARD_DB_PASSWORD", "postgres"),
-    "host": os.environ.get("DASHBOARD_DB_HOST", "dashboard-db"),
-    "port": int(os.environ.get("DASHBOARD_DB_PORT", "5432")),
-}
+
+def _db_config() -> dict[str, Any]:
+    """Build psycopg2 kwargs from DASHBOARD_DATABASE_URL / DATABASE_URL or DASHBOARD_DB_*."""
+    url = (
+        os.environ.get("DASHBOARD_DATABASE_URL", "").strip()
+        or os.environ.get("DATABASE_URL", "").strip()
+    )
+    if url:
+        if url.startswith("postgres://"):
+            url = "postgresql://" + url[len("postgres://") :]
+        parsed = urlparse(url)
+        dbname = unquote((parsed.path or "").lstrip("/") or "postgres")
+        override_db = os.environ.get("DASHBOARD_DB_NAME", "").strip()
+        if override_db:
+            dbname = override_db
+        return {
+            "dbname": dbname,
+            "user": unquote(parsed.username or "postgres"),
+            "password": unquote(parsed.password or ""),
+            "host": parsed.hostname or "127.0.0.1",
+            "port": parsed.port or 5432,
+        }
+    return {
+        "dbname": os.environ.get("DASHBOARD_DB_NAME", "dashboard_db"),
+        "user": os.environ.get("DASHBOARD_DB_USER", "postgres"),
+        "password": os.environ.get("DASHBOARD_DB_PASSWORD", "postgres"),
+        "host": os.environ.get("DASHBOARD_DB_HOST", "dashboard-db"),
+        "port": int(os.environ.get("DASHBOARD_DB_PORT", "5432")),
+    }
 
 CREATE_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS kafka_logs (
@@ -67,12 +90,14 @@ CREATE INDEX IF NOT EXISTS idx_stats_snapshots_time ON instance_stats_snapshots 
 
 def get_connection():
     """Create a new database connection."""
-    return psycopg2.connect(**DB_CONFIG)
+    return psycopg2.connect(**_db_config())
 
 
 def init_db() -> bool:
     """Create tables if they don't exist. Returns True on success."""
-    for attempt in range(30):
+    max_attempts = int(os.environ.get("DASHBOARD_DB_INIT_ATTEMPTS", "20"))
+    sleep_s = float(os.environ.get("DASHBOARD_DB_INIT_SLEEP_SEC", "1"))
+    for attempt in range(max_attempts):
         try:
             conn = get_connection()
             with conn:
@@ -82,9 +107,14 @@ def init_db() -> bool:
             logger.info("Dashboard database initialized")
             return True
         except Exception as exc:
-            logger.warning("Waiting for dashboard DB (attempt %d/30): %s", attempt + 1, exc)
-            time.sleep(2)
-    logger.error("Could not connect to dashboard DB after 30 attempts")
+            logger.warning(
+                "Waiting for dashboard DB (attempt %d/%d): %s",
+                attempt + 1,
+                max_attempts,
+                exc,
+            )
+            time.sleep(sleep_s)
+    logger.error("Could not connect to dashboard DB after %d attempts", max_attempts)
     return False
 
 
