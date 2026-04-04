@@ -136,9 +136,68 @@
             white-space: nowrap;
         }
         .loading { text-align: center; color: #94a3b8; padding: 2rem; }
+        .instance-hud {
+            position: fixed;
+            top: 0.75rem;
+            right: 0.75rem;
+            z-index: 100;
+            min-width: 220px;
+            max-width: min(320px, 92vw);
+            padding: 0.75rem 1rem;
+            border-radius: 10px;
+            background: rgba(15, 23, 42, 0.92);
+            border: 1px solid #475569;
+            font-size: 0.75rem;
+            line-height: 1.45;
+            color: #cbd5e1;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+            backdrop-filter: blur(8px);
+        }
+        .instance-hud h3 {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #94a3b8;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+        }
+        .instance-hud .id-badge {
+            display: inline-block;
+            font-size: 1rem;
+            font-weight: 700;
+            color: #f8fafc;
+            background: linear-gradient(135deg, #6366f1, #a855f7);
+            padding: 0.15rem 0.55rem;
+            border-radius: 6px;
+            margin-bottom: 0.5rem;
+        }
+        .instance-hud dl {
+            margin: 0;
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 0.15rem 0.75rem;
+        }
+        .instance-hud dt { color: #64748b; }
+        .instance-hud dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; }
+        .instance-hud .host { font-size: 0.65rem; color: #64748b; word-break: break-all; margin-top: 0.35rem; }
+        .instance-hud.error { border-color: #b91c1c; color: #fecaca; }
     </style>
 </head>
 <body>
+    <aside id="instance-hud" class="instance-hud" aria-live="polite">
+        <h3>Server instance</h3>
+        <div class="id-badge" id="hud-id">—</div>
+        <dl>
+            <dt>CPU</dt><dd id="hud-cpu">—</dd>
+            <dt>RAM</dt><dd id="hud-ram">—</dd>
+            <dt>Avg latency</dt><dd id="hud-lat">—</dd>
+            <dt>Uptime</dt><dd id="hud-up">—</dd>
+            <dt>Requests</dt><dd id="hud-req">—</dd>
+            <dt>Threads</dt><dd id="hud-thr">—</dd>
+        </dl>
+        <div class="host" id="hud-host"></div>
+    </aside>
+
     <div class="container">
         <h1>URL Shortener</h1>
         <p class="subtitle">Shorten your links in seconds</p>
@@ -183,6 +242,53 @@
 
     <script>
         const BASE = window.location.origin;
+
+        function formatUptime(sec) {
+            const s = Math.floor(sec);
+            const h = Math.floor(s / 3600);
+            const m = Math.floor((s % 3600) / 60);
+            const r = s % 60;
+            if (h > 0) return `${h}h ${m}m`;
+            if (m > 0) return `${m}m ${r}s`;
+            return `${r}s`;
+        }
+
+        async function refreshInstanceHud() {
+            const el = document.getElementById('instance-hud');
+            try {
+                const res = await fetch(`${BASE}/api/instance-stats`);
+                if (!res.ok) throw new Error('bad status');
+                const d = await res.json();
+                el.classList.remove('error');
+                document.getElementById('hud-id').textContent = `Instance ${d.instance_id}`;
+                document.getElementById('hud-cpu').textContent = `${d.cpu_percent_process}%`;
+                document.getElementById('hud-ram').textContent = `${d.memory_rss_mb} MB (${d.memory_percent_process}%)`;
+                document.getElementById('hud-lat').textContent = `${d.avg_request_latency_ms} ms`;
+                document.getElementById('hud-up').textContent = formatUptime(d.uptime_seconds);
+                document.getElementById('hud-req').textContent = String(d.requests_observed);
+                document.getElementById('hud-thr').textContent = String(d.threads);
+                document.getElementById('hud-host').textContent = d.hostname ? `host: ${d.hostname}` : '';
+                if (d.load_average_1m != null) {
+                    let la = document.getElementById('hud-load');
+                    if (!la) {
+                        const dl = el.querySelector('dl');
+                        const dt = document.createElement('dt');
+                        dt.textContent = 'Load 1m';
+                        la = document.createElement('dd');
+                        la.id = 'hud-load';
+                        dl.appendChild(dt);
+                        dl.appendChild(la);
+                    }
+                    la.textContent = d.load_average_1m.toFixed(2);
+                }
+            } catch {
+                el.classList.add('error');
+                document.getElementById('hud-id').textContent = 'Offline';
+            }
+        }
+        refreshInstanceHud();
+        setInterval(refreshInstanceHud, 2500);
+
         let currentPage = 1;
         let totalPages = 1;
 

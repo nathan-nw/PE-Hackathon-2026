@@ -1,0 +1,29 @@
+# Optional: HTTP(S) ingress to the same NGINX edge as Compose (:8080).
+# Requires an ingress controller (e.g. ingress-nginx). Not included in kustomization.yaml by default.
+# Apply after the stack: kubectl apply -f k8s/ingress-url-shortener.yaml
+# Replace host and tls.secretName; set ingressClassName to your controller.
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api-edge
+  namespace: pe-hackathon
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - api.example.com
+      secretName: url-shortener-tls
+  rules:
+    - host: api.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: load-balancer
+                port:
+                  number: 80

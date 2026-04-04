@@ -1,28 +1,27 @@
-import logging
 import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template
 
-from app.circuit_breaker import db_circuit_breaker
-from app.database import db, init_db
-from app.middleware import register_middleware
-from app.routes import register_routes
+# Load `.env` before importing `app.metrics` so INSTANCE_ID is visible to Prometheus registration.
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+from flask import Flask, jsonify, render_template  # noqa: E402
+
+from app.circuit_breaker import db_circuit_breaker  # noqa: E402
+from app.database import db, init_db  # noqa: E402
+from app.instance_info import get_instance_id, get_instance_stats  # noqa: E402
+from app.logging_config import configure_logging  # noqa: E402
+from app.metrics import metrics_response  # noqa: E402
+from app.middleware import register_middleware  # noqa: E402
+from app.routes import register_routes  # noqa: E402
 
 
 def create_app():
-    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
     app = Flask(__name__)
 
-    # Configure logging
-    log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
-    logging.basicConfig(
-        level=getattr(logging, log_level, logging.INFO),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    configure_logging()
 
     # Rate limiting
     from flask_limiter import Limiter
@@ -41,7 +40,7 @@ def create_app():
 
     from app import models  # noqa: F401 - registers models with Peewee
 
-    # Register before API blueprints so `/` and `/health` are not shadowed by `/<short_code>`.
+    # Register before API blueprints so `/`, `/health`, and `/metrics` are not shadowed by `/<short_code>`.
     @app.route("/")
     def index():
         return render_template("index.html")
@@ -49,11 +48,12 @@ def create_app():
     @app.route("/health")
     @limiter.exempt
     def health():
-        """Enhanced health check that verifies database connectivity."""
+        """Human-friendly status + DB + circuit breaker (monitors and legacy clients)."""
         health_status = {
             "status": "ok",
             "database": "ok",
             "circuit_breaker": db_circuit_breaker.get_status(),
+            "instance_id": get_instance_id(),
         }
 
         try:
@@ -64,6 +64,33 @@ def create_app():
             return jsonify(health_status), 503
 
         return jsonify(health_status)
+
+    @app.route("/live")
+    @limiter.exempt
+    def live():
+        """Liveness probe: process accepts HTTP — use for container restart policy only."""
+        return jsonify({"status": "ok"}), 200
+
+    @app.route("/ready")
+    @limiter.exempt
+    def ready():
+        """Readiness probe: DB reachable — load balancers / orchestrators should stop traffic if 503."""
+        try:
+            db.execute_sql("SELECT 1")
+        except Exception as e:
+            return jsonify({"status": "not_ready", "database": str(e)}), 503
+        return jsonify({"status": "ok", "database": "ok"}), 200
+
+    @app.route("/metrics")
+    @limiter.exempt
+    def metrics():
+        return metrics_response()
+
+    @app.route("/api/instance-stats")
+    @limiter.exempt
+    def instance_stats():
+        """JSON for the UI: replica id, CPU/RAM, rolling latency (no DB)."""
+        return jsonify(get_instance_stats())
 
     register_routes(app)
 

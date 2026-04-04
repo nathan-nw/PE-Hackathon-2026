@@ -17,15 +17,6 @@ def test_get_index_returns_html(client):
     assert len(res.data) > 0
 
 
-def test_get_health_ok(client):
-    res = client.get("/health")
-    assert res.status_code == 200
-    body = res.get_json()
-    assert body["status"] == "ok"
-    assert body["database"] == "ok"
-    assert "circuit_breaker" in body
-
-
 def test_post_shorten_creates_url(client):
     res = client.post(
         "/shorten",

@@ -19,15 +19,21 @@ RUN uv sync --no-dev --frozen 2>/dev/null || uv sync --no-dev
 # Copy application code
 COPY . .
 
-# Create non-root user for security
-RUN useradd --create-home appuser
+# Non-root user must own /app: `uv run` at container start syncs the env (and can pull dev groups),
+# which writes under .venv and fails with "Permission denied" if .venv is root-only.
+RUN useradd --create-home appuser \
+    && chown -R appuser:appuser /app
+
 USER appuser
+
+# Avoid uv mutating the environment at runtime (no sync → no dev installs into site-packages).
+ENV UV_NO_SYNC=1
 
 EXPOSE 5000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:5000/health || exit 1
+# Liveness only — do not use /ready here (DB can be briefly unavailable without killing the container).
+HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:5000/live || exit 1
 
-# Run with gunicorn in production
-CMD ["uv", "run", "gunicorn", "--config", "gunicorn.conf.py", "run:app"]
+# Run gunicorn from the synced venv directly (no `uv run` → no implicit sync in prod).
+CMD ["/app/.venv/bin/gunicorn", "--config", "gunicorn.conf.py", "run:app"]

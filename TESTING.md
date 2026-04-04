@@ -1,53 +1,58 @@
 # Testing Guide
 
-This project uses **pytest** for testing. Tests live in **`url-shortener/tests/`** and run automatically in CI on every pull request.
+This project uses **pytest** for testing. The suite lives at the **repository root** in **`tests/`** (not under `url-shortener/`) so you can add cross-service checks (API + load balancer today; other folders later). CI runs from the repo root.
 
 ## Running Tests
 
-From the repo root:
+From the **repository root** (the folder that contains `pyproject.toml` and `docker-compose.yml`):
 
 ```bash
-cd url-shortener
-```
-
-Then:
-
-```bash
-# Run all tests
+uv sync --group dev
 uv run pytest
 
-# Run with verbose output (see each test name)
+# Verbose
 uv run pytest -v
 
-# Run a specific test file
-uv run pytest tests/test_health.py
+# One file
+uv run pytest tests/url_shortener/routes/test_health.py
 
-# Run a specific test function
-uv run pytest tests/test_health.py::test_health_endpoint
+# One test
+uv run pytest tests/url_shortener/routes/test_health.py::test_health_endpoint
 
-# Run tests matching a keyword
+# API through NGINX (docker compose up first)
+# PowerShell: $env:TEST_LOAD_BALANCER_URL = "http://127.0.0.1:8080"
+# bash: export TEST_LOAD_BALANCER_URL=http://127.0.0.1:8080
+uv run pytest tests/integration -m integration -v
+
+# NGINX stub_status on :8081 (full URL including path)
+# export TEST_NGINX_STUB_STATUS_URL=http://127.0.0.1:8081/nginx_status
+uv run pytest tests/load_balancer -m integration -v
+
+# Default CI: integration tests are skipped (env vars unset)
+
 uv run pytest -k "product"
 ```
 
 ## How the Test Setup Works
 
-The test fixtures in `tests/conftest.py` handle two key things:
+The test fixtures in `tests/url_shortener/conftest.py` handle two key things:
 
 1. **App creation** — creates a Flask app instance in testing mode
-2. **Database swap** — replaces PostgreSQL with an **in-memory SQLite** database so tests run fast and don't need a running database server
+2. **Database swap** — replaces PostgreSQL with a **file-backed SQLite** database (under `tmp_path`) so Peewee pooling behaves consistently and tests never touch your dev Postgres
 
 ```python
-# tests/conftest.py (already set up)
+# tests/url_shortener/conftest.py (simplified)
 
 @pytest.fixture()
-def app():
-    test_db = SqliteDatabase(":memory:")
-    app = create_app()
-    app.config.update({"TESTING": True})
-    db.initialize(test_db)
-    test_db.connect()
-    yield app
-    test_db.close()
+def app(tmp_path):
+    application = create_app()
+    application.config.update(TESTING=True)
+    db_path = tmp_path / "test.db"
+    db.initialize(SqliteDatabase(str(db_path), pragmas={"foreign_keys": 1}))
+    db.connect(reuse_if_open=True)
+    db.create_tables([User, Url, Event], safe=True)
+    yield application
+    db.close()
 
 @pytest.fixture()
 def client(app):
@@ -55,6 +60,18 @@ def client(app):
 ```
 
 Use `client` when testing routes/endpoints. Use `app` when you need the Flask app context directly.
+
+## Where tests live (not inside `app/routes/`)
+
+Keep **pytest under the repo root `tests/`**, not next to application modules under `app/routes/`. The Flask app code stays in **`url-shortener/`**; root **`pyproject.toml`** depends on that package in editable mode and sets `pythonpath` / coverage for `app`.
+
+| Folder | Purpose |
+|--------|---------|
+| `tests/url_shortener/` | Fast tests using the Flask `test_client()` (SQLite via `conftest.py`) |
+| `tests/integration/` | Optional HTTP tests against the API **via** the load balancer (`TEST_LOAD_BALANCER_URL`) |
+| `tests/load_balancer/` | Optional checks against NGINX-only endpoints (e.g. `TEST_NGINX_STUB_STATUS_URL`) |
+
+Integration tests use `@pytest.mark.integration` and are **skipped** unless the matching env vars are set. CI does not set them.
 
 ## Writing Tests
 
@@ -67,10 +84,16 @@ Use `client` when testing routes/endpoints. Use `app` when you need the Flask ap
 ```
 tests/
 ├── __init__.py
-├── conftest.py            # Shared fixtures
-├── test_health.py         # Health endpoint tests
-├── test_products.py       # Product route tests
-└── test_csv_loading.py    # CSV import tests
+├── url_shortener/
+│   ├── conftest.py             # SQLite test DB + client fixtures
+│   └── routes/
+│       ├── test_health.py
+│       ├── test_metrics.py
+│       └── test_urls.py
+├── integration/
+│   └── test_api_via_load_balancer.py   # TEST_LOAD_BALANCER_URL
+└── load_balancer/
+    └── test_nginx_stub_status.py       # TEST_NGINX_STUB_STATUS_URL
 ```
 
 ### Testing a Route / Endpoint

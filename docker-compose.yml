@@ -1,13 +1,17 @@
+# Stable project name (Compose v2.20+) — helps consistent container/network naming on Windows.
+name: pe-hackathon-2026
+
 services:
   db:
     image: postgres:16-alpine
     container_name: hackathon_db
     restart: always
+    networks:
+      - app_net
     environment:
       POSTGRES_DB: hackathon_db
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-    # Host 15432 avoids clashing with a local PostgreSQL on 5432 (common on Windows).
     ports:
       - "15432:5432"
     volumes:
@@ -18,61 +22,276 @@ services:
       timeout: 3s
       retries: 5
 
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: hackathon_zookeeper
+    restart: unless-stopped
+    networks:
+      - app_net
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: hackathon_kafka
+    restart: unless-stopped
+    networks:
+      - app_net
+    ports:
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    depends_on:
+      - zookeeper
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  kafka-log-consumer:
+    build:
+      context: ./url-shortener
+      dockerfile: Dockerfile.kafka-consumer
+    container_name: hackathon_kafka_log_consumer
+    restart: unless-stopped
+    networks:
+      - app_net
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_LOG_TOPIC: app-logs
+    depends_on:
+      kafka:
+        condition: service_healthy
+
   url-shortener-a:
     build:
       context: ./url-shortener
-    restart: unless-stopped
+    # `init` gives PID 1 to Docker’s tini — better signal handling than raw gunicorn as PID 1.
+    init: true
+    # `always`: stateless replicas should come back after kill/crash/OOM. (`unless-stopped`
+    # often leaves replicas dead after `docker kill` — bad for chaos tests.)
+    # Docker inspect: `State.Restarting` is only true *during* a restart; exited containers
+    # always show `Restarting: false`. See ARCHITECTURE.md → "Docker inspect".
+    restart: always
+    networks:
+      - app_net
     environment:
+      INSTANCE_ID: "1"
       DATABASE_NAME: hackathon_db
       DATABASE_HOST: db
       DATABASE_PORT: "5432"
       DATABASE_USER: postgres
       DATABASE_PASSWORD: postgres
       FLASK_DEBUG: "false"
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
       db:
         condition: service_healthy
+      kafka:
+        condition: service_healthy
     expose:
       - "5000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5000/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
 
   url-shortener-b:
     build:
       context: ./url-shortener
-    restart: unless-stopped
+    init: true
+    restart: always
+    networks:
+      - app_net
     environment:
+      INSTANCE_ID: "2"
       DATABASE_NAME: hackathon_db
       DATABASE_HOST: db
       DATABASE_PORT: "5432"
       DATABASE_USER: postgres
       DATABASE_PASSWORD: postgres
       FLASK_DEBUG: "false"
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
       db:
         condition: service_healthy
+      kafka:
+        condition: service_healthy
     expose:
       - "5000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5000/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
 
   load-balancer:
-    image: nginx:alpine
+    build:
+      context: ./load-balancer
+      dockerfile: Dockerfile
+    restart: always
+    networks:
+      - app_net
     ports:
       - "8080:80"
-    volumes:
-      - ./load-balancer/nginx.conf:/etc/nginx/nginx.conf:ro
+      - "8081:8081"
     depends_on:
-      - url-shortener-a
-      - url-shortener-b
+      url-shortener-a:
+        condition: service_healthy
+      url-shortener-b:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    restart: unless-stopped
+    networks:
+      - app_net
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    depends_on:
+      url-shortener-a:
+        condition: service_healthy
+      url-shortener-b:
+        condition: service_healthy
+      alertmanager:
+        condition: service_started
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    restart: unless-stopped
+    networks:
+      - app_net
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+
+  db-backup:
+    image: prodrigestivill/postgres-backup-local:16
+    restart: unless-stopped
+    networks:
+      - app_net
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_DB: hackathon_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      SCHEDULE: "@daily"
+      BACKUP_DIR: /backups
+      BACKUP_KEEP_DAYS: "7"
+    volumes:
+      - pg_backups:/backups
+    depends_on:
+      db:
+        condition: service_healthy
 
   dashboard:
     build:
       context: ./dashboard
+      args:
+        NEXT_PUBLIC_PROMETHEUS_URL: http://localhost:9090
+        NEXT_PUBLIC_ALERTMANAGER_PUBLIC_URL: http://localhost:9093
+    restart: always
+    networks:
+      - app_net
+    depends_on:
+      dashboard-backend:
+        condition: service_started
     ports:
-      - "3001:80"
+      - "3001:3000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Kubernetes pod list: host kubeconfig → /kube/config (override path with KUBECONFIG_HOST in .env if needed).
+      - ${KUBECONFIG_HOST:-~/.kube/config}:/kube/config:ro
+    environment:
+      VISIBILITY_COMPOSE_PROJECT: pe-hackathon-2026
+      VISIBILITY_K8S_ENABLED: "true"
+      KUBECONFIG: /kube/config
+      VISIBILITY_K8S_NAMESPACE: pe-hackathon
+      VISIBILITY_ALERTMANAGER_URL: http://alertmanager:9093
+      VISIBILITY_PROMETHEUS_URL: http://prometheus:9090
+      # FastAPI log cache (Kafka → in-memory → dashboard /api/logs proxy)
+      DASHBOARD_BACKEND_URL: http://dashboard-backend:8000
+
+  dashboard-db:
+    image: postgres:16-alpine
+    container_name: hackathon_dashboard_db
+    restart: always
+    networks:
+      - app_net
+    environment:
+      POSTGRES_DB: dashboard_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "15433:5432"
+    volumes:
+      - dashboard_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  dashboard-backend:
+    build:
+      context: ./dashboard/backend
+    restart: unless-stopped
+    networks:
+      - app_net
+    ports:
+      - "8000:8000"
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_LOG_TOPIC: app-logs
+      CACHE_MAX_ENTRIES: "1000"
+      DB_FLUSH_INTERVAL: "30"
+      DASHBOARD_DB_NAME: dashboard_db
+      DASHBOARD_DB_HOST: dashboard-db
+      DASHBOARD_DB_PORT: "5432"
+      DASHBOARD_DB_USER: postgres
+      DASHBOARD_DB_PASSWORD: postgres
+    depends_on:
+      kafka:
+        condition: service_healthy
+      dashboard-db:
+        condition: service_healthy
 
   user-frontend:
     build:
       context: ./user-frontend
+    restart: always
+    networks:
+      - app_net
     ports:
       - "3002:80"
 
+networks:
+  app_net:
+    driver: bridge
+
 volumes:
   pgdata:
+  pg_backups:
+  dashboard_pgdata:
