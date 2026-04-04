@@ -1,4 +1,8 @@
-"""Dashboard backend — FastAPI service backed by an in-memory Kafka log cache."""
+"""Dashboard backend — FastAPI service backed by an in-memory Kafka log cache.
+
+Consumes from the app-logs Kafka topic, caches recent entries and aggregates
+in memory, and periodically flushes both to a dedicated PostgreSQL database.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +15,7 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from cache import LogCache
+from db import init_db
 from kafka_consumer import run_consumer
 
 logging.basicConfig(
@@ -21,20 +26,32 @@ logging.basicConfig(
 KAFKA_BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 KAFKA_TOPIC = os.environ.get("KAFKA_LOG_TOPIC", "app-logs")
 CACHE_MAX_ENTRIES = int(os.environ.get("CACHE_MAX_ENTRIES", "1000"))
+DB_FLUSH_INTERVAL = float(os.environ.get("DB_FLUSH_INTERVAL", "30"))
 
 cache = LogCache(max_entries=CACHE_MAX_ENTRIES)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Start the Kafka consumer thread on startup, let it die on shutdown."""
+    """Start Kafka consumer and DB flush loop on startup."""
+    # Initialize database tables
+    init_db()
+
+    # Start Kafka consumer thread
     consumer_thread = threading.Thread(
         target=run_consumer,
         args=(cache, KAFKA_BOOTSTRAP_SERVERS, KAFKA_TOPIC),
         daemon=True,
     )
     consumer_thread.start()
+
+    # Start periodic DB flush
+    cache.start_flush_loop(interval_seconds=DB_FLUSH_INTERVAL)
+
     yield
+
+    # Shutdown: final flush
+    cache.stop_flush_loop()
 
 
 app = FastAPI(title="Dashboard Backend", lifespan=lifespan)
@@ -68,3 +85,10 @@ def get_logs(
 def get_stats():
     """Return per-instance and global aggregate statistics."""
     return cache.get_stats()
+
+
+@app.post("/api/flush")
+def force_flush():
+    """Manually trigger a flush of cached data to the database."""
+    cache.flush_to_db()
+    return {"status": "flushed"}

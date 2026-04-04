@@ -2,15 +2,19 @@
 
 Stores recent log entries in a ring buffer and maintains rolling
 aggregates (request counts, error rates, latency) per instance.
+Periodically flushes to PostgreSQL for durable storage.
 """
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections import Counter, deque
 from dataclasses import dataclass, field
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -51,18 +55,26 @@ class InstanceStats:
 
 
 class LogCache:
-    """Thread-safe in-memory cache for log entries and per-instance stats."""
+    """Thread-safe in-memory cache for log entries and per-instance stats.
+
+    Supports periodic flushing of logs and stats snapshots to PostgreSQL.
+    """
 
     def __init__(self, max_entries: int = 1000):
         self._logs: deque[dict[str, Any]] = deque(maxlen=max_entries)
         self._stats: dict[str, InstanceStats] = {}
         self._lock = threading.Lock()
         self._total_ingested: int = 0
+        # Unflushed logs accumulate here until the next DB flush
+        self._pending_flush: list[dict[str, Any]] = []
+        self._flush_timer: threading.Timer | None = None
+        self._flush_running = False
 
     def add(self, entry: dict[str, Any]) -> None:
         """Ingest a single log entry from Kafka."""
         with self._lock:
             self._logs.append(entry)
+            self._pending_flush.append(entry)
             self._total_ingested += 1
             self._update_stats(entry)
 
@@ -115,6 +127,7 @@ class LogCache:
         return {
             "total_ingested": self._total_ingested,
             "buffered_logs": len(self._logs),
+            "pending_flush": len(self._pending_flush),
             "instances": per_instance,
             "global": {
                 "total_requests": total_requests,
@@ -123,9 +136,63 @@ class LogCache:
             },
         }
 
+    def flush_to_db(self) -> None:
+        """Flush pending logs and a stats snapshot to PostgreSQL."""
+        from db import flush_logs, flush_stats
+
+        # Grab pending logs under lock, then release before doing I/O
+        with self._lock:
+            to_flush = list(self._pending_flush)
+            self._pending_flush.clear()
+            stats_snapshot = {k: v.to_dict() for k, v in self._stats.items()}
+
+        if to_flush:
+            flushed = flush_logs(to_flush)
+            if flushed == 0:
+                # Put them back so we retry next cycle
+                with self._lock:
+                    self._pending_flush = to_flush + self._pending_flush
+
+        if stats_snapshot:
+            flush_stats(stats_snapshot)
+
+    def start_flush_loop(self, interval_seconds: float = 30.0) -> None:
+        """Start a repeating background timer that flushes to DB."""
+        self._flush_running = True
+
+        def _tick():
+            if not self._flush_running:
+                return
+            try:
+                self.flush_to_db()
+            except Exception as exc:
+                logger.error("Flush tick failed: %s", exc)
+            # Schedule next tick
+            if self._flush_running:
+                self._flush_timer = threading.Timer(interval_seconds, _tick)
+                self._flush_timer.daemon = True
+                self._flush_timer.start()
+
+        self._flush_timer = threading.Timer(interval_seconds, _tick)
+        self._flush_timer.daemon = True
+        self._flush_timer.start()
+        logger.info("DB flush loop started (every %.0fs)", interval_seconds)
+
+    def stop_flush_loop(self) -> None:
+        """Stop the flush timer and do one final flush."""
+        self._flush_running = False
+        if self._flush_timer:
+            self._flush_timer.cancel()
+        # Final flush
+        try:
+            self.flush_to_db()
+        except Exception as exc:
+            logger.error("Final flush failed: %s", exc)
+
     def clear(self) -> None:
         """Reset all cached data."""
         with self._lock:
             self._logs.clear()
             self._stats.clear()
+            self._pending_flush.clear()
             self._total_ingested = 0

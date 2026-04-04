@@ -215,6 +215,26 @@ services:
     ports:
       - "3001:80"
 
+  dashboard-db:
+    image: postgres:16-alpine
+    container_name: hackathon_dashboard_db
+    restart: always
+    networks:
+      - app_net
+    environment:
+      POSTGRES_DB: dashboard_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "15433:5432"
+    volumes:
+      - dashboard_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   dashboard-backend:
     build:
       context: ./dashboard/backend
@@ -227,8 +247,16 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       KAFKA_LOG_TOPIC: app-logs
       CACHE_MAX_ENTRIES: "1000"
+      DB_FLUSH_INTERVAL: "30"
+      DASHBOARD_DB_NAME: dashboard_db
+      DASHBOARD_DB_HOST: dashboard-db
+      DASHBOARD_DB_PORT: "5432"
+      DASHBOARD_DB_USER: postgres
+      DASHBOARD_DB_PASSWORD: postgres
     depends_on:
       kafka:
+        condition: service_healthy
+      dashboard-db:
         condition: service_healthy
 
   user-frontend:
@@ -247,3 +275,4 @@ networks:
 volumes:
   pgdata:
   pg_backups:
+  dashboard_pgdata:
