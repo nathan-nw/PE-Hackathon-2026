@@ -1,15 +1,21 @@
 # Railway (PE-Hackathon)
 
-The Docker Compose stack is for **local** development. On [Railway](https://railway.com) you add **plugins** (Postgres, Redis) and **one service per deployable folder**, each linked to GitHub so **pushes to the default branch trigger deploys**.
+The Docker Compose stack is for **local** development. On [Railway](https://railway.com) you add **plugins** (Postgres, Redis) and **one service per deployable folder**, each linked to GitHub so **pushes to the configured branch** trigger deploys.
 
 ## Quick setup
 
 1. Install and log in: `npm i -g @railway/cli`, then `railway login`.
 2. From the repo root, ensure the project is linked (this repo includes `.railway/config.json` for **PE-Hackathon**), or run `railway link -p PE-Hackathon`.
 3. Run **`.\scripts\railway-provision.ps1`** (PowerShell). On Git Bash / WSL you can `pwsh ./scripts/railway-provision.ps1` if PowerShell is installed.
-4. In the [Railway dashboard](https://railway.com/project/6b429b2a-8ef5-404a-aa8d-7c5091500077), open **each** Git-connected service and set **Root Directory** as printed by the script (`url-shortener`, `user-frontend`, `dashboard`, `dashboard/backend`).
-5. Wire **variables**: from **Postgres** and **Redis**, use **Variable References** into `url-shortener` (e.g. `DATABASE_URL`, `RATE_LIMIT_STORAGE`). See the script output for the full list.
-6. Accept the **Railway GitHub app** for `nathan-nw/PE-Hackathon-2026` if prompted so webhooks can trigger deploys.
+4. **Deploy branch:** the CLI cannot set which Git branch deploys. After services exist, run from the repo root (requires [an account API token](https://railway.com/account/tokens), not a project-only token):
+   ```powershell
+   $env:RAILWAY_API_TOKEN = "your-account-token"
+   node setup-railway.js
+   ```
+   This sets **`feature-hosting`** as the deploy branch and **Root Directory** for `url-shortener`, `user-frontend`, `dashboard`, and `dashboard-backend`. Override with `RAILWAY_BRANCH` / `RAILWAY_REPO` if needed. Use `DRY_RUN=1` to print actions only.
+5. In the [Railway dashboard](https://railway.com/project/6b429b2a-8ef5-404a-aa8d-7c5091500077), confirm **Root Directory** per service if anything still looks wrong (`url-shortener`, `user-frontend`, `dashboard`, `dashboard/backend`).
+6. Wire **variables**: from **Postgres** and **Redis**, use **Variable References** into `url-shortener` (e.g. `DATABASE_URL`, `RATE_LIMIT_STORAGE`). See the script output for the full list.
+7. Accept the **Railway GitHub app** for `nathan-nw/PE-Hackathon-2026` if prompted so webhooks can trigger deploys.
 
 `railway.toml` files under each app folder define Docker builds, health checks, and **watch paths** so changes in one folder do not rebuild unrelated services.
 
@@ -20,3 +26,15 @@ Kafka, Zookeeper, the NGINX load balancer, Prometheus, Alertmanager, and `db-bac
 ## dashboard_db
 
 If `dashboard-backend` uses the same Postgres instance as the API, create a second database once (e.g. in Railway’s Postgres query UI): `CREATE DATABASE dashboard_db;` then set `DASHBOARD_DB_*` to match.
+
+## If `railway add` says Unauthorized
+
+1. Run the provision script in a **normal terminal** (outside restricted sandboxes), after `railway login`.
+2. Or use a **token** (CI-style auth): in [Railway account tokens](https://railway.com/account/tokens), create a token, then in PowerShell:
+   ```powershell
+   $env:RAILWAY_TOKEN = "your-token-here"
+   .\scripts\railway-provision.ps1
+   ```
+3. Or add resources **in the dashboard**: project **PE-Hackathon** → **New** → **Database** → PostgreSQL, then **New** → **Database** → Redis, then **New** → **GitHub Repo** → pick `nathan-nw/PE-Hackathon-2026` once per app and set **Root Directory** as in the table above. Pushes to the connected branch still trigger deploys.
+
+Cursor’s integrated terminal (and some CI agents) can hit **Unauthorized** on mutating Railway calls even when `railway whoami` works; using a token or your own shell usually fixes it.

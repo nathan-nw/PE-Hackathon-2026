@@ -11,4 +11,6 @@ watchPatterns = ["/url-shortener/**"]
 [deploy]
 healthcheckPath = "/live"
 healthcheckTimeout = 45
-preDeployCommand = ["/app/.venv/bin/python", "scripts/apply_migrations.py"]
+# Migrations run in docker-entrypoint.sh (not preDeployCommand) so Railway never parses a
+# pre-deploy field. If you still see preDeploy errors, clear "Pre-deploy command" in the
+# Railway service Settings → Deploy for this service, then redeploy.

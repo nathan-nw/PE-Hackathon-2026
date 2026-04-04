@@ -19,12 +19,17 @@ RUN uv sync --no-dev --frozen 2>/dev/null || uv sync --no-dev
 # Copy application code
 COPY . .
 
+# DB migrations at container start (avoids Railway preDeployCommand schema/UI merge issues).
+RUN chmod +x /app/docker-entrypoint.sh
+
 # Non-root user must own /app: `uv run` at container start syncs the env (and can pull dev groups),
 # which writes under .venv and fails with "Permission denied" if .venv is root-only.
 RUN useradd --create-home appuser \
     && chown -R appuser:appuser /app
 
 USER appuser
+
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
 # Avoid uv mutating the environment at runtime (no sync → no dev installs into site-packages).
 ENV UV_NO_SYNC=1

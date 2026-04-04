@@ -17,7 +17,9 @@
   use Railway scaling + managed datastores instead, or keep running those locally.
 #>
 param(
-    [string] $Repo = "nathan-nw/PE-Hackathon-2026"
+    [string] $Repo = "nathan-nw/PE-Hackathon-2026",
+    # Railway CLI cannot set the Git deploy branch; use: node setup-railway.js (see RAILWAY.md).
+    [string] $Branch = "feature-hosting"
 )
 
 $ErrorActionPreference = "Stop"
@@ -28,26 +30,40 @@ if (-not (Get-Command railway -ErrorAction SilentlyContinue)) {
 
 railway whoami | Out-Null
 
+if (-not $env:RAILWAY_TOKEN) {
+    Write-Host "Tip: If `railway add` returns Unauthorized, set `$env:RAILWAY_TOKEN from https://railway.com/account/tokens or run outside Cursor. See RAILWAY.md." -ForegroundColor DarkYellow
+}
+
 Write-Host "Linking project if needed (PE-Hackathon)..." -ForegroundColor Cyan
 if (-not (Test-Path ".railway\config.json")) {
     Write-Host "Run: railway link -p PE-Hackathon   (or commit .railway/config.json from this repo)" -ForegroundColor Yellow
 }
 
+function Invoke-RailwayCli {
+    param([string[]] $CmdArgs)
+    & railway @CmdArgs
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Railway command failed: railway $($CmdArgs -join ' '). If you see Unauthorized, set RAILWAY_TOKEN or use the dashboard (RAILWAY.md)."
+    }
+}
+
 Write-Host "Adding Postgres + Redis..." -ForegroundColor Cyan
-railway add -d postgres -s Postgres
-railway add -d redis -s Redis
+Invoke-RailwayCli @("add", "--database", "postgres", "--service", "Postgres")
+Invoke-RailwayCli @("add", "--database", "redis", "--service", "Redis")
 
 Write-Host "Adding Git-connected services (auto-deploy when default branch updates)..." -ForegroundColor Cyan
-railway add -s url-shortener -r $Repo
-railway add -s user-frontend -r $Repo
-railway add -s dashboard -r $Repo
-railway add -s dashboard-backend -r $Repo
+Invoke-RailwayCli @("add", "--service", "url-shortener", "--repo", $Repo)
+Invoke-RailwayCli @("add", "--service", "user-frontend", "--repo", $Repo)
+Invoke-RailwayCli @("add", "--service", "dashboard", "--repo", $Repo)
+Invoke-RailwayCli @("add", "--service", "dashboard-backend", "--repo", $Repo)
+
+Write-Host "Deploy branch: CLI cannot set it — use: `$env:RAILWAY_API_TOKEN = <token>; node setup-railway.js (default branch $Branch). See RAILWAY.md." -ForegroundColor Cyan
 
 Write-Host @'
 
 Done adding services.
 
-Set Root Directory in the Railway dashboard for each Git-linked service:
+Set Root Directory in the Railway dashboard for each Git-linked service (or run setup-railway.js to set via API):
 
   Service             Root Directory
   ------------------  ------------------
