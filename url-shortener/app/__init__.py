@@ -38,7 +38,20 @@ def create_app():
     init_db(app)
     register_middleware(app)
 
-    from app import models  # noqa: F401 - registers models with Peewee
+    from app.models import Event, Url, User  # noqa: F401 - registers models with Peewee
+
+    # Ensure tables exist (safe to call repeatedly — uses IF NOT EXISTS).
+    with app.app_context():
+        db.create_tables([User, Url, Event], safe=True)
+        # Seed a default user so the UI works out of the box.
+        try:
+            User.get_or_create(
+                id=1,
+                defaults={"username": "default", "email": "default@example.com",
+                          "created_at": __import__("datetime").datetime.now(__import__("datetime").UTC)},
+            )
+        except Exception:
+            pass  # non-critical — table may already have user 1
 
     # Register before API blueprints so `/`, `/health`, and `/metrics` are not shadowed by `/<short_code>`.
     @app.route("/")
