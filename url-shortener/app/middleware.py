@@ -39,22 +39,21 @@ def register_middleware(app):
         duration_ms = round(duration * 1000, 2)
 
         iid = get_instance_id()
+        extra = {
+            "request_id": g.get("request_id", ""),
+            "trace_id": g.get("request_id", ""),
+            "method": request.method,
+            "path": request.path,
+            "status_code": response.status_code,
+            "duration_ms": duration_ms,
+        }
         if os.environ.get("LOG_FORMAT", "").lower() == "json":
-            logger.info(
-                "http_request",
-                extra={
-                    "request_id": g.get("request_id", ""),
-                    "trace_id": g.get("request_id", ""),
-                    "method": request.method,
-                    "path": request.path,
-                    "status_code": response.status_code,
-                    "duration_ms": duration_ms,
-                },
-            )
+            logger.info("http_request", extra=extra)
         else:
             logger.info(
                 f"[{g.get('request_id', '-')}] {request.method} {request.path} -> "
-                f"{response.status_code} ({duration_ms}ms)"
+                f"{response.status_code} ({duration_ms}ms)",
+                extra=extra,
             )
 
         # Keep rolling latency / request count meaningful (exclude health, Prometheus, HUD polls).
