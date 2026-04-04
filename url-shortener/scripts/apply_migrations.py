@@ -19,6 +19,9 @@ from psycopg2.extensions import connection as PGConnection
 
 
 def _connect() -> PGConnection:
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if url:
+        return psycopg2.connect(url)
     return psycopg2.connect(
         host=os.environ.get("DATABASE_HOST", "127.0.0.1"),
         port=int(os.environ.get("DATABASE_PORT", "5432")),

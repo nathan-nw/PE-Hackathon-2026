@@ -23,8 +23,12 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
-KAFKA_BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+KAFKA_BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "")
 KAFKA_TOPIC = os.environ.get("KAFKA_LOG_TOPIC", "app-logs")
+# Set empty, omit, or DISABLED for hosts without Kafka (e.g. Railway); logs tab stays empty.
+KAFKA_ENABLED = bool(
+    KAFKA_BOOTSTRAP_SERVERS.strip() and KAFKA_BOOTSTRAP_SERVERS.strip().upper() != "DISABLED"
+)
 CACHE_MAX_ENTRIES = int(os.environ.get("CACHE_MAX_ENTRIES", "1000"))
 DB_FLUSH_INTERVAL = float(os.environ.get("DB_FLUSH_INTERVAL", "30"))
 
@@ -37,13 +41,14 @@ async def lifespan(app: FastAPI):
     # Initialize database tables
     init_db()
 
-    # Start Kafka consumer thread
-    consumer_thread = threading.Thread(
-        target=run_consumer,
-        args=(cache, KAFKA_BOOTSTRAP_SERVERS, KAFKA_TOPIC),
-        daemon=True,
-    )
-    consumer_thread.start()
+    # Kafka log stream (optional — disabled when no broker / DISABLED)
+    if KAFKA_ENABLED:
+        consumer_thread = threading.Thread(
+            target=run_consumer,
+            args=(cache, KAFKA_BOOTSTRAP_SERVERS, KAFKA_TOPIC),
+            daemon=True,
+        )
+        consumer_thread.start()
 
     # Start periodic DB flush
     cache.start_flush_loop(interval_seconds=DB_FLUSH_INTERVAL)

@@ -1,0 +1,14 @@
+# Config-as-code for the Flask API. In Railway: set this service Root Directory to `url-shortener`
+# (or set the service config file path to `/url-shortener/railway.toml`).
+# Link Postgres: map DATABASE_URL or set DATABASE_HOST / DATABASE_PORT / DATABASE_USER /
+# DATABASE_PASSWORD / DATABASE_NAME from the Railway Postgres plugin variables.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+watchPatterns = ["/url-shortener/**"]
+
+[deploy]
+healthcheckPath = "/live"
+healthcheckTimeout = 45
+preDeployCommand = ["/app/.venv/bin/python", "scripts/apply_migrations.py"]

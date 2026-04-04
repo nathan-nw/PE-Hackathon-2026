@@ -3,6 +3,7 @@ import os
 import sys
 import time
 from functools import wraps
+from urllib.parse import parse_qs, unquote, urlparse
 
 from flask import request
 from peewee import DatabaseProxy, Model, OperationalError
@@ -30,14 +31,40 @@ def _database_host() -> str:
     return host
 
 
+def _postgres_connection_kwargs():
+    """Build Peewee kwargs from DATABASE_URL (e.g. Railway) or discrete DATABASE_* vars."""
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if url:
+        if url.startswith("postgres://"):
+            url = "postgresql://" + url[len("postgres://") :]
+        parsed = urlparse(url)
+        q = parse_qs(parsed.query)
+        sslmode = (q.get("sslmode") or [None])[0]
+        kw = {
+            "database": unquote((parsed.path or "").lstrip("/") or "postgres"),
+            "host": parsed.hostname or "127.0.0.1",
+            "port": parsed.port or 5432,
+            "user": unquote(parsed.username or "postgres"),
+            "password": unquote(parsed.password or ""),
+        }
+        if sslmode:
+            kw["sslmode"] = sslmode
+        return kw
+    return {
+        "database": os.environ.get("DATABASE_NAME", "hackathon_db"),
+        "host": _database_host(),
+        "port": int(os.environ.get("DATABASE_PORT", 5432)),
+        "user": os.environ.get("DATABASE_USER", "postgres"),
+        "password": os.environ.get("DATABASE_PASSWORD", "postgres"),
+    }
+
+
 def init_db(app):
     """Initialize database with connection pooling and reliability features."""
+    conn = _postgres_connection_kwargs()
     database = PooledPostgresqlDatabase(
-        os.environ.get("DATABASE_NAME", "hackathon_db"),
-        host=_database_host(),
-        port=int(os.environ.get("DATABASE_PORT", 5432)),
-        user=os.environ.get("DATABASE_USER", "postgres"),
-        password=os.environ.get("DATABASE_PASSWORD", "postgres"),
+        conn.pop("database"),
+        **conn,
         max_connections=int(os.environ.get("DB_MAX_CONNECTIONS", 20)),
         stale_timeout=int(os.environ.get("DB_STALE_TIMEOUT", 300)),
         timeout=int(os.environ.get("DB_TIMEOUT", 10)),
