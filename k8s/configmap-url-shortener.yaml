@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: url-shortener-config
+  namespace: pe-hackathon
+data:
+  DATABASE_NAME: hackathon_db
+  DATABASE_PORT: "5432"
+  DATABASE_USER: postgres
+  FLASK_DEBUG: "false"
+  LOG_LEVEL: INFO
+  # Point to your cluster Service or managed DB endpoint.
+  DATABASE_HOST: postgres.pe-hackathon.svc.cluster.local

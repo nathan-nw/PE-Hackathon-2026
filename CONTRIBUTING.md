@@ -44,32 +44,30 @@ feature branches → staging → main
 
 ## Development Setup
 
-Python API and tests live under **`url-shortener/`**:
+The Flask API lives under **`url-shortener/`**. The **pytest suite** lives at the **repository root** in **`tests/`** (alongside root `pyproject.toml`) so integration tests can cover the load balancer and other services as you add them.
+
+**API + lint (from `url-shortener/`):**
 
 ```bash
 cd url-shortener
-
-# Install dependencies (including dev tools)
 uv sync --group dev
-
-# Run the app
 uv run run.py
-
-# Run linting
 uv run ruff check .
 uv run ruff format --check .
-
-# Auto-fix lint issues
 uv run ruff check --fix .
 uv run ruff format .
+```
 
-# Run tests
+**Tests (from the repo root):**
+
+```bash
+uv sync --group dev
 uv run pytest -v
 ```
 
 ## Pull Request Checklist
 
 - [ ] Code passes `ruff check .` and `ruff format --check .`
-- [ ] Tests pass (`uv run pytest -v`)
+- [ ] Tests pass from the repo root (`uv sync --group dev` then `uv run pytest -v`)
 - [ ] New features include tests
 - [ ] PR targets the correct branch (`staging` for features, `main` for releases)

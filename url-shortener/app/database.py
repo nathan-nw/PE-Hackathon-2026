@@ -49,7 +49,7 @@ def init_db(app):
     def _db_connect():
         # `index`: HTML shell only (JS hits `/urls` etc. on follow-up requests).
         # `health`: connects lazily in the view so a bad DB does not hang or 500 in before_request.
-        if request.endpoint in ("index", "health"):
+        if request.endpoint in ("index", "health", "metrics", "instance_stats", "live", "ready"):
             return
         try:
             db.connect(reuse_if_open=True)

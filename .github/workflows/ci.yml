@@ -78,9 +78,6 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: url-shortener
 
     # --------------------------------------------------------------------------
     # PostgreSQL service container — spins up a real DB for integration tests.
