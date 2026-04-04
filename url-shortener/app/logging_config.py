@@ -60,7 +60,7 @@ def configure_logging() -> None:
 
         root = logging.getLogger()
         for h in list(root.handlers):
-            if isinstance(h, KafkaLogHandler):
+            if type(h).__name__ == "KafkaLogHandler":
                 root.removeHandler(h)
 
         kafka_handler = KafkaLogHandler(bootstrap_servers=kafka_servers)
