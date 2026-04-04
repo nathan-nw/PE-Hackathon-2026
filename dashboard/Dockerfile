@@ -8,8 +8,10 @@ FROM node:22-alpine AS builder
 WORKDIR /app
 ARG NEXT_PUBLIC_PROMETHEUS_URL=http://localhost:9090
 ARG NEXT_PUBLIC_ALERTMANAGER_PUBLIC_URL=http://localhost:9093
+ARG DASHBOARD_BACKEND_URL=http://dashboard-backend:8000
 ENV NEXT_PUBLIC_PROMETHEUS_URL=$NEXT_PUBLIC_PROMETHEUS_URL
 ENV NEXT_PUBLIC_ALERTMANAGER_PUBLIC_URL=$NEXT_PUBLIC_ALERTMANAGER_PUBLIC_URL
+ENV DASHBOARD_BACKEND_URL=$DASHBOARD_BACKEND_URL
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -30,4 +32,7 @@ USER nextjs
 EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
+# Default for Compose service DNS (override via compose `environment` if needed).
+# Without this, server-side /api/logs may fall back to 127.0.0.1 inside the container.
+ENV DASHBOARD_BACKEND_URL=http://dashboard-backend:8000
 CMD ["node", "server.js"]

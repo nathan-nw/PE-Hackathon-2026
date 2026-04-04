@@ -24,6 +24,13 @@ class KafkaLogHandler(logging.Handler):
         self._producer = None
         self._failed = False
         self._instance_id = os.environ.get("INSTANCE_ID", "unknown")
+        self._delivery_errors = 0
+
+    def _delivery_report(self, err, _msg):
+        if err is not None:
+            self._delivery_errors += 1
+            if self._delivery_errors <= 3:
+                print(f"[KafkaLogHandler] Delivery failed: {err}", file=sys.stderr)
 
     def _get_producer(self):
         if self._producer is None and not self._failed:
@@ -62,8 +69,11 @@ class KafkaLogHandler(logging.Handler):
             producer.produce(
                 self._topic,
                 value=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                callback=self._delivery_report,
             )
             producer.poll(0)
-        except Exception:
-            # Never let logging crash the application
-            pass
+        except Exception as exc:
+            # Never let logging crash the application; surface occasionally for ops.
+            if not getattr(self, "_emit_error_logged", False):
+                self._emit_error_logged = True
+                print(f"[KafkaLogHandler] emit failed: {exc}", file=sys.stderr)

@@ -66,7 +66,13 @@ app.add_middleware(
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok"}
+    st = cache.get_stats()
+    return {
+        "status": "ok",
+        "kafka_topic": KAFKA_TOPIC,
+        "log_cache_ingested": st["total_ingested"],
+        "log_cache_buffered": st["buffered_logs"],
+    }
 
 
 @app.get("/api/logs")
@@ -74,10 +80,16 @@ def get_logs(
     limit: int = Query(100, ge=1, le=1000),
     level: str | None = Query(None),
     instance_id: str | None = Query(None),
+    search: str | None = Query(None, description="Case-insensitive substring in message/logger/path"),
 ):
     """Return recent log entries from the cache (newest first)."""
     return {
-        "logs": cache.get_logs(limit=limit, level=level, instance_id=instance_id),
+        "logs": cache.get_logs(
+            limit=limit,
+            level=level,
+            instance_id=instance_id,
+            search=search,
+        ),
     }
 
 

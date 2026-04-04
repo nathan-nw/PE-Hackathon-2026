@@ -1,6 +1,6 @@
 # Dashboard (Next.js)
 
-Operations visibility UI for the Compose stack: Docker containers filtered by Compose project, optional Kubernetes pods, Alertmanager alerts, and links to Prometheus and Alertmanager.
+Operations visibility UI for the Compose stack: Docker containers filtered by Compose project, optional Kubernetes pods, Alertmanager alerts, **Kafka-backed app logs** (via `dashboard-backend`), and links to Prometheus and Alertmanager.
 
 ## Run locally
 
@@ -36,6 +36,13 @@ docker build \
 | `VISIBILITY_PROMETHEUS_URL` | Reserved for future server-side PromQL; UI uses `NEXT_PUBLIC_PROMETHEUS_URL` for browser links. |
 | `NEXT_PUBLIC_PROMETHEUS_URL` | Browser link base for Prometheus (baked at build). |
 | `NEXT_PUBLIC_ALERTMANAGER_PUBLIC_URL` | Browser link base for Alertmanager UI (baked at build). |
+| `DASHBOARD_BACKEND_URL` | FastAPI service that caches Kafka logs (`http://dashboard-backend:8000` in Compose; `http://127.0.0.1:8000` for `next dev` when the backend is published on the host). |
+
+## Kafka logs (Logs tab)
+
+Flask replicas publish JSON logs to Kafka (`app-logs`); **`dashboard-backend`** (FastAPI) consumes them into an in-memory ring buffer and optional PostgreSQL (`dashboard-db`). The Next.js app proxies `/api/logs` and `/api/logs/stats` to that backend.
+
+From the **Containers** tab, use **Instance 1 / 2** on `url-shortener-a` / `url-shortener-b` rows to jump to the **Logs** tab filtered by `instance_id`. The Logs tab supports level and text filters, pause/resume polling, and per-instance aggregate chips.
 
 ## Security
 

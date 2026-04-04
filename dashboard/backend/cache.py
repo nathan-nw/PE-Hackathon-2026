@@ -102,6 +102,7 @@ class LogCache:
         limit: int = 100,
         level: str | None = None,
         instance_id: str | None = None,
+        search: str | None = None,
     ) -> list[dict[str, Any]]:
         """Return recent logs, newest first, with optional filters."""
         with self._lock:
@@ -112,6 +113,15 @@ class LogCache:
             logs = [e for e in logs if e.get("level") == level_upper]
         if instance_id:
             logs = [e for e in logs if str(e.get("instance_id")) == instance_id]
+        if search and search.strip():
+            q = search.strip().casefold()
+            logs = [
+                e
+                for e in logs
+                if q in str(e.get("message", "")).casefold()
+                or q in str(e.get("logger", "")).casefold()
+                or q in str(e.get("path", "")).casefold()
+            ]
 
         # Newest first
         logs.reverse()

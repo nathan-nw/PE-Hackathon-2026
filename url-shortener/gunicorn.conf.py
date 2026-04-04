@@ -38,3 +38,10 @@ proc_name = "url-shortener"
 
 # Must be False when using DB pools: preloading forks workers with broken inherited connections.
 preload_app = False
+
+
+def post_worker_init(worker):
+    """Re-attach Kafka (and root) logging after Gunicorn finishes worker setup."""
+    from app.logging_config import configure_logging
+
+    configure_logging()

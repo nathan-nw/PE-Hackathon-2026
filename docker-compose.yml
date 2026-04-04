@@ -215,6 +215,9 @@ services:
     restart: always
     networks:
       - app_net
+    depends_on:
+      dashboard-backend:
+        condition: service_started
     ports:
       - "3001:3000"
     volumes:
@@ -228,6 +231,8 @@ services:
       VISIBILITY_K8S_NAMESPACE: pe-hackathon
       VISIBILITY_ALERTMANAGER_URL: http://alertmanager:9093
       VISIBILITY_PROMETHEUS_URL: http://prometheus:9090
+      # FastAPI log cache (Kafka → in-memory → dashboard /api/logs proxy)
+      DASHBOARD_BACKEND_URL: http://dashboard-backend:8000
 
   dashboard-db:
     image: postgres:16-alpine
