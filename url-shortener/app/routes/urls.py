@@ -65,19 +65,6 @@ def create_short_url():
     return jsonify(model_to_dict(url, backrefs=False)), 201
 
 
-@urls_bp.route("/<short_code>")
-def redirect_to_url(short_code):
-    try:
-        url = Url.get(Url.short_code == short_code)
-    except Url.DoesNotExist:
-        abort(404)
-
-    if not url.is_active:
-        return jsonify({"error": "This URL has been deactivated"}), 410
-
-    return redirect(url.original_url, code=302)
-
-
 @urls_bp.route("/urls", methods=["GET"])
 def list_urls():
     page = request.args.get("page", 1, type=int)
@@ -188,3 +175,17 @@ def list_url_events(url_id):
 
     events = Event.select().where(Event.url_id == url_id).order_by(Event.timestamp.desc())
     return jsonify([model_to_dict(e, backrefs=False) for e in events])
+
+
+@urls_bp.route("/<short_code>")
+def redirect_to_url(short_code):
+    """Registered last so paths like /urls and /shorten are not captured as codes."""
+    try:
+        url = Url.get(Url.short_code == short_code)
+    except Url.DoesNotExist:
+        abort(404)
+
+    if not url.is_active:
+        return jsonify({"error": "This URL has been deactivated"}), 410
+
+    return redirect(url.original_url, code=302)

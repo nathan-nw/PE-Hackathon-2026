@@ -36,5 +36,5 @@ loglevel = os.environ.get("LOG_LEVEL", "info").lower()
 # Process naming
 proc_name = "url-shortener"
 
-# Preload app for faster worker spawning
-preload_app = True
+# Must be False when using DB pools: preloading forks workers with broken inherited connections.
+preload_app = False

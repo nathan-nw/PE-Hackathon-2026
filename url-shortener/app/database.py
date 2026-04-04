@@ -3,6 +3,7 @@ import os
 import time
 from functools import wraps
 
+from flask import request
 from peewee import DatabaseProxy, Model, OperationalError
 from playhouse.pool import PooledPostgresqlDatabase
 
@@ -27,11 +28,16 @@ def init_db(app):
         max_connections=int(os.environ.get("DB_MAX_CONNECTIONS", 20)),
         stale_timeout=int(os.environ.get("DB_STALE_TIMEOUT", 300)),
         timeout=int(os.environ.get("DB_TIMEOUT", 10)),
+        connect_timeout=int(os.environ.get("DB_CONNECT_TIMEOUT", 5)),
     )
     db.initialize(database)
 
     @app.before_request
     def _db_connect():
+        # `index`: HTML shell only (JS hits `/urls` etc. on follow-up requests).
+        # `health`: connects lazily in the view so a bad DB does not hang or 500 in before_request.
+        if request.endpoint in ("index", "health"):
+            return
         try:
             db.connect(reuse_if_open=True)
         except OperationalError as e:

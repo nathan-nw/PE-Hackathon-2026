@@ -39,6 +39,9 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: url-shortener
 
     steps:
       # Check out the repository code
@@ -75,6 +78,9 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: url-shortener
 
     # --------------------------------------------------------------------------
     # PostgreSQL service container — spins up a real DB for integration tests.
