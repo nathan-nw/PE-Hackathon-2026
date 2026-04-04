@@ -44,7 +44,11 @@ feature branches → staging → main
 
 ## Development Setup
 
+Python API and tests live under **`url-shortener/`**:
+
 ```bash
+cd url-shortener
+
 # Install dependencies (including dev tools)
 uv sync --group dev
 

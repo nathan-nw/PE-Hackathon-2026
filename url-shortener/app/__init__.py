@@ -1,5 +1,6 @@
 import logging
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template
@@ -11,7 +12,7 @@ from app.routes import register_routes
 
 
 def create_app():
-    load_dotenv()
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
     app = Flask(__name__)
 
@@ -40,8 +41,7 @@ def create_app():
 
     from app import models  # noqa: F401 - registers models with Peewee
 
-    register_routes(app)
-
+    # Register before API blueprints so `/` and `/health` are not shadowed by `/<short_code>`.
     @app.route("/")
     def index():
         return render_template("index.html")
@@ -64,5 +64,7 @@ def create_app():
             return jsonify(health_status), 503
 
         return jsonify(health_status)
+
+    register_routes(app)
 
     return app

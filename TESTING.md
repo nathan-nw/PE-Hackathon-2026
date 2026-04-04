@@ -1,8 +1,16 @@
 # Testing Guide
 
-This project uses **pytest** for testing. Tests live in the `tests/` directory and run automatically in CI on every pull request.
+This project uses **pytest** for testing. Tests live in **`url-shortener/tests/`** and run automatically in CI on every pull request.
 
 ## Running Tests
+
+From the repo root:
+
+```bash
+cd url-shortener
+```
+
+Then:
 
 ```bash
 # Run all tests

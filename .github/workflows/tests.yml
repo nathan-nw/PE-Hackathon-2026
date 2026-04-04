@@ -15,6 +15,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: url-shortener
 
     steps:
       - name: Checkout
