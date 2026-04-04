@@ -10,15 +10,23 @@ class BaseModel(Model):
         database = db
 
 
-def init_db(app):
-    database = PostgresqlDatabase(
+def _database_from_env():
+    return PostgresqlDatabase(
         os.environ.get("DATABASE_NAME", "hackathon_db"),
         host=os.environ.get("DATABASE_HOST", "localhost"),
         port=int(os.environ.get("DATABASE_PORT", 5432)),
         user=os.environ.get("DATABASE_USER", "postgres"),
         password=os.environ.get("DATABASE_PASSWORD", "postgres"),
     )
-    db.initialize(database)
+
+
+def configure_database():
+    """Bind the global DatabaseProxy to Postgres (used by Flask and CLI scripts)."""
+    db.initialize(_database_from_env())
+
+
+def init_db(app):
+    configure_database()
 
     @app.before_request
     def _db_connect():

@@ -20,7 +20,7 @@ You need to work with around the seed files that you can find in [MLH PE Hackath
   powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
   ```
   For other methods see the [uv installation docs](https://docs.astral.sh/uv/getting-started/installation/).
-- PostgreSQL running locally (you can use Docker or a local instance)
+- PostgreSQL running locally (Docker Compose in this repo, or a local install)
 
 ## uv Basics
 
@@ -42,11 +42,19 @@ git clone <repo-url> && cd mlh-pe-hackathon
 # 2. Install dependencies
 uv sync
 
-# 3. Create the database
-createdb hackathon_db
+# 3. PostgreSQL — pick one:
+
+#    A) Docker (matches .env.example: postgres / postgres, DB hackathon_db)
+#       Start Docker Desktop first, then:
+docker compose up -d
+
+#    B) Local PostgreSQL
+#       Create the database and a user/password that match what you put in .env:
+createdb hackathon_db   # macOS/Linux; on Windows use pgAdmin or: psql -U postgres -c "CREATE DATABASE hackathon_db;"
 
 # 4. Configure environment
-cp .env.example .env   # edit if your DB credentials differ
+cp .env.example .env
+# Edit .env so DATABASE_USER, DATABASE_PASSWORD, DATABASE_NAME, DATABASE_PORT match your server.
 
 # 5. Run the server
 uv run run.py
@@ -56,6 +64,67 @@ curl http://localhost:5000/health
 # → {"status":"ok"}
 ```
 
+On **Windows (PowerShell)** you can copy the env file with `Copy-Item .env.example .env` instead of `cp`.
+
+### Troubleshooting
+
+- **`FATAL: password authentication failed for user "postgres"`** — The values in `.env` do not match your PostgreSQL user and password. Update `DATABASE_USER` and `DATABASE_PASSWORD` (and `DATABASE_NAME` if needed), or use `docker compose up -d` with the stock `.env.example` (Docker maps Postgres to host port **15432** so it does not fight with a local install on **5432**).
+- **`bind: ... Only one usage of each socket address`** — The host port in `docker-compose.yml` is already in use. Change the left side of `ports` (e.g. `"15432:5432"`) to a free port and set `DATABASE_PORT` in `.env` to match.
+- **Docker: `open //./pipe/dockerDesktopLinuxEngine`** — Docker Desktop is not running. Start it, then run `docker compose up -d` again.
+- **`/health` returns 500** — The app connects to PostgreSQL on every request. Fix the database connection (above) until `uv run run.py` can reach Postgres without errors.
+
+## URL shortener API
+
+This project includes a minimal JSON API: list/get/create short URLs, redirect by code, log events, and deactivate links. Seed CSVs live under `csv/` (`users.csv`, `urls.csv`, `events.csv`). Override the directory with env `SEED_CSV_DIR` if needed.
+
+### Create the database and load seeds
+
+1. Ensure PostgreSQL is running and `.env` matches your server (see Quick Start).
+2. Install dependencies: `uv sync`
+3. Create tables and import CSVs:
+
+```bash
+uv run python scripts/init_db.py
+```
+
+If data is already loaded, the script skips inserts unless you force a reload (this deletes existing rows in `users`, `urls`, and `events`):
+
+```bash
+uv run python scripts/init_db.py --force
+```
+
+### Start the app
+
+```bash
+uv run run.py
+```
+
+### Example `curl` commands
+
+```bash
+# Health
+curl http://127.0.0.1:5000/health
+
+# List URLs (?active=true|false, ?user_id=…)
+curl "http://127.0.0.1:5000/urls?active=true"
+
+# One URL by id
+curl http://127.0.0.1:5000/urls/1
+
+# Create a short URL (defaults to the lowest user id if user_id is omitted)
+curl -X POST http://127.0.0.1:5000/urls -H "Content-Type: application/json" \
+  -d "{\"original_url\":\"https://example.com\",\"user_id\":1}"
+
+# Redirect by short code (302 to original_url)
+curl -I http://127.0.0.1:5000/r/WqxP6K
+
+# Deactivate
+curl -X PATCH http://127.0.0.1:5000/urls/1/deactivate
+
+# Events (?url_id=…, ?event_type=…, ?limit=…)
+curl "http://127.0.0.1:5000/events?event_type=clicked&limit=10"
+```
+
 ## Project Structure
 
 ```
@@ -63,10 +132,21 @@ mlh-pe-hackathon/
 ├── app/
 │   ├── __init__.py          # App factory (create_app)
 │   ├── database.py          # DatabaseProxy, BaseModel, connection hooks
+│   ├── helpers.py           # URL validation, short code generation
+│   ├── seed.py              # create_tables + CSV seeding
 │   ├── models/
-│   │   └── __init__.py      # Import your models here
+│   │   ├── user.py
+│   │   ├── url.py
+│   │   ├── event.py
+│   │   └── __init__.py
 │   └── routes/
-│       └── __init__.py      # register_routes() — add blueprints here
+│       ├── urls.py          # /urls CRUD + deactivate
+│       ├── redirect.py      # GET /r/<short_code>
+│       ├── events.py        # GET /events
+│       └── __init__.py      # register_routes()
+├── csv/                     # Seed CSVs (users, urls, events)
+├── scripts/
+│   └── init_db.py           # CLI: create tables + seed
 ├── .env.example             # DB connection template
 ├── .gitignore               # Python + uv gitignore
 ├── .python-version          # Pin Python version for uv
