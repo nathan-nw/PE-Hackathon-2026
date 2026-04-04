@@ -1,3 +1,4 @@
+import contextlib
 import os
 from pathlib import Path
 
@@ -44,14 +45,12 @@ def create_app():
     with app.app_context():
         db.create_tables([User, Url, Event], safe=True)
         # Seed a default user so the UI works out of the box.
-        try:
+        with contextlib.suppress(Exception):
             User.get_or_create(
                 id=1,
                 defaults={"username": "default", "email": "default@example.com",
                           "created_at": __import__("datetime").datetime.now(__import__("datetime").UTC)},
             )
-        except Exception:
-            pass  # non-critical — table may already have user 1
 
     # Register before API blueprints so `/`, `/health`, and `/metrics` are not shadowed by `/<short_code>`.
     @app.route("/")
