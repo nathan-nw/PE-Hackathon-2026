@@ -23,6 +23,11 @@ docker compose up -d --build
 docker compose logs -f
 ```
 
+**One command (same as `docker compose up -d --build`):** from repo root:
+
+- **Windows (PowerShell or CMD):** `.\scripts\start.ps1` or `.\scripts\start.cmd` — do **not** use `./scripts/start.sh` in PowerShell; it will not run the stack.
+- **Git Bash / WSL / macOS / Linux:** `./scripts/start.sh`
+
 Use **`-d`** (detached) so Compose is not holding the stack in a foreground session (foreground `docker compose up` can be flaky on some Docker Desktop builds). Stop following logs with **Ctrl+C** — that does **not** stop the stack when you only ran `logs -f`.
 
 **If a replica stays `Exited` after `docker kill`:** Docker Desktop on Windows often **does not** auto-restart even with `restart: always` — that is a known engine/Desktop limitation. Run **`docker compose up -d url-shortener-a url-shortener-b`** (or **`.\scripts\ensure-api-replicas.ps1`**) to reconcile; see [`ARCHITECTURE.md`](ARCHITECTURE.md) (section *If a replica stays Exited*).

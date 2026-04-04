@@ -209,11 +209,25 @@ services:
   dashboard:
     build:
       context: ./dashboard
+      args:
+        NEXT_PUBLIC_PROMETHEUS_URL: http://localhost:9090
+        NEXT_PUBLIC_ALERTMANAGER_PUBLIC_URL: http://localhost:9093
     restart: always
     networks:
       - app_net
     ports:
-      - "3001:80"
+      - "3001:3000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Kubernetes pod list: host kubeconfig → /kube/config (override path with KUBECONFIG_HOST in .env if needed).
+      - ${KUBECONFIG_HOST:-~/.kube/config}:/kube/config:ro
+    environment:
+      VISIBILITY_COMPOSE_PROJECT: pe-hackathon-2026
+      VISIBILITY_K8S_ENABLED: "true"
+      KUBECONFIG: /kube/config
+      VISIBILITY_K8S_NAMESPACE: pe-hackathon
+      VISIBILITY_ALERTMANAGER_URL: http://alertmanager:9093
+      VISIBILITY_PROMETHEUS_URL: http://prometheus:9090
 
   user-frontend:
     build:

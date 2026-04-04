@@ -1,14 +1,14 @@
-# TLS terminates at the ingress controller (cert-manager example).
-# Replace host and tls.secretName; ensure your ingress class (nginx, traefik, etc.) is installed.
+# Optional: HTTP(S) ingress to the same NGINX edge as Compose (:8080).
+# Requires an ingress controller (e.g. ingress-nginx). Not included in kustomization.yaml by default.
+# Apply after the stack: kubectl apply -f k8s/ingress-url-shortener.yaml
+# Replace host and tls.secretName; set ingressClassName to your controller.
 
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: url-shortener
+  name: api-edge
   namespace: pe-hackathon
   annotations:
-    # Example for ingress-nginx + cert-manager:
-    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
 spec:
   ingressClassName: nginx
@@ -24,6 +24,6 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: url-shortener
+                name: load-balancer
                 port:
-                  name: http
+                  number: 80

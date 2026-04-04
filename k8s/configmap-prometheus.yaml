@@ -1,0 +1,97 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: pe-hackathon
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets:
+                - alertmanager:9093
+
+    rule_files:
+      - /etc/prometheus/rules/slo.yml
+
+    scrape_configs:
+      - job_name: url-shortener
+        metrics_path: /metrics
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - pe-hackathon
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            regex: url-shortener-(a|b)
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_ready]
+            regex: "true"
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_ip]
+            regex: (.+)
+            target_label: __address__
+            replacement: $1:5000
+          - target_label: service
+            replacement: url-shortener
+
+      - job_name: prometheus
+        static_configs:
+          - targets:
+              - localhost:9090
+
+  slo.yml: |
+    # Example SLO-style alerts (tune thresholds for your environment).
+    # Requires metrics from url-shortener /metrics (http_requests_total, http_request_duration_seconds).
+
+    groups:
+      - name: slo
+        rules:
+          - alert: High5xxRate
+            expr: |
+              sum(rate(http_requests_total{status_code=~"5.."}[5m])) > 0.5
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Elevated 5xx response rate from url-shortener"
+              description: "More than 0.5 5xx responses/s (5m rate) across scraped replicas."
+
+          - alert: High429Rate
+            expr: |
+              sum(rate(http_requests_total{status_code="429"}[5m])) > 1
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Elevated 429 (rate limit) responses"
+              description: "Clients may be hitting NGINX or app rate limits."
+
+          - alert: APITargetDown
+            expr: up{job="url-shortener"} == 0
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Prometheus cannot scrape a url-shortener target"
+              description: "Check container health and /metrics on the failing instance."
+
+          - alert: HighLatencyP99
+            expr: |
+              histogram_quantile(
+                0.99,
+                sum by (le) (
+                  rate(http_request_duration_seconds_bucket{job="url-shortener"}[5m])
+                )
+              ) > 2
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "p99 request latency above 2s (scraped /metrics histogram)"
+              description: "Tune buckets or replicas; validate with LB access logs (rt= / urt=)."
