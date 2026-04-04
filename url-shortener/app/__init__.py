@@ -19,7 +19,6 @@ from app.routes import register_routes  # noqa: E402
 
 
 def create_app():
-
     app = Flask(__name__)
 
     configure_logging()
@@ -48,8 +47,11 @@ def create_app():
         with contextlib.suppress(Exception):
             User.get_or_create(
                 id=1,
-                defaults={"username": "default", "email": "default@example.com",
-                          "created_at": __import__("datetime").datetime.now(__import__("datetime").UTC)},
+                defaults={
+                    "username": "default",
+                    "email": "default@example.com",
+                    "created_at": __import__("datetime").datetime.now(__import__("datetime").UTC),
+                },
             )
 
     # Register before API blueprints so `/`, `/health`, and `/metrics` are not shadowed by `/<short_code>`.
