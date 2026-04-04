@@ -9,6 +9,7 @@ import time
 import uuid
 
 from flask import g, jsonify, request
+from peewee import OperationalError as PeeweeOperationalError
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,20 @@ def register_middleware(app):
         response.headers["X-Response-Time"] = f"{duration_ms}ms"
 
         return response
+
+    @app.errorhandler(PeeweeOperationalError)
+    def _database_unavailable(e):
+        logger.error("Database unavailable: %s", e)
+        return (
+            jsonify(
+                {
+                    "error": "Database not reachable",
+                    "detail": str(e),
+                    "hint": "Start Postgres first. From the repo root: docker compose up db",
+                }
+            ),
+            503,
+        )
 
     @app.errorhandler(404)
     def _not_found(e):

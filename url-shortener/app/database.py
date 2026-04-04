@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 import time
 from functools import wraps
 
@@ -17,11 +18,23 @@ class BaseModel(Model):
         database = db
 
 
+def _database_host() -> str:
+    """Resolve host for psycopg2.
+
+    On Windows, `localhost` often resolves to IPv6 (::1) first while Docker Desktop
+    published ports are commonly only on IPv4 — use 127.0.0.1 for local dev.
+    """
+    host = os.environ.get("DATABASE_HOST", "127.0.0.1")
+    if host == "localhost" and sys.platform == "win32":
+        return "127.0.0.1"
+    return host
+
+
 def init_db(app):
     """Initialize database with connection pooling and reliability features."""
     database = PooledPostgresqlDatabase(
         os.environ.get("DATABASE_NAME", "hackathon_db"),
-        host=os.environ.get("DATABASE_HOST", "localhost"),
+        host=_database_host(),
         port=int(os.environ.get("DATABASE_PORT", 5432)),
         user=os.environ.get("DATABASE_USER", "postgres"),
         password=os.environ.get("DATABASE_PASSWORD", "postgres"),
