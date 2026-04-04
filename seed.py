@@ -20,7 +20,7 @@ from app.models.event import Event
 from peewee import chunked
 
 
-DEFAULT_CSV_DIR = os.path.join(os.path.dirname(__file__), "..", "CSV files")
+DEFAULT_CSV_DIR = os.path.join(os.path.dirname(__file__), "csv_data")
 
 
 def load_users(csv_dir):
