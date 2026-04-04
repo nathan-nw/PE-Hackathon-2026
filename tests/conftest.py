@@ -1,32 +1,59 @@
+"""Pytest fixtures: SQLite in-memory locally; PostgreSQL from env in CI (matches workflow)."""
+
+from __future__ import annotations
+
+import os
+from datetime import datetime
+
 import pytest
 from peewee import SqliteDatabase
 
 from app import create_app
 from app.database import db
+from app.models.event import Event
+from app.models.url import Url
+from app.models.user import User
+
+
+def _using_ci_postgres() -> bool:
+    return os.environ.get("CI") == "true"
 
 
 @pytest.fixture()
-def app():
-    """Create a Flask application instance for testing.
+def app(tmp_path):
+    """Flask app with fresh schema; CI uses the service Postgres, otherwise SQLite on disk."""
+    application = create_app()
+    application.config.update(TESTING=True)
 
-    Uses an in-memory SQLite database so tests run without PostgreSQL.
-    The CI workflow also provides a real PostgreSQL service container
-    for integration tests if needed.
-    """
-    test_db = SqliteDatabase(":memory:")
-    app = create_app()
-    app.config.update({"TESTING": True})
+    if not _using_ci_postgres():
+        # File-backed SQLite so every request connection sees the same tables (":memory:" is per-connection).
+        db.initialize(SqliteDatabase(str(tmp_path / "pytest.db")))
 
-    # Swap in the test database
-    db.initialize(test_db)
-    test_db.connect()
+    db.connect(reuse_if_open=True)
+    db.create_tables([User, Url, Event], safe=True)
 
-    yield app
+    yield application
 
-    test_db.close()
+    if db and not db.is_closed():
+        db.close()
+
+
+@pytest.fixture(autouse=True)
+def _seed_user(app):
+    """One user (id=1) before each test; clears URL and event rows."""
+    db.connect(reuse_if_open=True)
+    Event.delete().execute()
+    Url.delete().execute()
+    User.delete().execute()
+    User.create(
+        id=1,
+        username="tester",
+        email="tester@example.com",
+        created_at=datetime(2024, 1, 1, 12, 0, 0),
+    )
+    yield
 
 
 @pytest.fixture()
 def client(app):
-    """Provide a Flask test client."""
     return app.test_client()
