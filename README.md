@@ -56,6 +56,25 @@ curl http://localhost:5000/health
 # → {"status":"ok"}
 ```
 
+## Testing
+
+Install dev dependencies (includes **pytest** and **pytest-cov**), then run the suite from the repo root:
+
+```bash
+uv sync --group dev
+uv run pytest
+```
+
+`pyproject.toml` configures pytest to collect from `tests/`, print a **coverage summary** for the `app/` package, and show missing lines in the terminal. No PostgreSQL is required for tests: the test harness swaps in a temporary **SQLite** database so your development database is never touched.
+
+To run pytest **without** coverage (faster feedback):
+
+```bash
+uv run pytest --no-cov
+```
+
+**GitHub Actions:** the workflow `.github/workflows/tests.yml` runs on every **push** and **pull request**. It installs Python via `uv`, runs `uv sync --group dev`, then `uv run pytest` with the same coverage settings.
+
 ## Project Structure
 
 ```
@@ -70,8 +89,9 @@ mlh-pe-hackathon/
 ├── .env.example             # DB connection template
 ├── .gitignore               # Python + uv gitignore
 ├── .python-version          # Pin Python version for uv
-├── pyproject.toml           # Project metadata + dependencies
+├── pyproject.toml           # Project metadata + dependencies + pytest config
 ├── run.py                   # Entry point: uv run run.py
+├── tests/                   # pytest suite (SQLite test DB)
 └── README.md
 ```
 
