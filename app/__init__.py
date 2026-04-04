@@ -4,10 +4,10 @@ import os
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template
 
+from app.circuit_breaker import db_circuit_breaker
 from app.database import db, init_db
 from app.middleware import register_middleware
 from app.routes import register_routes
-from app.circuit_breaker import db_circuit_breaker
 
 
 def create_app():
@@ -30,9 +30,7 @@ def create_app():
     limiter = Limiter(
         app=app,
         key_func=get_remote_address,
-        default_limits=[
-            os.environ.get("RATE_LIMIT_DEFAULT", "200 per minute")
-        ],
+        default_limits=[os.environ.get("RATE_LIMIT_DEFAULT", "200 per minute")],
         storage_uri=os.environ.get("RATE_LIMIT_STORAGE", "memory://"),
     )
     app.limiter = limiter

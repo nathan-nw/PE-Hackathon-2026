@@ -27,10 +27,7 @@ def register_middleware(app):
         duration_ms = round(duration * 1000, 2)
 
         logger.info(
-            f"[{g.get('request_id', '-')}] "
-            f"{request.method} {request.path} "
-            f"-> {response.status_code} "
-            f"({duration_ms}ms)"
+            f"[{g.get('request_id', '-')}] {request.method} {request.path} -> {response.status_code} ({duration_ms}ms)"
         )
 
         # Add useful headers for debugging and reliability

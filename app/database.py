@@ -50,6 +50,7 @@ def retry_on_failure(max_retries=3, delay=0.5, backoff=2.0):
     Uses exponential backoff: delay * (backoff ** attempt).
     Only retries on OperationalError (connection issues, timeouts).
     """
+
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -59,7 +60,7 @@ def retry_on_failure(max_retries=3, delay=0.5, backoff=2.0):
                     return func(*args, **kwargs)
                 except OperationalError as e:
                     last_exception = e
-                    wait_time = delay * (backoff ** attempt)
+                    wait_time = delay * (backoff**attempt)
                     logger.warning(
                         f"DB operation failed (attempt {attempt + 1}/{max_retries}): {e}. "
                         f"Retrying in {wait_time:.1f}s..."
@@ -70,5 +71,7 @@ def retry_on_failure(max_retries=3, delay=0.5, backoff=2.0):
                         db.close()
             logger.error(f"DB operation failed after {max_retries} attempts: {last_exception}")
             raise last_exception
+
         return wrapper
+
     return decorator

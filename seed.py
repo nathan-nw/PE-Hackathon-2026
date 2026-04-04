@@ -12,13 +12,13 @@ import csv
 import os
 import sys
 
-from app import create_app
-from app.database import db
-from app.models.user import User
-from app.models.url import Url
-from app.models.event import Event
 from peewee import chunked
 
+from app import create_app
+from app.database import db
+from app.models.event import Event
+from app.models.url import Url
+from app.models.user import User
 
 DEFAULT_CSV_DIR = os.path.join(os.path.dirname(__file__), "csv_data")
 

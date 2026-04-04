@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from peewee import SqliteDatabase
@@ -47,7 +47,7 @@ def _reset_tables(app):
         id=1,
         username="testuser",
         email="test@example.com",
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
     yield
 

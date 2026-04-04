@@ -12,14 +12,15 @@ States:
 """
 
 import logging
-import time
 import threading
+import time
 
 logger = logging.getLogger(__name__)
 
 
 class CircuitBreakerOpen(Exception):
     """Raised when the circuit breaker is open and requests are blocked."""
+
     pass
 
 
@@ -37,10 +38,13 @@ class CircuitBreaker:
     @property
     def state(self):
         with self._lock:
-            if self._state == "OPEN":
-                if (time.time() - self._last_failure_time) > self.recovery_timeout:
-                    self._state = "HALF_OPEN"
-                    logger.info(f"Circuit breaker [{self.name}] -> HALF_OPEN")
+            if (
+                self._state == "OPEN"
+                and self._last_failure_time is not None
+                and (time.time() - self._last_failure_time) > self.recovery_timeout
+            ):
+                self._state = "HALF_OPEN"
+                logger.info(f"Circuit breaker [{self.name}] -> HALF_OPEN")
             return self._state
 
     def record_success(self):
@@ -56,25 +60,19 @@ class CircuitBreaker:
             self._last_failure_time = time.time()
             if self._failure_count >= self.failure_threshold:
                 self._state = "OPEN"
-                logger.warning(
-                    f"Circuit breaker [{self.name}] -> OPEN "
-                    f"(failures: {self._failure_count})"
-                )
+                logger.warning(f"Circuit breaker [{self.name}] -> OPEN (failures: {self._failure_count})")
 
     def call(self, func, *args, **kwargs):
         """Execute a function through the circuit breaker."""
         state = self.state
         if state == "OPEN":
-            raise CircuitBreakerOpen(
-                f"Circuit breaker [{self.name}] is OPEN. "
-                f"Service unavailable, try again later."
-            )
+            raise CircuitBreakerOpen(f"Circuit breaker [{self.name}] is OPEN. Service unavailable, try again later.")
 
         try:
             result = func(*args, **kwargs)
             self.record_success()
             return result
-        except Exception as e:
+        except Exception:
             self.record_failure()
             raise
 

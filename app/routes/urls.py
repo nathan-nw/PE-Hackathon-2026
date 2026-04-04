@@ -1,14 +1,14 @@
 import random
 import string
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from flask import Blueprint, abort, jsonify, redirect, request
 from playhouse.shortcuts import model_to_dict
 
+from app.database import db
 from app.models.event import Event
 from app.models.url import Url
 from app.models.user import User
-from app.database import db
 
 urls_bp = Blueprint("urls", __name__)
 
@@ -41,7 +41,7 @@ def create_short_url():
     if Url.select().where(Url.short_code == short_code).exists():
         return jsonify({"error": "Short code already exists"}), 409
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     with db.atomic():
         url = Url.create(
@@ -88,12 +88,14 @@ def list_urls():
     total = query.count()
     urls = query.paginate(page, per_page)
 
-    return jsonify({
-        "data": [model_to_dict(u, backrefs=False) for u in urls],
-        "page": page,
-        "per_page": per_page,
-        "total": total,
-    })
+    return jsonify(
+        {
+            "data": [model_to_dict(u, backrefs=False) for u in urls],
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+        }
+    )
 
 
 @urls_bp.route("/urls/<int:url_id>", methods=["GET"])
@@ -117,7 +119,7 @@ def update_url(url_id):
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     with db.atomic():
         if "original_url" in data:
@@ -148,7 +150,7 @@ def delete_url(url_id):
     except Url.DoesNotExist:
         return jsonify({"error": "URL not found"}), 404
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     with db.atomic():
         Event.create(
