@@ -6,6 +6,7 @@ import {
   railwayIdsConfigured,
   railwayVisibilityConfigured,
 } from "@/lib/railway-visibility";
+import { pingHeartbeatUrl, buildHeartbeatProbeUrl } from "@/lib/service-heartbeat";
 import { runtimeEnv } from "@/lib/server-runtime-env";
 
 export const runtime = "nodejs";
@@ -78,6 +79,29 @@ export async function GET(request: NextRequest) {
       }
 
       const ds = row.deploymentStatus;
+      const probeUrl = buildHeartbeatProbeUrl(row.railwayPublicUrl, row.service);
+      let heartbeat: {
+        skipped: boolean;
+        ok: boolean | null;
+        probeUrl: string | null;
+        latencyMs?: number;
+        statusCode?: number;
+        error?: string;
+      };
+      if (probeUrl) {
+        const pr = await pingHeartbeatUrl(probeUrl);
+        heartbeat = {
+          skipped: false,
+          ok: pr.ok,
+          probeUrl,
+          latencyMs: pr.latencyMs,
+          statusCode: pr.statusCode,
+          ...(pr.error ? { error: pr.error } : {}),
+        };
+      } else {
+        heartbeat = { skipped: true, ok: null, probeUrl: null };
+      }
+
       return json({
         found: true,
         source: "railway" as const,
@@ -93,6 +117,8 @@ export async function GET(request: NextRequest) {
         railwayDeploymentId: row.railwayDeploymentId,
         statusLine: row.status,
         railwayOnlineStatus: row.railwayOnlineStatus,
+        railwayPublicUrl: row.railwayPublicUrl ?? null,
+        heartbeat,
       });
     } catch (e) {
       const message = e instanceof Error ? e.message : "Unknown error";

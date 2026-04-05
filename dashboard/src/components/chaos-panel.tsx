@@ -21,9 +21,11 @@ import {
 import { Loader2, RefreshCw, RotateCcw, Skull } from "lucide-react";
 
 import type { WatchdogPayload } from "@/lib/watchdog-types";
+import { HeartbeatCell } from "@/components/heartbeat-cell";
 import { RailwayOnlineStatusBadge } from "@/components/railway-online-status-badge";
 import { WatchdogToastStack } from "@/components/watchdog-toast-stack";
 import type { RailwayOnlineStatus } from "@/lib/railway-visibility";
+import type { HeartbeatPingResult } from "@/lib/service-heartbeat";
 
 type ChaosAction = "kill" | "restart";
 
@@ -58,6 +60,8 @@ type DockerContainer = {
   railwayServiceId?: string;
   railwayDeploymentId?: string;
   railwayOnlineStatus?: RailwayOnlineStatus;
+  /** Set when `GET /api/visibility/docker?heartbeats=1` (hosted). */
+  heartbeat?: HeartbeatPingResult;
 };
 
 type DockerResponse = {
@@ -92,6 +96,15 @@ type ChaosStatus = {
   deploymentStatus?: string;
   statusLine?: string;
   railwayOnlineStatus?: RailwayOnlineStatus;
+  railwayPublicUrl?: string | null;
+  heartbeat?: {
+    skipped: boolean;
+    ok: boolean | null;
+    probeUrl: string | null;
+    latencyMs?: number;
+    statusCode?: number;
+    error?: string;
+  };
   message?: string;
   error?: string;
 };
@@ -158,8 +171,8 @@ export function ChaosPanel() {
     setLoading(true);
     try {
       const [d, c] = await Promise.all([
-        fetch("/api/visibility/docker", { cache: "no-store" }).then((r) =>
-          r.json()
+        fetch("/api/visibility/docker?heartbeats=1", { cache: "no-store" }).then(
+          (r) => r.json()
         ),
         fetch("/api/visibility/docker/chaos/config", { cache: "no-store" }).then(
           (r) => r.json()
@@ -376,7 +389,7 @@ export function ChaosPanel() {
             {!watchdog
               ? "Loading watchdog status…"
               : watchdog.source === "railway"
-                ? "Polling Railway deployment status. The watchdog auto-redeploys only on CRASHED or FAILED (not after Chaos Kill / deploymentStop — that would undo an intentional shutdown). Disable with RAILWAY_WATCHDOG_AUTO_RECOVER=0. Toasts fire when a service goes from Completed/stopped to Deploying (reboot), on redeploys, and on crash recovery; recent poll lines are below."
+                ? "Polling Railway deployment status plus HTTP heartbeats to each service public URL (/live, /api/health, etc.). If the deployment is SUCCESS but the app stops responding, the watchdog redeploys after consecutive failed heartbeats (disable with RAILWAY_HEARTBEAT_RECOVER=0). CRASHED/FAILED still trigger auto-redeploy (disable with RAILWAY_WATCHDOG_AUTO_RECOVER=0). Chaos Kill is not auto-undone. Toasts fire on recoveries and heartbeat reboots; recent poll lines are below."
                 : "Local stack: the compose-watchdog service scans Compose containers on each interval (starts exited tasks, restarts unhealthy ones). Alerts appear at the top-right when it acts."}
           </CardDescription>
         </CardHeader>
@@ -403,6 +416,22 @@ export function ChaosPanel() {
                   </span>{" "}
                   {watchdog.source === "railway" ? "Railway services" : "containers"} · every{" "}
                   {watchdog.intervalSec}s
+                  {watchdog.source === "railway" && watchdog.heartbeat?.enabled ? (
+                    <>
+                      {" "}
+                      · HTTP heartbeats:{" "}
+                      <span className="text-foreground font-mono tabular-nums">
+                        {watchdog.heartbeat.ok}/{watchdog.heartbeat.probes}
+                      </span>{" "}
+                      ok
+                      {watchdog.heartbeat.skipped > 0 ? (
+                        <span className="text-muted-foreground">
+                          {" "}
+                          ({watchdog.heartbeat.skipped} n/a)
+                        </span>
+                      ) : null}
+                    </>
+                  ) : null}
                 </span>
                 <span className="text-muted-foreground font-mono text-xs">
                   {Math.round(watchdogProgress * 100)}%
@@ -554,6 +583,48 @@ export function ChaosPanel() {
                       <dd className="max-w-md break-all text-xs">
                         {watchStatus.statusLine ?? "—"}
                       </dd>
+                      {watchStatus.heartbeat && (
+                        <>
+                          <dt className="text-muted-foreground">HTTP heartbeat</dt>
+                          <dd className="space-y-1">
+                            {watchStatus.heartbeat.skipped ? (
+                              <span className="text-muted-foreground text-xs">
+                                No public URL / probe for this service (Railway data only).
+                              </span>
+                            ) : (
+                              <>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  {watchStatus.heartbeat.ok ? (
+                                    <Badge variant="secondary" className="text-xs">
+                                      OK
+                                      {watchStatus.heartbeat.latencyMs != null
+                                        ? ` ${watchStatus.heartbeat.latencyMs}ms`
+                                        : ""}
+                                    </Badge>
+                                  ) : (
+                                    <Badge variant="destructive" className="text-xs">
+                                      Failed
+                                      {watchStatus.heartbeat.statusCode != null
+                                        ? ` (${watchStatus.heartbeat.statusCode})`
+                                        : ""}
+                                    </Badge>
+                                  )}
+                                </div>
+                                {watchStatus.heartbeat.probeUrl ? (
+                                  <div className="text-muted-foreground break-all font-mono text-[11px]">
+                                    {watchStatus.heartbeat.probeUrl}
+                                  </div>
+                                ) : null}
+                                {watchStatus.heartbeat.error ? (
+                                  <div className="text-destructive text-xs">
+                                    {watchStatus.heartbeat.error}
+                                  </div>
+                                ) : null}
+                              </>
+                            )}
+                          </dd>
+                        </>
+                      )}
                     </>
                   ) : (
                     <>
@@ -586,13 +657,19 @@ export function ChaosPanel() {
                     {docker?.source === "railway" ? "Lifecycle" : "State"}
                   </TableHead>
                   <TableHead>Status</TableHead>
+                  {docker?.source === "railway" ? (
+                    <TableHead>Heartbeat</TableHead>
+                  ) : null}
                   <TableHead className="min-w-[260px]">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {sorted.length === 0 && !loading && (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-muted-foreground">
+                    <TableCell
+                      colSpan={docker?.source === "railway" ? 6 : 5}
+                      className="text-muted-foreground"
+                    >
                       No containers loaded.
                     </TableCell>
                   </TableRow>
@@ -622,6 +699,11 @@ export function ChaosPanel() {
                         )}
                       </TableCell>
                       <TableCell className="max-w-[240px] truncate text-xs">{c.status}</TableCell>
+                      {docker?.source === "railway" ? (
+                        <TableCell>
+                          <HeartbeatCell hb={c.heartbeat} />
+                        </TableCell>
+                      ) : null}
                       <TableCell>
                         <div className="flex flex-wrap gap-1">
                           <Button

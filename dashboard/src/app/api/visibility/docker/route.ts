@@ -11,6 +11,7 @@ import {
   railwayIdsConfigured,
   railwayVisibilityConfigured,
 } from "@/lib/railway-visibility";
+import { pingRailwayServiceHeartbeats } from "@/lib/service-heartbeat";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,6 +41,7 @@ function cpuPercentFromStats(stats: ContainerStats): number | undefined {
 
 export async function GET(request: NextRequest) {
   const stats = request.nextUrl.searchParams.get("stats") === "1";
+  const heartbeats = request.nextUrl.searchParams.get("heartbeats") === "1";
   const project =
     runtimeEnv("VISIBILITY_COMPOSE_PROJECT") || "pe-hackathon-2026";
 
@@ -63,12 +65,32 @@ export async function GET(request: NextRequest) {
       );
     }
     const r = await fetchRailwayVisibilityRows({ includeStats: stats });
+    if (r.error || !heartbeats) {
+      return NextResponse.json(
+        {
+          source: "railway" as const,
+          project: r.project,
+          projectId: r.projectId,
+          containers: r.containers,
+          error: r.error,
+        },
+        { headers: VISIBILITY_CACHE_HEADERS }
+      );
+    }
+
+    const beats = await pingRailwayServiceHeartbeats(r.containers);
+    const byId = new Map(beats.map((b) => [b.railwayServiceId, b]));
+    const containers = r.containers.map((c) => ({
+      ...c,
+      heartbeat: byId.get(c.railwayServiceId),
+    }));
+
     return NextResponse.json(
       {
         source: "railway" as const,
         project: r.project,
         projectId: r.projectId,
-        containers: r.containers,
+        containers,
         error: r.error,
       },
       { headers: VISIBILITY_CACHE_HEADERS }

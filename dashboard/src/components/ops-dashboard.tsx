@@ -25,9 +25,11 @@ import { IncidentTimeline } from "@/components/incident-timeline";
 import { UnifiedLogMonitor } from "@/components/unified-log-monitor";
 import { instanceIdFromComposeService } from "@/lib/compose-instance";
 import { LoadTest } from "@/components/load-test";
+import { HeartbeatCell } from "@/components/heartbeat-cell";
 import { RailwayOnlineStatusBadge } from "@/components/railway-online-status-badge";
 import { cn } from "@/lib/utils";
 import type { RailwayOnlineStatus } from "@/lib/railway-visibility";
+import type { HeartbeatPingResult } from "@/lib/service-heartbeat";
 import {
   ChevronDown,
   ChevronRight,
@@ -54,6 +56,7 @@ type DockerContainer = {
   railwayServiceId?: string;
   /** Hosted (Railway): Online / Completed / Deploying — from deployment lifecycle. */
   railwayOnlineStatus?: RailwayOnlineStatus;
+  heartbeat?: HeartbeatPingResult;
 };
 
 /** Response from dashboard-backend GET /api/introspect/postgres (proxied). */
@@ -214,7 +217,7 @@ export function OpsDashboard() {
 
   const fetchAll = useCallback(async () => {
     setError(null);
-    const qs = includeStats ? "?stats=1" : "";
+    const qs = `?${["heartbeats=1", includeStats ? "stats=1" : ""].filter(Boolean).join("&")}`;
     const podsUrl = k8sAllNamespaces
       ? "/api/visibility/k8s/pods?allNamespaces=1"
       : "/api/visibility/k8s/pods";
@@ -298,7 +301,9 @@ export function OpsDashboard() {
   /** CPU/memory columns: Docker via container stats; Railway via GraphQL metrics. */
   const showResourceStats = includeStats;
 
-  const serviceTableColCount = showResourceStats ? 9 : 6;
+  const isRailway = docker?.source === "railway";
+  const baseServiceCols = isRailway ? 7 : 6;
+  const serviceTableColCount = baseServiceCols + (showResourceStats ? 2 : 0);
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-8">
@@ -434,6 +439,7 @@ export function OpsDashboard() {
                       {docker?.source === "railway" ? "Lifecycle" : "State"}
                     </TableHead>
                     <TableHead>Status</TableHead>
+                    {isRailway ? <TableHead>Heartbeat</TableHead> : null}
                     <TableHead className="w-[120px]">App logs</TableHead>
                     {showResourceStats && (
                       <>
@@ -515,6 +521,11 @@ export function OpsDashboard() {
                         <TableCell className="max-w-[240px] truncate text-xs">
                           {c.status}
                         </TableCell>
+                        {isRailway ? (
+                          <TableCell>
+                            <HeartbeatCell hb={c.heartbeat} />
+                          </TableCell>
+                        ) : null}
                         <TableCell>
                           {(() => {
                             const iid = instanceIdFromComposeService(c.service);
