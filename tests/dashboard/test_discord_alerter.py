@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import json
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
 from discord_alerter import DiscordAlerter
 
@@ -52,7 +51,9 @@ class TestShouldAlert:
 
     def test_404_does_not_trigger(self):
         alerter = DiscordAlerter(webhook_url="https://example.com/webhook")
-        assert alerter.should_alert(_make_entry(status_code=404, level="WARNING")) is False
+        assert (
+            alerter.should_alert(_make_entry(status_code=404, level="WARNING")) is False
+        )
 
     def test_missing_fields_does_not_trigger(self):
         alerter = DiscordAlerter(webhook_url="https://example.com/webhook")
@@ -108,7 +109,9 @@ class TestSendAlert:
         body = json.loads(mock_urlopen.call_args[0][0].data.decode("utf-8"))
         assert body["embeds"][0]["color"] == 16776960  # yellow
 
-    @patch("discord_alerter.urllib.request.urlopen", side_effect=Exception("Discord down"))
+    @patch(
+        "discord_alerter.urllib.request.urlopen", side_effect=Exception("Discord down")
+    )
     def test_handles_http_error(self, mock_urlopen):
         alerter = DiscordAlerter(webhook_url="https://example.com/webhook")
         # Should not raise
@@ -134,3 +137,125 @@ class TestSendAlert:
         alerter.send_alert(_make_entry())
 
         assert mock_urlopen.call_count == 2
+
+
+def _make_alertmanager_payload(*alerts):
+    """Build an Alertmanager webhook payload."""
+    return {"alerts": list(alerts)}
+
+
+def _make_am_alert(alertname="TestAlert", severity="warning", status="firing", **extra):
+    alert = {
+        "status": status,
+        "labels": {"alertname": alertname, "severity": severity},
+        "annotations": {
+            "summary": f"{alertname} is firing",
+            "description": f"Details about {alertname}",
+        },
+        "startsAt": "2026-04-05T12:00:00Z",
+        "endsAt": "0001-01-01T00:00:00Z",
+        "generatorURL": "http://prometheus:9090/graph",
+    }
+    alert["labels"].update(extra)
+    return alert
+
+
+class TestAlertmanagerWebhook:
+    @patch("discord_alerter.urllib.request.urlopen")
+    def test_formats_firing_critical(self, mock_urlopen):
+        alerter = DiscordAlerter(webhook_url="https://example.com/webhook")
+        payload = _make_alertmanager_payload(
+            _make_am_alert("ServiceDown", severity="critical", status="firing")
+        )
+        count = alerter.send_alertmanager_alerts(payload)
+
+        assert count == 1
+        body = json.loads(mock_urlopen.call_args[0][0].data.decode("utf-8"))
+        embed = body["embeds"][0]
+        assert "FIRING" in embed["title"]
+        assert "ServiceDown" in embed["title"]
+        assert embed["color"] == 15158332  # red for critical
+
+    @patch("discord_alerter.urllib.request.urlopen")
+    def test_formats_firing_warning(self, mock_urlopen):
+        alerter = DiscordAlerter(webhook_url="https://example.com/webhook")
+        payload = _make_alertmanager_payload(
+            _make_am_alert("High5xxRate", severity="warning", status="firing")
+        )
+        count = alerter.send_alertmanager_alerts(payload)
+
+        assert count == 1
+        body = json.loads(mock_urlopen.call_args[0][0].data.decode("utf-8"))
+        assert body["embeds"][0]["color"] == 16750848  # orange for warning
+
+    @patch("discord_alerter.urllib.request.urlopen")
+    def test_formats_resolved(self, mock_urlopen):
+        alerter = DiscordAlerter(webhook_url="https://example.com/webhook")
+        payload = _make_alertmanager_payload(
+            _make_am_alert("ServiceDown", severity="critical", status="resolved")
+        )
+        count = alerter.send_alertmanager_alerts(payload)
+
+        assert count == 1
+        body = json.loads(mock_urlopen.call_args[0][0].data.decode("utf-8"))
+        embed = body["embeds"][0]
+        assert "RESOLVED" in embed["title"]
+        assert embed["color"] == 3066993  # green
+
+    @patch("discord_alerter.urllib.request.urlopen")
+    def test_includes_instance_label(self, mock_urlopen):
+        alerter = DiscordAlerter(webhook_url="https://example.com/webhook")
+        payload = _make_alertmanager_payload(
+            _make_am_alert("APITargetDown", instance="url-shortener-a:5000")
+        )
+        count = alerter.send_alertmanager_alerts(payload)
+
+        assert count == 1
+        body = json.loads(mock_urlopen.call_args[0][0].data.decode("utf-8"))
+        fields = {f["name"]: f["value"] for f in body["embeds"][0]["fields"]}
+        assert fields["Instance"] == "url-shortener-a:5000"
+
+    @patch("discord_alerter.urllib.request.urlopen")
+    def test_multiple_alerts_batched(self, mock_urlopen):
+        alerter = DiscordAlerter(webhook_url="https://example.com/webhook")
+        alerter._min_interval = 0
+        alerts = [_make_am_alert(f"Alert{i}") for i in range(3)]
+        payload = _make_alertmanager_payload(*alerts)
+        count = alerter.send_alertmanager_alerts(payload)
+
+        assert count == 3
+        # All 3 in one message (under 10 limit)
+        assert mock_urlopen.call_count == 1
+        body = json.loads(mock_urlopen.call_args[0][0].data.decode("utf-8"))
+        assert len(body["embeds"]) == 3
+
+    @patch("discord_alerter.urllib.request.urlopen")
+    def test_batch_splitting_over_10(self, mock_urlopen):
+        alerter = DiscordAlerter(webhook_url="https://example.com/webhook")
+        alerter._min_interval = 0
+        alerts = [_make_am_alert(f"Alert{i}") for i in range(12)]
+        payload = _make_alertmanager_payload(*alerts)
+        count = alerter.send_alertmanager_alerts(payload)
+
+        assert count == 12
+        assert mock_urlopen.call_count == 2  # 10 + 2
+
+    def test_disabled_returns_zero(self):
+        alerter = DiscordAlerter(webhook_url=None)
+        payload = _make_alertmanager_payload(_make_am_alert())
+        assert alerter.send_alertmanager_alerts(payload) == 0
+
+    def test_empty_alerts_returns_zero(self):
+        alerter = DiscordAlerter(webhook_url="https://example.com/webhook")
+        assert alerter.send_alertmanager_alerts({"alerts": []}) == 0
+        assert alerter.send_alertmanager_alerts({}) == 0
+
+    @patch(
+        "discord_alerter.urllib.request.urlopen", side_effect=Exception("Discord down")
+    )
+    def test_handles_send_failure(self, mock_urlopen):
+        alerter = DiscordAlerter(webhook_url="https://example.com/webhook")
+        payload = _make_alertmanager_payload(_make_am_alert())
+        # Should not raise
+        count = alerter.send_alertmanager_alerts(payload)
+        assert count == 0

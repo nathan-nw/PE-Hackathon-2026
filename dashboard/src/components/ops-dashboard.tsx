@@ -19,9 +19,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { instanceIdFromComposeService } from "@/lib/compose-instance";
 import { ChaosPanel } from "@/components/chaos-panel";
+import { GoldenSignals } from "@/components/golden-signals";
+import { IncidentTimeline } from "@/components/incident-timeline";
 import { UnifiedLogMonitor } from "@/components/unified-log-monitor";
+import { instanceIdFromComposeService } from "@/lib/compose-instance";
 import { LoadTest } from "@/components/load-test";
 import { RailwayOnlineStatusBadge } from "@/components/railway-online-status-badge";
 import { cn } from "@/lib/utils";
@@ -375,6 +377,7 @@ export function OpsDashboard() {
           <TabsTrigger value="loadtest">Load Test</TabsTrigger>
           <TabsTrigger value="chaos">Chaos</TabsTrigger>
           <TabsTrigger value="telemetry">Telemetry</TabsTrigger>
+          <TabsTrigger value="incidents">Incidents</TabsTrigger>
         </TabsList>
 
         <TabsContent value="containers" className="space-y-2">
@@ -874,8 +877,9 @@ export function OpsDashboard() {
           <ChaosPanel />
         </TabsContent>
 
-        <TabsContent value="telemetry">
-          <div className="grid gap-4 sm:grid-cols-2">
+        <TabsContent value="telemetry" keepMounted>
+          <GoldenSignals />
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <Card>
               <CardHeader>
                 <CardTitle>Prometheus</CardTitle>
@@ -921,6 +925,10 @@ export function OpsDashboard() {
               </CardContent>
             </Card>
           </div>
+        </TabsContent>
+
+        <TabsContent value="incidents" keepMounted>
+          <IncidentTimeline />
         </TabsContent>
       </Tabs>
     </div>

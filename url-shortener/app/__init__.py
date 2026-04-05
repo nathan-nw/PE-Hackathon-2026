@@ -75,28 +75,30 @@ def create_app():
     from app.models.load_test_result import LoadTestResult  # noqa: E402
 
     # Ensure tables exist (safe to call repeatedly — uses IF NOT EXISTS).
-    with app.app_context():
-        db.create_tables([User, Url, Event, LoadTestResult], safe=True)
-        # Seed a default user so the UI works out of the box (hosted DB may be slow on first connect).
-        for attempt in range(3):
-            try:
-                User.get_or_create(
-                    id=1,
-                    defaults={
-                        "username": "default",
-                        "email": "default@example.com",
-                        "created_at": __import__("datetime").datetime.now(__import__("datetime").UTC),
-                    },
-                )
-                break
-            except Exception as e:
-                logger.warning(
-                    "Default user (id=1) seed attempt %s/3 failed: %s",
-                    attempt + 1,
-                    e,
-                )
-                if attempt < 2:
-                    time.sleep(0.5)
+    # Skip when TESTING — test fixtures swap in SQLite and create tables themselves.
+    if not os.environ.get("TESTING"):
+        with app.app_context():
+            db.create_tables([User, Url, Event, LoadTestResult], safe=True)
+            # Seed a default user so the UI works out of the box (hosted DB may be slow on first connect).
+            for attempt in range(3):
+                try:
+                    User.get_or_create(
+                        id=1,
+                        defaults={
+                            "username": "default",
+                            "email": "default@example.com",
+                            "created_at": __import__("datetime").datetime.now(__import__("datetime").UTC),
+                        },
+                    )
+                    break
+                except Exception as e:
+                    logger.warning(
+                        "Default user (id=1) seed attempt %s/3 failed: %s",
+                        attempt + 1,
+                        e,
+                    )
+                    if attempt < 2:
+                        time.sleep(0.5)
 
     # Register before API blueprints so `/`, `/health`, and `/metrics` are not shadowed by `/<short_code>`.
     @app.route("/favicon.ico")
