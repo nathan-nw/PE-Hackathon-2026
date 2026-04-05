@@ -6,15 +6,15 @@
 
   Railway does not run docker-compose as one unit. This script adds:
     - Postgres + Redis plugins
-    - url-shortener, user-frontend, dashboard, dashboard-backend (each linked to GitHub for auto-deploy on push)
+    - url-shortener-a, url-shortener-b, load-balancer (same NGINX + two-replica layout as docker-compose.yml)
+    - user-frontend, dashboard, dashboard-backend
 
   After it finishes, open each service in the Railway UI and set:
     - Settings -> Root Directory (see table below)
     - Settings -> Config-as-code path to the matching railway.toml (optional; speeds up detection)
-    - Variables / References (Postgres + Redis -> url-shortener, etc.)
+    - Variables / References (Postgres + Redis -> both API replicas, load-balancer upstreams — or run: SYNC_VARIABLES=1 node setup-railway.js)
 
-  Compose-only pieces (Kafka, Zookeeper, NGINX LB, Prometheus, Alertmanager, db-backup) are not cloned here;
-  use Railway scaling + managed datastores instead, or keep running those locally.
+  Compose-only pieces (Kafka, Zookeeper, Prometheus, Alertmanager, db-backup) are not cloned here unless you add them manually.
 #>
 param(
     [string] $Repo = "nathan-nw/PE-Hackathon-2026",
@@ -52,7 +52,9 @@ Invoke-RailwayCli @("add", "--database", "postgres", "--service", "Postgres")
 Invoke-RailwayCli @("add", "--database", "redis", "--service", "Redis")
 
 Write-Host "Adding Git-connected services (auto-deploy when default branch updates)..." -ForegroundColor Cyan
-Invoke-RailwayCli @("add", "--service", "url-shortener", "--repo", $Repo)
+Invoke-RailwayCli @("add", "--service", "url-shortener-a", "--repo", $Repo)
+Invoke-RailwayCli @("add", "--service", "url-shortener-b", "--repo", $Repo)
+Invoke-RailwayCli @("add", "--service", "load-balancer", "--repo", $Repo)
 Invoke-RailwayCli @("add", "--service", "user-frontend", "--repo", $Repo)
 Invoke-RailwayCli @("add", "--service", "dashboard", "--repo", $Repo)
 Invoke-RailwayCli @("add", "--service", "dashboard-backend", "--repo", $Repo)
@@ -65,32 +67,39 @@ Done adding services.
 
 Set Root Directory in the Railway dashboard for each Git-linked service (or run setup-railway.js to set via API):
 
-  Service             Root Directory
-  ------------------  ------------------
-  url-shortener       url-shortener
-  user-frontend       user-frontend
-  dashboard           dashboard
-  dashboard-backend   dashboard/backend
+  Service               Root Directory
+  --------------------  ------------------
+  url-shortener-a       url-shortener
+  url-shortener-b       url-shortener
+  load-balancer         load-balancer
+  user-frontend         user-frontend
+  dashboard             dashboard
+  dashboard-backend     dashboard/backend
 
 Recommended shared variables (automated: `$env:SYNC_VARIABLES = '1'; node setup-railway.js` — see RAILWAY.md):
 
-  url-shortener:
+  url-shortener-a / url-shortener-b:
     DATABASE_URL = ${{ Postgres.DATABASE_PRIVATE_URL }}   (internal; or DATABASE_URL if you set SYNC_VARIABLES_USE_PUBLIC_DATABASE_URL=1)
     RATE_LIMIT_STORAGE = ${{ Redis.REDIS_URL }}
-    INSTANCE_ID = 1
+    INSTANCE_ID = 1  (replica a) / 2  (replica b)
     FLASK_DEBUG = false
+
+  load-balancer:
+    URL_SHORTENER_A_HOST = ${{ url-shortener-a.RAILWAY_PRIVATE_DOMAIN }}
+    URL_SHORTENER_B_HOST = ${{ url-shortener-b.RAILWAY_PRIVATE_DOMAIN }}
+    URL_SHORTENER_PORT = 5000
 
   dashboard-backend:
     DASHBOARD_DATABASE_URL = ${{ Postgres.DATABASE_PRIVATE_URL }}
     DASHBOARD_DB_NAME = dashboard_db
     (Create database dashboard_db once in Postgres — RAILWAY.md.)
-    Leave KAFKA_* unset (Kafka consumer stays off).
+    Leave KAFKA_* unset unless you add a broker.
 
   dashboard:
     DASHBOARD_BACKEND_URL = https://${{ dashboard-backend.RAILWAY_PUBLIC_DOMAIN }}
 
   user-frontend (optional):
-    NEXT_PUBLIC_API_URL = https://${{ url-shortener.RAILWAY_PUBLIC_DOMAIN }}
+    NEXT_PUBLIC_API_URL = https://${{ load-balancer.RAILWAY_PUBLIC_DOMAIN }}
 
 Accept the Railway GitHub app for the repo if prompted (Settings -> Deploy -> GitHub).
 

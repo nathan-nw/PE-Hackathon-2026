@@ -12,23 +12,40 @@ The Docker Compose stack is for **local** development. On [Railway](https://rail
    $env:RAILWAY_API_TOKEN = "your-account-token"
    node setup-railway.js
    ```
-   This sets **`feature-hosting`** as the deploy branch and **Root Directory** for `url-shortener`, `user-frontend`, `dashboard`, and `dashboard-backend`. Override with `RAILWAY_BRANCH` / `RAILWAY_REPO` if needed. Use `DRY_RUN=1` to print actions only.
+   This sets **`feature-hosting`** as the deploy branch and **Root Directory** for **`url-shortener-a`**, **`url-shortener-b`**, **`load-balancer`**, `user-frontend`, `dashboard`, and `dashboard-backend` (same NGINX + two-replica layout as `docker-compose.yml`). Override with `RAILWAY_BRANCH` / `RAILWAY_REPO` if needed. Use `DRY_RUN=1` to print actions only.
 5. **Internal DB / Redis references (optional):** with the same token, run:
    ```powershell
    $env:RAILWAY_API_TOKEN = "your-account-token"
    $env:SYNC_VARIABLES = "1"
    node setup-railway.js
    ```
-   This upserts [variable references](https://docs.railway.com/reference/variables) so **`url-shortener`** gets `DATABASE_URL` from the Postgres plugin’s **`DATABASE_PRIVATE_URL`** (service name is **auto-detected** if it is not exactly `Postgres`; override with **`RAILWAY_POSTGRES_SERVICE_NAME`**), **`RATE_LIMIT_STORAGE`** from Redis’s **`REDIS_URL`**, **`dashboard-backend`** gets **`DASHBOARD_DATABASE_URL`** plus **`DASHBOARD_DB_NAME=dashboard_db`**, and **`dashboard`** gets **`DASHBOARD_BACKEND_URL=https://${{ dashboard-backend.RAILWAY_PUBLIC_DOMAIN }}`**. If your Postgres plugin does not expose `DATABASE_PRIVATE_URL`, set **`SYNC_VARIABLES_USE_PUBLIC_DATABASE_URL=1`** to use **`DATABASE_URL`** instead. Variable updates default to **`skipDeploys`**; set **`SKIP_DEPLOY_ON_VARIABLE_SYNC=0`** to trigger a deploy for each change.
-6. In the [Railway dashboard](https://railway.com/project/6b429b2a-8ef5-404a-aa8d-7c5091500077), confirm **Root Directory** per service if anything still looks wrong (`url-shortener`, `user-frontend`, `dashboard`, `dashboard/backend`).
-7. Wire **variables** manually if you did not run step 5: from **Postgres** and **Redis**, use **Variable References** into `url-shortener` (e.g. `DATABASE_URL` → private URL, `RATE_LIMIT_STORAGE` → Redis).
+   This upserts [variable references](https://docs.railway.com/reference/variables) aligned with **`docker-compose.yml`** (see **Parity with Docker Compose** below). Highlights: **`url-shortener-a`** / **`url-shortener-b`** share `DATABASE_URL`, use `INSTANCE_ID` **1** and **2**, `KAFKA_LOG_TOPIC`, optional **`KAFKA_BOOTSTRAP_SERVERS`**, **`RATE_LIMIT_STORAGE`** from Redis or **`memory://`**. **`load-balancer`** gets **`URL_SHORTENER_A_HOST`** / **`URL_SHORTENER_B_HOST`** from each replica’s **`RAILWAY_PRIVATE_DOMAIN`** and **`URL_SHORTENER_PORT`** (default **5000**, matching the API Dockerfile). **`dashboard-backend`**, **`dashboard`**, **`user-frontend`** as in the parity table; **`user-frontend`** `NEXT_PUBLIC_API_URL` points at the **load-balancer** public URL. If your Postgres plugin does not expose `DATABASE_PRIVATE_URL`, set **`SYNC_VARIABLES_USE_PUBLIC_DATABASE_URL=1`** to use **`DATABASE_URL`** instead. Variable updates default to **`skipDeploys`**; set **`SKIP_DEPLOY_ON_VARIABLE_SYNC=0`** to trigger a deploy for each change.
+6. In the [Railway dashboard](https://railway.com/project/6b429b2a-8ef5-404a-aa8d-7c5091500077), confirm **Root Directory** per service if anything still looks wrong (`url-shortener-a`, `url-shortener-b`, `load-balancer`, `user-frontend`, `dashboard`, `dashboard/backend`).
+7. Wire **variables** manually if you did not run step 5: from **Postgres** and **Redis**, use **Variable References** into **`url-shortener-a`** and **`url-shortener-b`** (e.g. `DATABASE_URL`, `RATE_LIMIT_STORAGE`), and set **load-balancer** upstream hosts to each API service’s private hostname if needed.
 8. Accept the **Railway GitHub app** for `nathan-nw/PE-Hackathon-2026` if prompted so webhooks can trigger deploys.
 
 `railway.toml` files under each app folder define Docker builds, health checks, and **watch paths** so changes in one folder do not rebuild unrelated services.
 
+## Parity with Docker Compose
+
+| Compose service / env | Railway / `SYNC_VARIABLES=1` |
+|----------------------|------------------------------|
+| `db` → `hackathon_db` | Postgres plugin → `DATABASE_URL` on **url-shortener-a** and **url-shortener-b** |
+| `dashboard-db` → `dashboard_db` | Same Postgres + `CREATE DATABASE dashboard_db` **or** a second Postgres plugin + `RAILWAY_DASHBOARD_POSTGRES_SERVICE_NAME` |
+| Redis (not in default Compose) | Optional Redis plugin → `RATE_LIMIT_STORAGE`; if missing, `memory://` (matches local API default) |
+| `kafka:9092` | Optional Kafka/Redpanda plugin → `KAFKA_BOOTSTRAP_SERVERS` (override variable name with `RAILWAY_KAFKA_BOOTSTRAP_VAR` if not `KAFKA_URL`) |
+| `url-shortener-a` / `url-shortener-b` | Two Railway services from **`url-shortener/`** with `INSTANCE_ID=1` and `2` |
+| `load-balancer` | **load-balancer** service → NGINX upstreams to both replicas (private DNS + port **5000**); browsers/API clients use the **load-balancer** public URL (CORS at the edge, same as local NGINX) |
+| `prometheus` / `alertmanager` | Not provisioned; set Next.js **`NEXT_PUBLIC_*`** build args if you add metric UIs elsewhere |
+| `kafka-log-consumer`, `db-backup`, Zookeeper | Not provisioned by the script |
+
 ## What is not mirrored on Railway
 
-Kafka, Zookeeper, the NGINX load balancer, Prometheus, Alertmanager, and `db-backup` are **not** provisioned by the script. The API and dashboard-backend run **without** Kafka unless you add a broker and set `KAFKA_*`. Use Railway’s **horizontal scaling** instead of duplicate API containers behind custom NGINX.
+Kafka, Zookeeper, Prometheus, Alertmanager, and `db-backup` are **not** provisioned by the script. The API replicas and dashboard-backend run **without** Kafka unless you add a broker; `setup-railway.js` wires **`KAFKA_*`** when it detects a Kafka-like service. **`kafka-log-consumer`** is Compose-only unless you add a separate deploy.
+
+## Migrating from a single `url-shortener` service
+
+Older setups used one API service. This repo now expects **`url-shortener-a`**, **`url-shortener-b`**, and **`load-balancer`**. Add the new Git-linked services (or run `.\scripts\railway-provision.ps1` on a fresh project), then **`node setup-railway.js`**. Remove or disable the old **`url-shortener`** service to avoid duplicate deploys and confusion.
 
 ## dashboard_db
 

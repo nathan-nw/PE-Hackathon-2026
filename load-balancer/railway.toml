@@ -1,0 +1,11 @@
+# Root Directory: load-balancer — NGINX balances two url-shortener replicas (private Railway networking).
+# Pair with services url-shortener-a and url-shortener-b (same image). SYNC_VARIABLES=1 sets URL_SHORTENER_*_HOST.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+watchPatterns = ["/load-balancer/**"]
+
+[deploy]
+healthcheckPath = "/live"
+healthcheckTimeout = 30

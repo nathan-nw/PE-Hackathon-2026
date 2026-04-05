@@ -119,7 +119,7 @@ On **Docker Desktop for Windows** (and some **moby** builds), engine-level auto-
 
 | Path | Responsibility |
 |------|----------------|
-| `load-balancer/` | `nginx.conf` (HTTP), `Dockerfile` / `Dockerfile.tls` + `nginx.tls.conf` (HTTPS + HSTS) |
+| `load-balancer/` | `nginx.conf.template` + `docker-entrypoint.sh` (HTTP), `Dockerfile` / `Dockerfile.tls` + `nginx.tls.conf` (HTTPS + HSTS) |
 | `prometheus/` | `prometheus.yml`, `rules/slo.yml` (Alertmanager rules) |
 | `alertmanager/` | `alertmanager.yml` |
 | `docker-compose.yml` | Compose stack (API replicas, LB, Prometheus, Alertmanager, `db-backup`) |

@@ -3,7 +3,8 @@
  * Configure Railway services for this monorepo via the public GraphQL API:
  * https://docs.railway.com/integrations/api
  *
- * - Ensures Git-linked app services exist (same repo, different root directories).
+ * - Ensures Git-linked app services exist (same repo, different root directories):
+ *   url-shortener-a, url-shortener-b, load-balancer, user-frontend, dashboard, dashboard-backend.
  * - Sets the deploy branch (default: feature-hosting) on each service's deployment trigger.
  * - Sets rootDirectory on each service instance for the environment in .railway/config.json.
  *
@@ -26,6 +27,9 @@
  *   SKIP_DEPLOY_ON_VARIABLE_SYNC=1  — pass skipDeploys to variableCollectionUpsert (default: true)
  *   RAILWAY_POSTGRES_SERVICE_NAME=Postgres  — plugin service name (default: Postgres)
  *   RAILWAY_REDIS_SERVICE_NAME=Redis  — plugin service name (default: Redis)
+ *   RAILWAY_DASHBOARD_POSTGRES_SERVICE_NAME=…  — optional second Postgres plugin for dashboard_db only (mirrors compose service dashboard-db)
+ *   RAILWAY_KAFKA_SERVICE_NAME=Kafka  — optional Kafka/Redpanda plugin; sets KAFKA_BOOTSTRAP_SERVERS on API + dashboard-backend
+ *   RAILWAY_KAFKA_BOOTSTRAP_VAR=KAFKA_URL  — variable name on the Kafka service for the broker URL (template differs by provider)
  */
 
 const fs = require("fs");
@@ -60,7 +64,10 @@ const DEFAULT_BRANCH = "feature-hosting";
 
 /** @type {{ name: string, rootDirectory: string }[]} */
 const APP_SERVICES = [
-  { name: "url-shortener", rootDirectory: "url-shortener" },
+  // Same topology as docker-compose.yml: two API replicas + NGINX (least_conn, CORS, rate limit).
+  { name: "url-shortener-a", rootDirectory: "url-shortener" },
+  { name: "url-shortener-b", rootDirectory: "url-shortener" },
+  { name: "load-balancer", rootDirectory: "load-balancer" },
   { name: "user-frontend", rootDirectory: "user-frontend" },
   { name: "dashboard", rootDirectory: "dashboard" },
   { name: "dashboard-backend", rootDirectory: "dashboard/backend" },
@@ -266,13 +273,51 @@ function findRedisServiceName(byName) {
   return null;
 }
 
+/** Optional Kafka / Redpanda plugin — mirrors compose KAFKA_BOOTSTRAP_SERVERS. */
+function findKafkaServiceName(byName) {
+  const explicit = (process.env.RAILWAY_KAFKA_SERVICE_NAME || "").trim();
+  if (explicit && byName.has(explicit)) return explicit;
+  for (const c of ["Kafka", "kafka", "Redpanda", "redpanda"]) {
+    if (byName.has(c)) return c;
+  }
+  for (const name of byName.keys()) {
+    if (/kafka/i.test(name) || /redpanda/i.test(name)) return name;
+  }
+  return null;
+}
+
 /**
- * Sets DATABASE_URL / Redis / cross-service URLs using private Postgres URL where available.
- * See https://docs.railway.com/reference/variables (DATABASE_PRIVATE_URL on Postgres plugin).
+ * Optional second Postgres plugin for dashboard_db only (compose: service `dashboard-db` vs `db`).
+ * If unset, dashboard-backend uses the same Postgres as url-shortener with DASHBOARD_DB_NAME=dashboard_db.
+ */
+function findDashboardPostgresServiceName(byName, primaryPostgres) {
+  const explicit = (process.env.RAILWAY_DASHBOARD_POSTGRES_SERVICE_NAME || "").trim();
+  if (explicit && byName.has(explicit)) return explicit;
+  for (const name of byName.keys()) {
+    if (name === primaryPostgres) continue;
+    if (/dashboard/i.test(name) && /postgres/i.test(name)) return name;
+  }
+  const others = [...byName.keys()].filter(
+    (n) => /postgres/i.test(n) && n !== primaryPostgres
+  );
+  if (others.length === 1) return others[0];
+  return null;
+}
+
+/** Broker URL reference; variable name depends on the Kafka provider template on Railway. */
+function kafkaBootstrapRef(kafkaServiceName) {
+  const varName = (process.env.RAILWAY_KAFKA_BOOTSTRAP_VAR || "KAFKA_URL").trim() || "KAFKA_URL";
+  return varRef(kafkaServiceName, varName);
+}
+
+/**
+ * Aligns Railway env vars with docker-compose.yml service wiring (same keys / defaults where possible).
+ * See RAILWAY.md → "Parity with Docker Compose".
  */
 async function syncInternalDatabaseVariables(projectId, environmentId, byName, dry) {
   const postgresService = findPostgresServiceName(byName);
   const redisService = findRedisServiceName(byName);
+  const kafkaService = findKafkaServiceName(byName);
   const usePublicDbUrl =
     process.env.SYNC_VARIABLES_USE_PUBLIC_DATABASE_URL === "1" ||
     process.env.SYNC_VARIABLES_USE_PUBLIC_DATABASE_URL === "true";
@@ -284,7 +329,18 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
     );
     return;
   }
-  console.log(`(Variable sync) Using Postgres service name: "${postgresService}"`);
+  console.log(`(Variable sync) Primary Postgres service: "${postgresService}"`);
+
+  const dashboardPg = findDashboardPostgresServiceName(byName, postgresService);
+  if (dashboardPg) {
+    console.log(
+      `(Variable sync) Dashboard Postgres (dashboard_db): separate plugin "${dashboardPg}" (compose: dashboard-db)`
+    );
+  } else {
+    console.log(
+      `(Variable sync) Dashboard DB: same Postgres as API + DASHBOARD_DB_NAME=dashboard_db (compose: second database on shared db)`
+    );
+  }
 
   const skipDeployOnVarSync =
     process.env.SKIP_DEPLOY_ON_VARIABLE_SYNC !== "0" &&
@@ -314,37 +370,82 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
 
   const pg = postgresService;
   const redis = redisService;
+  const kafka = kafkaService;
+  const pgDashboard = dashboardPg || pg;
 
-  await upsert("url-shortener", {
+  // url-shortener-a / url-shortener-b: same env as compose replicas (shared DB; distinct INSTANCE_ID).
+  const urlShortenerBase = {
     DATABASE_URL: varRef(pg, dbUrlKey),
+    FLASK_DEBUG: "false",
+    KAFKA_LOG_TOPIC: "app-logs",
     ...(redis
       ? { RATE_LIMIT_STORAGE: varRef(redis, "REDIS_URL") }
-      : {}),
-  });
+      : { RATE_LIMIT_STORAGE: "memory://" }),
+    ...(kafka ? { KAFKA_BOOTSTRAP_SERVERS: kafkaBootstrapRef(kafka) } : {}),
+  };
+  await upsert("url-shortener-a", { ...urlShortenerBase, INSTANCE_ID: "1" });
+  await upsert("url-shortener-b", { ...urlShortenerBase, INSTANCE_ID: "2" });
 
   if (!redis) {
     console.warn(
-      `(Variable sync) No Redis-like service found — set RAILWAY_REDIS_SERVICE_NAME or add Redis. url-shortener RATE_LIMIT_STORAGE not set.`
+      `(Variable sync) No Redis plugin — replicas use RATE_LIMIT_STORAGE=memory:// (same default as local url-shortener/.env.example; compose has no Redis).`
     );
   } else {
-    console.log(`(Variable sync) Using Redis service name: "${redis}"`);
+    console.log(`(Variable sync) Redis service: "${redis}"`);
   }
 
-  await upsert("dashboard-backend", {
-    DASHBOARD_DATABASE_URL: varRef(pg, dbUrlKey),
+  if (!kafka) {
+    console.warn(
+      `(Variable sync) No Kafka-like service — KAFKA_BOOTSTRAP_SERVERS not set (compose uses kafka:9092; add a broker + RAILWAY_KAFKA_SERVICE_NAME if you want log shipping).`
+    );
+  } else {
+    console.log(
+      `(Variable sync) Kafka service: "${kafka}" (bootstrap var: ${process.env.RAILWAY_KAFKA_BOOTSTRAP_VAR || "KAFKA_URL"})`
+    );
+  }
+
+  // NGINX load balancer: private hostnames for upstream (see load-balancer/docker-entrypoint.sh).
+  if (
+    byName.has("load-balancer") &&
+    byName.has("url-shortener-a") &&
+    byName.has("url-shortener-b")
+  ) {
+    await upsert("load-balancer", {
+      URL_SHORTENER_A_HOST: varRef("url-shortener-a", "RAILWAY_PRIVATE_DOMAIN"),
+      URL_SHORTENER_B_HOST: varRef("url-shortener-b", "RAILWAY_PRIVATE_DOMAIN"),
+      URL_SHORTENER_PORT: "5000",
+    });
+  } else if (byName.has("load-balancer")) {
+    console.warn(
+      `(Variable sync) load-balancer present but url-shortener-a / url-shortener-b missing — set URL_SHORTENER_*_HOST manually or run provisioning.`
+    );
+  }
+
+  // dashboard-backend: mirrors compose dashboard-backend + dashboard-db
+  const dashboardBackendVars = {
+    DASHBOARD_DATABASE_URL: varRef(pgDashboard, dbUrlKey),
     DASHBOARD_DB_NAME: "dashboard_db",
-  });
+    KAFKA_LOG_TOPIC: "app-logs",
+    CACHE_MAX_ENTRIES: "1000",
+    DB_FLUSH_INTERVAL: "30",
+    ...(kafka ? { KAFKA_BOOTSTRAP_SERVERS: kafkaBootstrapRef(kafka) } : {}),
+  };
+  await upsert("dashboard-backend", dashboardBackendVars);
 
   if (byName.has("dashboard")) {
     await upsert("dashboard", {
-      DASHBOARD_BACKEND_URL:
-        "https://" + varRef("dashboard-backend", "RAILWAY_PUBLIC_DOMAIN"),
+      DASHBOARD_BACKEND_URL: "https://" + varRef("dashboard-backend", "RAILWAY_PUBLIC_DOMAIN"),
+      VISIBILITY_K8S_ENABLED: "false",
+      VISIBILITY_COMPOSE_PROJECT: "pe-hackathon-2026",
     });
   }
 
   if (byName.has("user-frontend")) {
+    const apiPublic = byName.has("load-balancer")
+      ? "https://" + varRef("load-balancer", "RAILWAY_PUBLIC_DOMAIN")
+      : "https://" + varRef("url-shortener-a", "RAILWAY_PUBLIC_DOMAIN");
     await upsert("user-frontend", {
-      NEXT_PUBLIC_API_URL: "https://" + varRef("url-shortener", "RAILWAY_PUBLIC_DOMAIN"),
+      NEXT_PUBLIC_API_URL: apiPublic,
     });
   }
 }
@@ -548,7 +649,9 @@ async function main() {
   const syncVariables =
     process.env.SYNC_VARIABLES === "1" || process.env.SYNC_VARIABLES === "true";
   if (syncVariables) {
-    console.log("\n--- Variable references (internal DB URL, Redis, service URLs) ---");
+    console.log(
+      "\n--- Variable sync (Docker Compose parity: Postgres, Redis, Kafka, app env) ---"
+    );
     byName = await fetchServicesMap(projectId);
     await syncInternalDatabaseVariables(projectId, environmentId, byName, dry);
     if (!dry) {

@@ -1,4 +1,5 @@
-# Reverse proxy for url-shortener replicas. Tuned for API + HTML behind Docker Compose.
+# Reverse proxy for url-shortener replicas. Tuned for API + HTML behind Docker Compose or Railway.
+# Placeholders @UPSTREAM_A@, @UPSTREAM_B@, @NGINX_LISTEN_PORT@ are substituted at container start (docker-entrypoint.sh).
 # See ../ARCHITECTURE.md for how this fits the stack.
 
 worker_processes auto;
@@ -56,12 +57,12 @@ http {
         keepalive 64;
         keepalive_requests 1000;
         keepalive_timeout 60s;
-        server url-shortener-a:5000 max_fails=3 fail_timeout=30s;
-        server url-shortener-b:5000 max_fails=3 fail_timeout=30s;
+        server @UPSTREAM_A@ max_fails=3 fail_timeout=30s;
+        server @UPSTREAM_B@ max_fails=3 fail_timeout=30s;
     }
 
     server {
-        listen 80;
+        listen @NGINX_LISTEN_PORT@;
         server_name _;
 
         # Security headers at the edge (defense in depth; app may repeat).
