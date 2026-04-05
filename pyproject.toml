@@ -1,15 +1,9 @@
 [project]
-name = "mlh-pe-hackathon"
-version = "0.1.0"
+name = "pe-hackathon-repo"
+version = "0.0.0"
 requires-python = ">=3.13"
 dependencies = [
-    "faker>=33.0",
-    "flask>=3.1",
-    "flask-limiter>=3.5",
-    "gunicorn>=22.0",
-    "peewee>=3.17",
-    "psycopg2-binary>=2.9",
-    "python-dotenv>=1.0",
+    "mlh-pe-hackathon",
 ]
 
 [dependency-groups]
@@ -19,14 +13,13 @@ dev = [
     "ruff>=0.9",
 ]
 
-[tool.ruff]
-target-version = "py313"
-line-length = 120
-
-[tool.ruff.lint]
-select = ["E", "F", "I", "W", "UP", "B", "SIM"]
+[tool.uv.sources]
+mlh-pe-hackathon = { path = "url-shortener", editable = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = ["url-shortener", "dashboard/backend"]
 addopts = "-v --cov=app --cov-report=term-missing"
+markers = [
+    "integration: HTTP tests against real URLs (set TEST_LOAD_BALANCER_URL / TEST_NGINX_STUB_STATUS_URL)",
+]
