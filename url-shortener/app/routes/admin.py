@@ -1,12 +1,18 @@
 """Admin API endpoints for IP ban management and dynamic rate limit configuration."""
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, render_template, request
 
 from app.dynamic_rate_limit import get_status as get_rl_status
 from app.dynamic_rate_limit import set_config as set_rl_config
-from app.ip_ban import get_all_banned_ips, get_ip_status, unban_ip
+from app.ip_ban import get_all_banned_ips, get_ip_status, is_enabled, set_enabled, unban_ip
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
+
+
+@admin_bp.route("/")
+def admin_ui():
+    """Serve the admin control panel."""
+    return render_template("admin.html")
 
 
 # ── IP Ban Management ───────────────────────────────────────────────────────
@@ -34,6 +40,22 @@ def admin_unban(ip):
     if success:
         return jsonify({"message": f"IP {ip} has been unbanned", "ip": ip})
     return jsonify({"error": "Failed to unban IP — Redis may be unavailable"}), 500
+
+
+@admin_bp.route("/bans/toggle", methods=["POST"])
+def toggle_ban_system():
+    """Enable or disable the IP ban system. Body: {"enabled": bool}"""
+    data = request.get_json()
+    if not data or "enabled" not in data:
+        return jsonify({"error": "Field 'enabled' is required"}), 400
+    set_enabled(bool(data["enabled"]))
+    return jsonify({"enabled": is_enabled()})
+
+
+@admin_bp.route("/bans/toggle", methods=["GET"])
+def ban_system_status():
+    """Check if the IP ban system is enabled."""
+    return jsonify({"enabled": is_enabled()})
 
 
 # ── Dynamic Rate Limit ──────────────────────────────────────────────────────

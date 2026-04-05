@@ -25,6 +25,18 @@ _PREFIX_PERMANENT = "ip_ban:permanent:"
 HOUR_BAN_DURATION = 3600  # 1 hour in seconds
 MAX_HOUR_BANS = 3  # after 3 hour-bans, permanent ban
 
+# Global toggle — when False, is_banned() always returns False and record_violation() is a no-op.
+_enabled = True
+
+
+def is_enabled() -> bool:
+    return _enabled
+
+
+def set_enabled(enabled: bool):
+    global _enabled
+    _enabled = enabled
+
 
 def _get_redis():
     """Get the shared Redis client from the cache module."""
@@ -122,6 +134,9 @@ def record_violation(ip: str) -> dict:
       - hour_bans: int
       - ban_remaining_s: int|None
     """
+    if not _enabled:
+        return {"action": "none", "strikes": 0, "hour_bans": 0, "ban_remaining_s": None}
+
     r = _get_redis()
     if r is None:
         return {"action": "none", "strikes": 0, "hour_bans": 0, "ban_remaining_s": None}
@@ -188,6 +203,8 @@ def is_banned(ip: str) -> tuple[bool, dict]:
 
     Returns (is_banned, info_dict).
     """
+    if not _enabled:
+        return False, {"banned": False, "permanent": False, "strikes": 0, "hour_bans": 0}
     status = get_ip_status(ip)
     return status["banned"], status
 
