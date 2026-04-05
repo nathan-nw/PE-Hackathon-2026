@@ -16,7 +16,13 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from cache import LogCache
-from db import count_kafka_logs, fetch_logs_from_db, get_connection, init_db
+from db import (
+    count_kafka_logs,
+    fetch_logs_from_db,
+    get_connection,
+    init_db,
+    introspect_postgres_server,
+)
 from kafka_consumer import run_consumer
 
 logging.basicConfig(
@@ -137,6 +143,12 @@ def health():
     if n is not None:
         out["persisted_kafka_logs"] = n
     return out
+
+
+@app.get("/api/introspect/postgres")
+def introspect_postgres():
+    """List databases and public tables on the same server as ``DASHBOARD_DATABASE_URL`` (Ops UI)."""
+    return introspect_postgres_server()
 
 
 @app.post("/api/ingest")

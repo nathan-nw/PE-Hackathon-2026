@@ -77,6 +77,99 @@ def _db_config() -> dict[str, Any]:
         cfg["sslmode"] = sslmode
     return cfg
 
+
+def _connection_kwargs_explicit_db(dbname: str) -> dict[str, Any]:
+    """Same host/user/password as the dashboard app, but connect to ``dbname`` (ignores ``DASHBOARD_DB_NAME``)."""
+    url = (
+        os.environ.get("DASHBOARD_DATABASE_URL", "").strip()
+        or os.environ.get("DATABASE_URL", "").strip()
+    )
+    if url:
+        if url.startswith("postgres://"):
+            url = "postgresql://" + url[len("postgres://") :]
+        parsed = urlparse(url)
+        q = parse_qs(parsed.query)
+        sslmode = (q.get("sslmode") or [None])[0]
+        if not sslmode:
+            sslmode = os.environ.get("PGSSLMODE", "").strip() or None
+        if not sslmode:
+            sslmode = _default_sslmode_for_postgres_host(parsed.hostname)
+        cfg: dict[str, Any] = {
+            "dbname": dbname,
+            "user": unquote(parsed.username or "postgres"),
+            "password": unquote(parsed.password or ""),
+            "host": parsed.hostname or "127.0.0.1",
+            "port": parsed.port or 5432,
+        }
+        if sslmode:
+            cfg["sslmode"] = sslmode
+        return cfg
+    host = os.environ.get("DASHBOARD_DB_HOST", "dashboard-db")
+    cfg = {
+        "dbname": dbname,
+        "user": os.environ.get("DASHBOARD_DB_USER", "postgres"),
+        "password": os.environ.get("DASHBOARD_DB_PASSWORD", "postgres"),
+        "host": host,
+        "port": int(os.environ.get("DASHBOARD_DB_PORT", "5432")),
+    }
+    sslmode = os.environ.get("PGSSLMODE", "").strip() or _default_sslmode_for_postgres_host(host)
+    if sslmode:
+        cfg["sslmode"] = sslmode
+    return cfg
+
+
+def get_connection_for_database(dbname: str):
+    """Open a connection to a named database on the same server as the dashboard tables."""
+    return psycopg2.connect(**_connection_kwargs_explicit_db(dbname))
+
+
+def introspect_postgres_server() -> dict[str, Any]:
+    """List non-template databases and public tables per DB (for Ops UI)."""
+    result: dict[str, Any] = {
+        "databases": [],
+        "tables_by_database": {},
+        "dashboard_db_present": False,
+        "errors": [],
+    }
+    try:
+        conn = get_connection_for_database("postgres")
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname"
+                )
+                dbs = [r[0] for r in cur.fetchall()]
+        conn.close()
+        result["databases"] = dbs
+        result["dashboard_db_present"] = "dashboard_db" in dbs
+    except Exception as exc:
+        logger.warning("introspect list databases: %s", exc)
+        result["errors"].append({"scope": "list_databases", "message": str(exc)})
+        return result
+
+    for db in dbs:
+        try:
+            c2 = get_connection_for_database(db)
+            with c2:
+                with c2.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT tablename FROM pg_tables
+                        WHERE schemaname = 'public'
+                        ORDER BY tablename
+                        """
+                    )
+                    tables = [r[0] for r in cur.fetchall()]
+            c2.close()
+            result["tables_by_database"][db] = tables
+        except Exception as exc:
+            logger.warning("introspect tables for %s: %s", db, exc)
+            result["errors"].append({"scope": f"tables:{db}", "message": str(exc)})
+            result["tables_by_database"][db] = []
+
+    return result
+
+
 CREATE_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS kafka_logs (
     id BIGSERIAL PRIMARY KEY,
