@@ -73,15 +73,13 @@ jobs:
 
   test:
     # --------------------------------------------------------------------------
-    # Test job: runs the pytest test suite.
+    # Test job: runs the full pytest suite (url-shortener + dashboard backend).
     # Uses a PostgreSQL service container so tests can hit a real database.
+    # Enforces 70% minimum coverage (Gold tier requirement).
     # --------------------------------------------------------------------------
     name: Test
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: url-shortener
 
     # --------------------------------------------------------------------------
     # PostgreSQL service container — spins up a real DB for integration tests.
@@ -124,6 +122,7 @@ jobs:
       DATABASE_PASSWORD: postgres
       REDIS_HOST: localhost
       REDIS_PORT: 6379
+      TESTING: "1"
 
     steps:
       - name: Checkout code
@@ -140,6 +139,6 @@ jobs:
       - name: Install dependencies
         run: uv sync --group dev
 
-      # Run pytest with verbose output so failures are easy to diagnose in logs
-      - name: Run tests
-        run: uv run pytest -v
+      # Run pytest with coverage enforcement — deployment fails if coverage < 70%
+      - name: Run tests with coverage
+        run: uv run pytest -v --cov-fail-under=70

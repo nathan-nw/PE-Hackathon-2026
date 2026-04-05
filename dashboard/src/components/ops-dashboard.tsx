@@ -24,6 +24,8 @@ import {
   labelForInstanceId,
 } from "@/lib/compose-instance";
 import { ErrorMonitor } from "@/components/error-monitor";
+import { GoldenSignals } from "@/components/golden-signals";
+import { IncidentTimeline } from "@/components/incident-timeline";
 import { LoadTest } from "@/components/load-test";
 import { cn } from "@/lib/utils";
 import {
@@ -482,6 +484,7 @@ export function OpsDashboard() {
           <TabsTrigger value="errors">Errors</TabsTrigger>
           <TabsTrigger value="loadtest">Load Test</TabsTrigger>
           <TabsTrigger value="telemetry">Telemetry</TabsTrigger>
+          <TabsTrigger value="incidents">Incidents</TabsTrigger>
         </TabsList>
 
         <TabsContent value="containers" className="space-y-2">
@@ -1202,8 +1205,9 @@ export function OpsDashboard() {
           <LoadTest />
         </TabsContent>
 
-        <TabsContent value="telemetry">
-          <div className="grid gap-4 sm:grid-cols-2">
+        <TabsContent value="telemetry" keepMounted>
+          <GoldenSignals />
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <Card>
               <CardHeader>
                 <CardTitle>Prometheus</CardTitle>
@@ -1249,6 +1253,10 @@ export function OpsDashboard() {
               </CardContent>
             </Card>
           </div>
+        </TabsContent>
+
+        <TabsContent value="incidents" keepMounted>
+          <IncidentTimeline />
         </TabsContent>
       </Tabs>
     </div>
