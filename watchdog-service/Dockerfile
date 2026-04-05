@@ -3,6 +3,8 @@
 FROM node:20-alpine AS build
 WORKDIR /build
 COPY dashboard/src/lib/watchdog-core ./dashboard/src/lib/watchdog-core
+# watchdog-discord.ts imports ../happy-branding (esbuild resolves from watchdog-core/)
+COPY dashboard/src/lib/happy-branding.ts ./dashboard/src/lib/happy-branding.ts
 COPY watchdog-service/package.json ./watchdog-service/
 WORKDIR /build/watchdog-service
 RUN npm install
