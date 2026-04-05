@@ -35,7 +35,7 @@ The Docker Compose stack is for **local** development. On [Railway](https://rail
 | Redis (not in default Compose) | Optional Redis plugin → `RATE_LIMIT_STORAGE`; if missing, `memory://` (matches local API default) |
 | `kafka:9092` | Optional Kafka/Redpanda plugin → `KAFKA_BOOTSTRAP_SERVERS` (override variable name with `RAILWAY_KAFKA_BOOTSTRAP_VAR` if not `KAFKA_URL`) |
 | `url-shortener-a` / `url-shortener-b` | Two Railway services from **`url-shortener/`** with `INSTANCE_ID=1` and `2` |
-| `load-balancer` | **load-balancer** service → NGINX upstreams to both replicas (private DNS + port **5000**); browsers/API clients use the **load-balancer** public URL (CORS at the edge, same as local NGINX) |
+| `load-balancer` | **load-balancer** service → NGINX upstreams to both replicas. **Railway:** set `URL_SHORTENER_A_HOST` / `URL_SHORTENER_B_HOST` (from `SYNC_VARIABLES=1`) — Compose hostnames like `url-shortener-a` **do not** exist on Railway. The container waits for `http://<upstream>/live` before starting nginx. |
 | `prometheus` / `alertmanager` | Not provisioned; set Next.js **`NEXT_PUBLIC_*`** build args if you add metric UIs elsewhere |
 | `kafka-log-consumer`, `db-backup`, Zookeeper | Not provisioned by the script |
 

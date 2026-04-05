@@ -8,4 +8,5 @@ watchPatterns = ["/load-balancer/**"]
 
 [deploy]
 healthcheckPath = "/live"
-healthcheckTimeout = 30
+# Entrypoint waits for both API replicas (/live) before nginx starts — allow headroom.
+healthcheckTimeout = 180
