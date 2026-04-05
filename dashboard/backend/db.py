@@ -12,19 +12,211 @@ import logging
 import os
 import time
 from typing import Any
+from urllib.parse import parse_qs, unquote, urlparse
 
 import psycopg2
 from psycopg2.extras import execute_values
 
 logger = logging.getLogger(__name__)
 
-DB_CONFIG = {
-    "dbname": os.environ.get("DASHBOARD_DB_NAME", "dashboard_db"),
-    "user": os.environ.get("DASHBOARD_DB_USER", "postgres"),
-    "password": os.environ.get("DASHBOARD_DB_PASSWORD", "postgres"),
-    "host": os.environ.get("DASHBOARD_DB_HOST", "dashboard-db"),
-    "port": int(os.environ.get("DASHBOARD_DB_PORT", "5432")),
-}
+
+def _default_sslmode_for_postgres_host(hostname: str | None) -> str | None:
+    """Match url-shortener/app/database.py — Railway Postgres requires TLS for *.railway.internal / *.rlwy.net."""
+    if not hostname or os.environ.get("RAILWAY_DB_SSL_DISABLE", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        return None
+    h = hostname.lower()
+    if h.endswith(".railway.internal") or "rlwy.net" in h:
+        return "require"
+    return None
+
+
+def _db_config() -> dict[str, Any]:
+    """Build psycopg2 kwargs from DASHBOARD_DATABASE_URL / DATABASE_URL or DASHBOARD_DB_*."""
+    url = (
+        os.environ.get("DASHBOARD_DATABASE_URL", "").strip()
+        or os.environ.get("DATABASE_URL", "").strip()
+    )
+    if url:
+        if url.startswith("postgres://"):
+            url = "postgresql://" + url[len("postgres://") :]
+        parsed = urlparse(url)
+        q = parse_qs(parsed.query)
+        sslmode = (q.get("sslmode") or [None])[0]
+        if not sslmode:
+            sslmode = os.environ.get("PGSSLMODE", "").strip() or None
+        if not sslmode:
+            sslmode = _default_sslmode_for_postgres_host(parsed.hostname)
+        dbname = unquote((parsed.path or "").lstrip("/") or "postgres")
+        override_db = os.environ.get("DASHBOARD_DB_NAME", "").strip()
+        if override_db:
+            dbname = override_db
+        cfg: dict[str, Any] = {
+            "dbname": dbname,
+            "user": unquote(parsed.username or "postgres"),
+            "password": unquote(parsed.password or ""),
+            "host": parsed.hostname or "127.0.0.1",
+            "port": parsed.port or 5432,
+        }
+        if sslmode:
+            cfg["sslmode"] = sslmode
+        return cfg
+    host = os.environ.get("DASHBOARD_DB_HOST", "dashboard-db")
+    cfg = {
+        "dbname": os.environ.get("DASHBOARD_DB_NAME", "dashboard_db"),
+        "user": os.environ.get("DASHBOARD_DB_USER", "postgres"),
+        "password": os.environ.get("DASHBOARD_DB_PASSWORD", "postgres"),
+        "host": host,
+        "port": int(os.environ.get("DASHBOARD_DB_PORT", "5432")),
+    }
+    sslmode = os.environ.get("PGSSLMODE", "").strip() or _default_sslmode_for_postgres_host(host)
+    if sslmode:
+        cfg["sslmode"] = sslmode
+    return cfg
+
+
+def _kwargs_from_database_url(url: str, dbname: str) -> dict[str, Any]:
+    """Parse a postgres URL and build psycopg2 kwargs for database ``dbname``."""
+    u = url.strip()
+    if u.startswith("postgres://"):
+        u = "postgresql://" + u[len("postgres://") :]
+    parsed = urlparse(u)
+    q = parse_qs(parsed.query)
+    sslmode = (q.get("sslmode") or [None])[0]
+    if not sslmode:
+        sslmode = os.environ.get("PGSSLMODE", "").strip() or None
+    if not sslmode:
+        sslmode = _default_sslmode_for_postgres_host(parsed.hostname)
+    cfg: dict[str, Any] = {
+        "dbname": dbname,
+        "user": unquote(parsed.username or "postgres"),
+        "password": unquote(parsed.password or ""),
+        "host": parsed.hostname or "127.0.0.1",
+        "port": parsed.port or 5432,
+    }
+    if sslmode:
+        cfg["sslmode"] = sslmode
+    return cfg
+
+
+def _connection_kwargs_explicit_db(dbname: str) -> dict[str, Any]:
+    """Same host/user/password as the dashboard app, but connect to ``dbname`` (ignores ``DASHBOARD_DB_NAME``)."""
+    url = (
+        os.environ.get("DASHBOARD_DATABASE_URL", "").strip()
+        or os.environ.get("DATABASE_URL", "").strip()
+    )
+    if url:
+        return _kwargs_from_database_url(url, dbname)
+    host = os.environ.get("DASHBOARD_DB_HOST", "dashboard-db")
+    cfg = {
+        "dbname": dbname,
+        "user": os.environ.get("DASHBOARD_DB_USER", "postgres"),
+        "password": os.environ.get("DASHBOARD_DB_PASSWORD", "postgres"),
+        "host": host,
+        "port": int(os.environ.get("DASHBOARD_DB_PORT", "5432")),
+    }
+    sslmode = os.environ.get("PGSSLMODE", "").strip() or _default_sslmode_for_postgres_host(host)
+    if sslmode:
+        cfg["sslmode"] = sslmode
+    return cfg
+
+
+def _introspect_base_url_for_profile(profile: str) -> str | None:
+    """Return a connection URL for listing DBs, or None if not configured."""
+    p = (profile or "default").strip().lower()
+    if p in ("main", "app", "hackathon"):
+        return (
+            os.environ.get("INTROSPECT_DB_URL", "").strip()
+            or os.environ.get("HACKATHON_DATABASE_URL", "").strip()
+        ) or None
+    return (
+        os.environ.get("DASHBOARD_DATABASE_URL", "").strip()
+        or os.environ.get("DATABASE_URL", "").strip()
+    ) or None
+
+
+def get_connection_for_database(dbname: str, *, base_url: str | None = None):
+    """Open a connection to ``dbname``. If ``base_url`` is set, use its host/credentials."""
+    if base_url:
+        return psycopg2.connect(**_kwargs_from_database_url(base_url, dbname))
+    return psycopg2.connect(**_connection_kwargs_explicit_db(dbname))
+
+
+def introspect_postgres_server(profile: str = "default") -> dict[str, Any]:
+    """List non-template databases and public tables per DB (for Ops UI)."""
+    p = (profile or "default").strip().lower()
+    result: dict[str, Any] = {
+        "databases": [],
+        "tables_by_database": {},
+        "dashboard_db_present": False,
+        "errors": [],
+        "profile": p,
+        "introspect_configured": True,
+    }
+
+    base_url = _introspect_base_url_for_profile(p)
+    if p in ("main", "app", "hackathon") and not base_url:
+        result["introspect_configured"] = False
+        result["errors"].append(
+            {
+                "scope": "config",
+                "message": (
+                    "Set INTROSPECT_DB_URL or HACKATHON_DATABASE_URL on dashboard-backend "
+                    "(e.g. postgresql://postgres:postgres@db:5432/hackathon_db for Compose service db)."
+                ),
+            }
+        )
+        return result
+
+    def connect_admin():
+        if base_url:
+            return get_connection_for_database("postgres", base_url=base_url)
+        return get_connection_for_database("postgres")
+
+    try:
+        conn = connect_admin()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname"
+                )
+                dbs = [r[0] for r in cur.fetchall()]
+        conn.close()
+        result["databases"] = dbs
+        result["dashboard_db_present"] = "dashboard_db" in dbs
+    except Exception as exc:
+        logger.warning("introspect list databases: %s", exc)
+        result["errors"].append({"scope": "list_databases", "message": str(exc)})
+        return result
+
+    for db in dbs:
+        try:
+            if base_url:
+                c2 = get_connection_for_database(db, base_url=base_url)
+            else:
+                c2 = get_connection_for_database(db)
+            with c2:
+                with c2.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT tablename FROM pg_tables
+                        WHERE schemaname = 'public'
+                        ORDER BY tablename
+                        """
+                    )
+                    tables = [r[0] for r in cur.fetchall()]
+            c2.close()
+            result["tables_by_database"][db] = tables
+        except Exception as exc:
+            logger.warning("introspect tables for %s: %s", db, exc)
+            result["errors"].append({"scope": f"tables:{db}", "message": str(exc)})
+            result["tables_by_database"][db] = []
+
+    return result
+
 
 CREATE_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS kafka_logs (
@@ -68,12 +260,14 @@ CREATE INDEX IF NOT EXISTS idx_stats_snapshots_time ON instance_stats_snapshots 
 
 def get_connection():
     """Create a new database connection."""
-    return psycopg2.connect(**DB_CONFIG)
+    return psycopg2.connect(**_db_config())
 
 
 def init_db() -> bool:
     """Create tables if they don't exist. Returns True on success."""
-    for attempt in range(30):
+    max_attempts = int(os.environ.get("DASHBOARD_DB_INIT_ATTEMPTS", "20"))
+    sleep_s = float(os.environ.get("DASHBOARD_DB_INIT_SLEEP_SEC", "1"))
+    for attempt in range(max_attempts):
         try:
             conn = get_connection()
             with conn:
@@ -83,9 +277,14 @@ def init_db() -> bool:
             logger.info("Dashboard database initialized")
             return True
         except Exception as exc:
-            logger.warning("Waiting for dashboard DB (attempt %d/30): %s", attempt + 1, exc)
-            time.sleep(2)
-    logger.error("Could not connect to dashboard DB after 30 attempts")
+            logger.warning(
+                "Waiting for dashboard DB (attempt %d/%d): %s",
+                attempt + 1,
+                max_attempts,
+                exc,
+            )
+            time.sleep(sleep_s)
+    logger.error("Could not connect to dashboard DB after %d attempts", max_attempts)
     return False
 
 
@@ -264,3 +463,68 @@ def flush_stats(stats: dict[str, dict[str, Any]]) -> int:
     except Exception as exc:
         logger.error("Failed to flush stats to DB: %s", exc)
         return 0
+
+
+def count_kafka_logs() -> int | None:
+    """Return row count in kafka_logs, or None if the query fails."""
+    try:
+        conn = get_connection()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM kafka_logs")
+                row = cur.fetchone()
+        conn.close()
+        return int(row[0]) if row else 0
+    except Exception as exc:
+        logger.warning("count_kafka_logs: %s", exc)
+        return None
+
+
+def fetch_logs_from_db(
+    limit: int = 100,
+    level: str | None = None,
+    instance_id: str | None = None,
+    search: str | None = None,
+) -> list[dict[str, Any]]:
+    """Load recent rows from kafka_logs (newest first). Payload shape matches Kafka / HTTP ingest."""
+    if limit < 1:
+        return []
+    try:
+        conn = get_connection()
+        with conn:
+            with conn.cursor() as cur:
+                conditions: list[str] = []
+                params: list[Any] = []
+                if level:
+                    conditions.append("UPPER(TRIM(level)) = UPPER(TRIM(%s))")
+                    params.append(level)
+                if instance_id:
+                    conditions.append("instance_id = %s")
+                    params.append(instance_id)
+                if search and search.strip():
+                    q = f"%{search.strip()}%"
+                    conditions.append(
+                        "(message ILIKE %s OR logger ILIKE %s OR COALESCE(path, '') ILIKE %s)"
+                    )
+                    params.extend([q, q, q])
+                where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+                sql = f"""
+                    SELECT raw_json FROM kafka_logs
+                    {where}
+                    ORDER BY COALESCE(timestamp, ingested_at) DESC NULLS LAST
+                    LIMIT %s
+                """
+                params.append(limit)
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+        conn.close()
+        out: list[dict[str, Any]] = []
+        for (rj,) in rows:
+            if isinstance(rj, dict):
+                out.append(rj)
+            elif rj is not None:
+                out.append(json.loads(rj) if isinstance(rj, str) else rj)
+        return out
+    except Exception as exc:
+        logger.error("fetch_logs_from_db failed: %s", exc)
+        return []

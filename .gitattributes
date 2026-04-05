@@ -1,0 +1,2 @@
+# Linux containers require LF in shell scripts; CRLF breaks exec/shebang (No such file or directory).
+*.sh text eol=lf

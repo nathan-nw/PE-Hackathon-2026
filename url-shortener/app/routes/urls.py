@@ -18,6 +18,7 @@ from app.database import db
 from app.models.event import Event
 from app.models.url import Url
 from app.models.user import User
+from app.request_helpers import parse_json_body
 
 
 def _validate_url(url_string):
@@ -44,20 +45,11 @@ def generate_short_code(length=6):
 
 
 @urls_bp.route("/shorten", methods=["POST"])
+@urls_bp.route("/urls", methods=["POST"])
 def create_short_url():
-    data = request.get_json(silent=True)
-    if data is None:
-        return (
-            jsonify(
-                {
-                    "error": "Invalid or missing JSON body",
-                    "hint": "Send a JSON object with Content-Type: application/json",
-                }
-            ),
-            400,
-        )
-    if not isinstance(data, dict):
-        return jsonify({"error": "Request body must be a JSON object"}), 400
+    data, err = parse_json_body()
+    if err:
+        return err
     if "original_url" not in data or "user_id" not in data:
         return jsonify({"error": "original_url and user_id are required"}), 400
 
@@ -79,7 +71,10 @@ def create_short_url():
     except User.DoesNotExist:
         return jsonify({"error": "User not found"}), 404
 
-    short_code = data.get("short_code") or generate_short_code()
+    short_code = data.get("short_code")
+    if short_code is not None and not isinstance(short_code, str):
+        return jsonify({"error": "short_code must be a string"}), 400
+    short_code = short_code or generate_short_code()
 
     if Url.select().where(Url.short_code == short_code).exists():
         return jsonify({"error": "Short code already exists"}), 409
@@ -109,7 +104,7 @@ def create_short_url():
     cache_redirect(short_code, original_url, True)
     invalidate_url_lists()
 
-    return jsonify(model_to_dict(url, backrefs=False)), 201
+    return jsonify(model_to_dict(url, backrefs=False, recurse=False)), 201
 
 
 @urls_bp.route("/urls", methods=["GET"])
@@ -126,11 +121,20 @@ def list_urls():
         return resp
 
     query = Url.select().order_by(Url.created_at.desc())
+
+    user_id = request.args.get("user_id", type=int)
+    if user_id is not None:
+        query = query.where(Url.user_id == user_id)
+
+    is_active = request.args.get("is_active")
+    if is_active is not None:
+        query = query.where(Url.is_active == (is_active.lower() == "true"))
+
     total = query.count()
     urls = query.paginate(page, per_page)
 
     result = {
-        "data": [model_to_dict(u, backrefs=False) for u in urls],
+        "data": [model_to_dict(u, backrefs=False, recurse=False) for u in urls],
         "page": page,
         "per_page": per_page,
         "total": total,
@@ -150,7 +154,7 @@ def get_url(url_id):
     except Url.DoesNotExist:
         return jsonify({"error": "URL not found"}), 404
 
-    resp = jsonify(model_to_dict(url, backrefs=False))
+    resp = jsonify(model_to_dict(url, backrefs=False, recurse=False))
     resp.headers["Cache-Control"] = "public, max-age=60"
     return resp
 
@@ -162,24 +166,20 @@ def update_url(url_id):
     except Url.DoesNotExist:
         return jsonify({"error": "URL not found"}), 404
 
-    data = request.get_json(silent=True)
-    if data is None:
-        return (
-            jsonify(
-                {
-                    "error": "Invalid or missing JSON body",
-                    "hint": "Send a JSON object with Content-Type: application/json",
-                }
-            ),
-            400,
-        )
-    if not isinstance(data, dict) or len(data) == 0:
+    data, err = parse_json_body()
+    if err:
+        return err
+    if len(data) == 0:
         return jsonify({"error": "No data provided"}), 400
 
     if "original_url" in data:
         url_err = _validate_url(data["original_url"])
         if url_err:
             return jsonify({"error": url_err}), 400
+    if "title" in data and not isinstance(data["title"], str):
+        return jsonify({"error": "title must be a string"}), 400
+    if "is_active" in data and not isinstance(data["is_active"], bool):
+        return jsonify({"error": "is_active must be a boolean"}), 400
 
     now = datetime.now(UTC)
 
@@ -206,7 +206,7 @@ def update_url(url_id):
     invalidate_redirect(url.short_code)
     invalidate_url_lists()
 
-    return jsonify(model_to_dict(url, backrefs=False))
+    return jsonify(model_to_dict(url, backrefs=False, recurse=False))
 
 
 @urls_bp.route("/urls/<int:url_id>", methods=["DELETE"])
@@ -214,7 +214,7 @@ def delete_url(url_id):
     try:
         url = Url.get_by_id(url_id)
     except Url.DoesNotExist:
-        return jsonify({"error": "URL not found"}), 404
+        return jsonify({"error": "URL not found", "message": "URL not found or already deleted"}), 200
 
     now = datetime.now(UTC)
 
@@ -272,6 +272,12 @@ def redirect_to_url(short_code):
     if cached is not None:
         if not cached["active"]:
             return jsonify({"error": "This URL has been deactivated"}), 410
+        # Log click event — need the DB record for url_id/user_id
+        try:
+            url = Url.get(Url.short_code == short_code)
+            _log_click_event(url)
+        except Url.DoesNotExist:
+            pass
         resp = redirect(cached["url"], code=302)
         resp.headers["Cache-Control"] = "public, max-age=300"
         return resp
@@ -288,6 +294,21 @@ def redirect_to_url(short_code):
     if not url.is_active:
         return jsonify({"error": "This URL has been deactivated"}), 410
 
+    # Log click event for active URLs only
+    _log_click_event(url)
+
     resp = redirect(url.original_url, code=302)
     resp.headers["Cache-Control"] = "public, max-age=300"
     return resp
+
+
+def _log_click_event(url):
+    """Record a click event for an active redirect."""
+    now = datetime.now(UTC)
+    Event.create(
+        url_id=url.id,
+        user_id=url.user_id,
+        event_type="click",
+        timestamp=now,
+        details='{"source": "redirect"}',
+    )

@@ -10,13 +10,20 @@ import logging
 import os
 import threading
 from contextlib import asynccontextmanager
+from typing import Any
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from cache import LogCache
-from db import init_db
+from db import (
+    count_kafka_logs,
+    fetch_logs_from_db,
+    get_connection,
+    init_db,
+    introspect_postgres_server,
+)
 from discord_alerter import DiscordAlerter
 from k6_runner import K6Runner
 from kafka_consumer import run_consumer
@@ -26,8 +33,17 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
-KAFKA_BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+KAFKA_BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "")
 KAFKA_TOPIC = os.environ.get("KAFKA_LOG_TOPIC", "app-logs")
+# Set empty, omit, or DISABLED for hosts without Kafka (e.g. Railway); logs tab stays empty.
+KAFKA_ENABLED = bool(
+    KAFKA_BOOTSTRAP_SERVERS.strip() and KAFKA_BOOTSTRAP_SERVERS.strip().upper() != "DISABLED"
+)
+ALLOW_INSECURE_LOG_INGEST = os.environ.get("ALLOW_INSECURE_LOG_INGEST", "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
 CACHE_MAX_ENTRIES = int(os.environ.get("CACHE_MAX_ENTRIES", "50000"))
 DB_FLUSH_INTERVAL = float(os.environ.get("DB_FLUSH_INTERVAL", "30"))
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
@@ -36,21 +52,61 @@ cache = LogCache(max_entries=CACHE_MAX_ENTRIES)
 k6 = K6Runner()
 
 
+def _log_ingest_token() -> str:
+    """Read at call time so Railway/runtime env updates are visible (avoid stale import-time snapshot)."""
+    return (os.environ.get("LOG_INGEST_TOKEN") or "").strip()
+
+
+def _log_entry_key(entry: dict[str, Any]) -> tuple:
+    return (
+        str(entry.get("timestamp", "")),
+        str(entry.get("message", "")),
+        str(entry.get("instance_id", "")),
+        str(entry.get("logger", "")),
+    )
+
+
+def _merge_logs(
+    memory_logs: list[dict[str, Any]],
+    db_logs: list[dict[str, Any]],
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Combine ring buffer and DB rows, dedupe identical lines, newest first."""
+    combined = list(memory_logs) + list(db_logs)
+
+    def ts_sort_key(e: dict[str, Any]) -> str:
+        return str(e.get("timestamp") or "")
+
+    combined.sort(key=ts_sort_key, reverse=True)
+    seen: set[tuple] = set()
+    out: list[dict[str, Any]] = []
+    for e in combined:
+        k = _log_entry_key(e)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(e)
+        if len(out) >= limit:
+            break
+    return out
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Start Kafka consumer and DB flush loop on startup."""
-    # Initialize database tables
-    init_db()
+    # Do not block HTTP readiness on Postgres retries (Railway healthcheck hits PORT immediately).
+    threading.Thread(target=init_db, daemon=True).start()
 
-    # Start Kafka consumer thread
-    alerter = DiscordAlerter(webhook_url=DISCORD_WEBHOOK_URL)
-    consumer_thread = threading.Thread(
-        target=run_consumer,
-        args=(cache, KAFKA_BOOTSTRAP_SERVERS, KAFKA_TOPIC),
-        kwargs={"alerter": alerter},
-        daemon=True,
-    )
-    consumer_thread.start()
+    # Kafka log stream (optional — disabled when no broker / DISABLED)
+    if KAFKA_ENABLED:
+        alerter = DiscordAlerter(webhook_url=DISCORD_WEBHOOK_URL)
+        consumer_thread = threading.Thread(
+            target=run_consumer,
+            args=(cache, KAFKA_BOOTSTRAP_SERVERS, KAFKA_TOPIC),
+            kwargs={"alerter": alerter},
+            daemon=True,
+        )
+        consumer_thread.start()
 
     # Start periodic DB flush
     cache.start_flush_loop(interval_seconds=DB_FLUSH_INTERVAL)
@@ -74,12 +130,88 @@ app.add_middleware(
 @app.get("/api/health")
 def health():
     st = cache.get_stats()
-    return {
+    db_ok = False
+    try:
+        conn = get_connection()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+        conn.close()
+        db_ok = True
+    except Exception:
+        db_ok = False
+    out: dict[str, Any] = {
         "status": "ok",
+        "service": "dashboard-backend",
         "kafka_topic": KAFKA_TOPIC,
+        "kafka_enabled": KAFKA_ENABLED,
+        "http_ingest_enabled": bool(_log_ingest_token()) or ALLOW_INSECURE_LOG_INGEST,
         "log_cache_ingested": st["total_ingested"],
         "log_cache_buffered": st["buffered_logs"],
+        "database_connected": db_ok,
     }
+    n = count_kafka_logs()
+    if n is not None:
+        out["persisted_kafka_logs"] = n
+    return out
+
+
+@app.get("/api/introspect/postgres")
+def introspect_postgres(
+    profile: str = Query(
+        "default",
+        description="default = dashboard-backend DB; main = INTROSPECT_DB_URL (Compose db service)",
+    ),
+):
+    """List databases and public tables (Ops UI). ``profile=main`` uses ``INTROSPECT_DB_URL``."""
+    return introspect_postgres_server(profile)
+
+
+@app.post("/api/ingest")
+async def ingest_logs(request: Request):
+    """Receive the same JSON payloads as the Kafka topic (Railway without Kafka).
+
+    When ``LOG_INGEST_TOKEN`` is set, require header ``X-Log-Ingest-Token`` (or
+    ``Authorization: Bearer …``). If unset, reject unless ``ALLOW_INSECURE_LOG_INGEST=1``
+    (local development only).
+    """
+    expected = _log_ingest_token()
+    if expected:
+        got = request.headers.get("x-log-ingest-token") or ""
+        if not got:
+            auth = request.headers.get("authorization") or ""
+            if auth.lower().startswith("bearer "):
+                got = auth[7:].strip()
+        if got != expected:
+            raise HTTPException(status_code=401, detail="Invalid log ingest token")
+    elif not ALLOW_INSECURE_LOG_INGEST:
+        raise HTTPException(
+            status_code=503,
+            detail="Set LOG_INGEST_TOKEN on this service (and the same value as LOG_INGEST_TOKEN on url-shortener replicas), or ALLOW_INSECURE_LOG_INGEST=1 for local dev only",
+        )
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON body required") from None
+
+    if isinstance(body, list):
+        entries = body
+    elif isinstance(body, dict) and "entries" in body:
+        entries = body["entries"]
+        if not isinstance(entries, list):
+            raise HTTPException(status_code=400, detail="entries must be a list")
+    elif isinstance(body, dict):
+        entries = [body]
+    else:
+        raise HTTPException(status_code=400, detail="Expected JSON object or array")
+
+    n = 0
+    for e in entries:
+        if isinstance(e, dict):
+            cache.add(e)
+            n += 1
+    return {"ingested": n, "status": "ok"}
 
 
 @app.get("/api/logs")
@@ -88,22 +220,58 @@ def get_logs(
     level: str | None = Query(None),
     instance_id: str | None = Query(None),
     search: str | None = Query(None, description="Case-insensitive substring in message/logger/path"),
+    source: str = Query(
+        "merged",
+        description="memory | db | merged — merged combines ring buffer + Postgres kafka_logs",
+    ),
 ):
-    """Return recent log entries from the cache (newest first)."""
-    return {
-        "logs": cache.get_logs(
-            limit=limit,
-            level=level,
-            instance_id=instance_id,
-            search=search,
-        ),
-    }
+    """Return recent logs: memory-only, DB-only, or merged (default; survives restarts)."""
+    src = source.lower().strip() if source else "merged"
+    if src not in ("memory", "db", "merged"):
+        src = "merged"
+    if src == "memory":
+        return {
+            "logs": cache.get_logs(
+                limit=limit,
+                level=level,
+                instance_id=instance_id,
+                search=search,
+            ),
+            "source": src,
+        }
+    if src == "db":
+        return {
+            "logs": fetch_logs_from_db(
+                limit=limit,
+                level=level,
+                instance_id=instance_id,
+                search=search,
+            ),
+            "source": src,
+        }
+    mem = cache.get_logs(
+        limit=min(2000, CACHE_MAX_ENTRIES),
+        level=level,
+        instance_id=instance_id,
+        search=search,
+    )
+    db_rows = fetch_logs_from_db(
+        limit=min(2000, max(limit * 3, 100)),
+        level=level,
+        instance_id=instance_id,
+        search=search,
+    )
+    return {"logs": _merge_logs(mem, db_rows, limit), "source": "merged"}
 
 
 @app.get("/api/stats")
 def get_stats():
-    """Return per-instance and global aggregate statistics."""
-    return cache.get_stats()
+    """Return per-instance and global aggregate statistics plus persisted row count when DB works."""
+    st = cache.get_stats()
+    n = count_kafka_logs()
+    if n is not None:
+        st["persisted_kafka_logs"] = n
+    return st
 
 
 @app.post("/api/flush")

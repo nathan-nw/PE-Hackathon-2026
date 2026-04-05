@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -26,7 +26,13 @@ import {
 import { ErrorMonitor } from "@/components/error-monitor";
 import { LoadTest } from "@/components/load-test";
 import { cn } from "@/lib/utils";
-import { ExternalLink, Loader2, RefreshCw } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  ExternalLink,
+  Loader2,
+  RefreshCw,
+} from "lucide-react";
 
 const POLL_MS = 12_000;
 const LOG_POLL_MS = 2_500;
@@ -43,10 +49,52 @@ type DockerContainer = {
   cpuPercent?: number;
   memUsage?: number;
   memLimit?: number;
+  railwayServiceId?: string;
 };
 
+/** Response from dashboard-backend GET /api/introspect/postgres (proxied). */
+type PostgresIntrospectResponse = {
+  databases: string[];
+  tables_by_database: Record<string, string[]>;
+  dashboard_db_present: boolean;
+  errors: { scope: string; message: string }[];
+  profile?: string;
+  introspect_configured?: boolean;
+};
+
+/** Compose / Railway rows that look like a Postgres server (expand for DB + table list). */
+function isPostgresLikeRow(
+  source: string | undefined,
+  service: string,
+  image: string
+): boolean {
+  const img = (image || "").toLowerCase();
+  if (img.includes("postgres")) return true;
+  const s = (service || "").toLowerCase();
+  if (source === "railway") {
+    return s === "postgres" || s.includes("postgres");
+  }
+  if (source === "docker" || !source) {
+    return s === "db" || s === "dashboard-db" || s.includes("postgres");
+  }
+  return false;
+}
+
+/** Which connection profile dashboard-backend should use (see INTROSPECT_DB_URL for ``main``). */
+function introspectProfileForRow(
+  source: string | undefined,
+  service: string,
+  image: string
+): "default" | "main" {
+  const s = (service || "").toLowerCase();
+  if (source === "docker" && s === "db") return "main";
+  return "default";
+}
+
 type DockerResponse = {
+  source?: "docker" | "railway";
   project: string;
+  projectId?: string;
   containers: DockerContainer[];
   error?: string;
 };
@@ -125,6 +173,7 @@ type LogStatsResponse = {
     error_rate: number;
   };
   error?: string;
+  hint?: string;
 };
 
 function formatBytes(n: number | undefined) {
@@ -215,6 +264,13 @@ export function OpsDashboard() {
   const [logLimit, setLogLimit] = useState(200);
   const [pauseLive, setPauseLive] = useState(false);
 
+  const [pgDetailKey, setPgDetailKey] = useState<string | null>(null);
+  const [pgData, setPgData] = useState<PostgresIntrospectResponse | null>(null);
+  const [pgLoadedForId, setPgLoadedForId] = useState<string | null>(null);
+  const [pgLoading, setPgLoading] = useState(false);
+  const [pgError, setPgError] = useState<string | null>(null);
+  const pgReqGen = useRef(0);
+
   useEffect(() => {
     const t = window.setTimeout(() => setLogSearchDebounced(logSearch), 400);
     return () => window.clearTimeout(t);
@@ -303,6 +359,40 @@ export function OpsDashboard() {
     return () => window.clearInterval(id);
   }, [mainTab, pauseLive, fetchLogs]);
 
+  const loadPostgresIntrospect = useCallback(
+    async (c: DockerContainer, source: string | undefined) => {
+      const gen = ++pgReqGen.current;
+      const profile = introspectProfileForRow(source, c.service, c.image);
+      setPgLoading(true);
+      setPgError(null);
+      setPgLoadedForId(null);
+      try {
+        const params = new URLSearchParams();
+        params.set("profile", profile);
+        const res = await fetch(`/api/ops/postgres-introspect?${params.toString()}`);
+        const j = (await res.json()) as PostgresIntrospectResponse & {
+          error?: string;
+          hint?: string;
+        };
+        if (gen !== pgReqGen.current) return;
+        if (!res.ok) {
+          setPgError(j.error ?? `HTTP ${res.status}`);
+          setPgData(null);
+          return;
+        }
+        setPgData(j);
+        setPgLoadedForId(c.id);
+      } catch (e) {
+        if (gen !== pgReqGen.current) return;
+        setPgError(e instanceof Error ? e.message : "Request failed");
+        setPgData(null);
+      } finally {
+        if (gen === pgReqGen.current) setPgLoading(false);
+      }
+    },
+    []
+  );
+
   const sortedContainers = useMemo(() => {
     const list = docker?.containers ?? [];
     return [...list].sort((a, b) =>
@@ -310,13 +400,18 @@ export function OpsDashboard() {
     );
   }, [docker]);
 
+  /** CPU/memory columns: Docker via container stats; Railway via GraphQL metrics. */
+  const showResourceStats = includeStats;
+
+  const serviceTableColCount = showResourceStats ? 9 : 6;
+
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-8">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Ops</h1>
           <p className="text-muted-foreground text-sm">
-            Compose, Kubernetes, Alertmanager, and Kafka log stream (
+            Compose / Railway, Kubernetes, Alertmanager, and Kafka log stream (
             {mainTab === "logs"
               ? `logs ~${LOG_POLL_MS / 1000}s`
               : `${POLL_MS / 1000}s`}{" "}
@@ -331,7 +426,7 @@ export function OpsDashboard() {
               onChange={(e) => setIncludeStats(e.target.checked)}
               className="accent-primary rounded border"
             />
-            Docker stats
+            Show stats
           </label>
           <label className="text-muted-foreground flex items-center gap-2 text-sm">
             <input
@@ -392,12 +487,39 @@ export function OpsDashboard() {
         <TabsContent value="containers" className="space-y-2">
           <Card>
             <CardHeader>
-              <CardTitle>Docker</CardTitle>
+              <CardTitle>
+                {docker?.source === "railway" ? "Railway services" : "Docker"}
+              </CardTitle>
               <CardDescription>
-                Project{" "}
-                <span className="text-foreground font-mono">
-                  {docker?.project ?? "—"}
-                </span>
+                {docker?.source === "railway" ? (
+                  <>
+                    Project{" "}
+                    <span className="text-foreground font-mono">
+                      {docker?.project ?? "—"}
+                    </span>
+                    {docker?.projectId && (
+                      <>
+                        {" "}
+                        <span className="text-muted-foreground">·</span>{" "}
+                        <a
+                          className="text-primary hover:underline"
+                          href={`https://railway.com/project/${docker.projectId}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open in Railway
+                        </a>
+                      </>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    Compose project{" "}
+                    <span className="text-foreground font-mono">
+                      {docker?.project ?? "—"}
+                    </span>
+                  </>
+                )}
                 {docker?.error && (
                   <span className="text-destructive"> — {docker.error}</span>
                 )}
@@ -408,12 +530,14 @@ export function OpsDashboard() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Service</TableHead>
-                    <TableHead>Container</TableHead>
+                    <TableHead>
+                      {docker?.source === "railway" ? "Deployment" : "Container"}
+                    </TableHead>
                     <TableHead>Image</TableHead>
                     <TableHead>State</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="w-[120px]">App logs</TableHead>
-                    {includeStats && (
+                    {showResourceStats && (
                       <>
                         <TableHead>CPU %</TableHead>
                         <TableHead>Memory</TableHead>
@@ -425,62 +549,242 @@ export function OpsDashboard() {
                   {sortedContainers.length === 0 && (
                     <TableRow>
                       <TableCell
-                        colSpan={includeStats ? 9 : 6}
+                        colSpan={serviceTableColCount}
                         className="text-muted-foreground"
                       >
-                        No containers for this Compose project, or Docker API
-                        unreachable.
+                        {docker?.source === "railway"
+                          ? "No Railway services returned, or the Railway API request failed (check dashboard service variables: RAILWAY_PROJECT_ID, RAILWAY_ENVIRONMENT_ID, and a token)."
+                          : "No containers for this Compose project, or Docker API unreachable."}
                       </TableCell>
                     </TableRow>
                   )}
-                  {sortedContainers.map((c) => (
-                    <TableRow key={c.id}>
-                      <TableCell className="font-medium">
-                        {c.service || "—"}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs">{c.name}</TableCell>
-                      <TableCell className="max-w-[200px] truncate text-xs">
-                        {c.image}
-                      </TableCell>
-                      <TableCell>{stateBadge(c.state, c.health)}</TableCell>
-                      <TableCell className="max-w-[240px] truncate text-xs">
-                        {c.status}
-                      </TableCell>
-                      <TableCell>
-                        {(() => {
-                          const iid = instanceIdFromComposeService(c.service);
-                          if (!iid) return <span className="text-muted-foreground">—</span>;
-                          return (
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="text-xs"
-                              onClick={() => {
-                                setLogInstance(iid);
-                                setMainTab("logs");
-                              }}
-                            >
-                              Instance {iid}
-                            </Button>
-                          );
-                        })()}
-                      </TableCell>
-                      {includeStats && (
-                        <>
-                          <TableCell>
-                            {c.cpuPercent != null
-                              ? `${c.cpuPercent.toFixed(1)}%`
-                              : "—"}
-                          </TableCell>
-                          <TableCell className="text-xs">
-                            {formatBytes(c.memUsage)}
-                            {c.memLimit ? ` / ${formatBytes(c.memLimit)}` : ""}
-                          </TableCell>
-                        </>
-                      )}
-                    </TableRow>
-                  ))}
+                  {sortedContainers.flatMap((c) => {
+                    const showPg = isPostgresLikeRow(
+                      docker?.source,
+                      c.service,
+                      c.image
+                    );
+                    const pgOpen = showPg && pgDetailKey === c.id;
+                    const mainRow = (
+                      <TableRow key={c.id}>
+                        <TableCell className="font-medium">
+                          <div className="flex items-center gap-1">
+                            {showPg ? (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 w-7 shrink-0 p-0"
+                                aria-expanded={pgOpen}
+                                aria-label={
+                                  pgOpen
+                                    ? "Collapse database details"
+                                    : "Expand database list and tables"
+                                }
+                                onClick={() => {
+                                  if (pgOpen) {
+                                    setPgDetailKey(null);
+                                    return;
+                                  }
+                                  setPgDetailKey(c.id);
+                                  void loadPostgresIntrospect(c, docker?.source);
+                                }}
+                              >
+                                {pgOpen ? (
+                                  <ChevronDown className="h-4 w-4" />
+                                ) : (
+                                  <ChevronRight className="h-4 w-4" />
+                                )}
+                              </Button>
+                            ) : null}
+                            <span>{c.service || "—"}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">{c.name}</TableCell>
+                        <TableCell className="max-w-[200px] truncate text-xs">
+                          {c.image}
+                        </TableCell>
+                        <TableCell>{stateBadge(c.state, c.health)}</TableCell>
+                        <TableCell className="max-w-[240px] truncate text-xs">
+                          {c.status}
+                        </TableCell>
+                        <TableCell>
+                          {(() => {
+                            const iid = instanceIdFromComposeService(c.service);
+                            if (!iid)
+                              return <span className="text-muted-foreground">—</span>;
+                            return (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="text-xs"
+                                onClick={() => {
+                                  setLogInstance(iid);
+                                  setMainTab("logs");
+                                }}
+                              >
+                                Instance {iid}
+                              </Button>
+                            );
+                          })()}
+                        </TableCell>
+                        {showResourceStats && (
+                          <>
+                            <TableCell>
+                              {c.cpuPercent != null
+                                ? `${c.cpuPercent.toFixed(1)}%`
+                                : "—"}
+                            </TableCell>
+                            <TableCell className="text-xs">
+                              {formatBytes(c.memUsage)}
+                              {c.memLimit ? ` / ${formatBytes(c.memLimit)}` : ""}
+                            </TableCell>
+                          </>
+                        )}
+                      </TableRow>
+                    );
+                    if (!pgOpen) return [mainRow];
+                    const detailRow = (
+                      <TableRow key={`${c.id}-pg-detail`}>
+                        <TableCell
+                          colSpan={serviceTableColCount}
+                          className="bg-muted/40 align-top"
+                        >
+                          <div className="space-y-3 py-1">
+                            <p className="text-muted-foreground text-xs">
+                              {introspectProfileForRow(
+                                docker?.source,
+                                c.service,
+                                c.image
+                              ) === "main" ? (
+                                <>
+                                  Introspection uses{" "}
+                                  <span className="font-mono">INTROSPECT_DB_URL</span> on{" "}
+                                  <span className="font-mono">dashboard-backend</span> (Compose
+                                  <span className="font-mono"> db</span> service).
+                                </>
+                              ) : (
+                                <>
+                                  Databases and tables on the{" "}
+                                  <span className="font-mono">same Postgres server</span> as{" "}
+                                  <span className="font-mono">dashboard-backend</span> (
+                                  <span className="font-mono">
+                                    DASHBOARD_DATABASE_URL
+                                  </span>{" "}
+                                  / discrete <span className="font-mono">DASHBOARD_DB_*</span>
+                                  ). Hosted Railway: often shows <span className="font-mono">dashboard_db</span>{" "}
+                                  and the default DB on one plugin.
+                                </>
+                              )}
+                            </p>
+                            {pgLoading && (
+                              <div className="text-muted-foreground flex items-center gap-2 text-sm">
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                Loading…
+                              </div>
+                            )}
+                            {pgError && (
+                              <p className="text-destructive text-sm" role="alert">
+                                {pgError}
+                              </p>
+                            )}
+                            {!pgLoading &&
+                              !pgError &&
+                              pgData &&
+                              pgLoadedForId === c.id && (
+                              <>
+                                <div>
+                                  <div className="mb-1 text-sm font-medium">
+                                    Databases on this server
+                                  </div>
+                                  <div className="flex flex-wrap gap-1">
+                                    {pgData.databases.map((d) => (
+                                      <Badge
+                                        key={d}
+                                        variant={
+                                          d === "dashboard_db" ? "default" : "secondary"
+                                        }
+                                        className="font-mono text-xs"
+                                      >
+                                        {d}
+                                        {d === "dashboard_db" ? " (dashboard)" : ""}
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                  {!pgData.dashboard_db_present &&
+                                    introspectProfileForRow(
+                                      docker?.source,
+                                      c.service,
+                                      c.image
+                                    ) === "default" && (
+                                      <p className="text-muted-foreground mt-2 text-xs">
+                                        <span className="font-mono">dashboard_db</span> not
+                                        found — create it on this instance (see RAILWAY.md) or
+                                        check{" "}
+                                        <span className="font-mono">DASHBOARD_DB_NAME</span>.
+                                      </p>
+                                    )}
+                                </div>
+                                {Object.keys(pgData.tables_by_database).length > 0 && (
+                                  <div className="space-y-2">
+                                    <div className="text-sm font-medium">
+                                      Public tables by database
+                                    </div>
+                                    {Object.entries(pgData.tables_by_database).map(
+                                      ([db, tables]) => (
+                                        <div key={db}>
+                                          <div className="text-muted-foreground font-mono text-xs">
+                                            {db}
+                                          </div>
+                                          {pgData.errors.some(
+                                            (e) => e.scope === `tables:${db}`
+                                          ) ? (
+                                            <p className="text-destructive text-xs">
+                                              Could not list tables (
+                                              {
+                                                pgData.errors.find(
+                                                  (e) => e.scope === `tables:${db}`
+                                                )?.message
+                                              }
+                                              )
+                                            </p>
+                                          ) : tables.length === 0 ? (
+                                            <p className="text-muted-foreground text-xs">
+                                              — no tables in public schema —
+                                            </p>
+                                          ) : (
+                                            <ul className="mt-1 flex list-none flex-wrap gap-x-3 gap-y-0.5 pl-0 text-xs">
+                                              {tables.map((t) => (
+                                                <li key={`${db}.${t}`} className="font-mono">
+                                                  {t}
+                                                </li>
+                                              ))}
+                                            </ul>
+                                          )}
+                                        </div>
+                                      )
+                                    )}
+                                  </div>
+                                )}
+                                {pgData.errors.length > 0 && (
+                                  <div className="text-muted-foreground text-xs">
+                                    {pgData.errors.map((err, idx) => (
+                                      <div key={`${err.scope}-${idx}`}>
+                                        <span className="font-mono">{err.scope}</span>:{" "}
+                                        {err.message}
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                    return [mainRow, detailRow];
+                  })}
                 </TableBody>
               </Table>
             </CardContent>
@@ -661,7 +965,10 @@ export function OpsDashboard() {
             </CardHeader>
             <CardContent>
               {logStats?.error && (
-                <p className="text-destructive mb-3 text-sm">{logStats.error}</p>
+                <p className="text-destructive mb-3 text-sm">
+                  {logStats.error}
+                  {logStats.hint ? ` — ${logStats.hint}` : ""}
+                </p>
               )}
               <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <div className="bg-muted/40 rounded-lg border p-3">

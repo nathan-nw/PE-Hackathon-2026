@@ -142,7 +142,15 @@ class TestKafkaLogHandler:
 
 class TestConfigureLogging:
     def test_adds_kafka_handler_when_env_set(self):
-        with patch.dict("os.environ", {"KAFKA_BOOTSTRAP_SERVERS": "kafka:9092"}):
+        with patch.dict(
+            "os.environ",
+            {"KAFKA_BOOTSTRAP_SERVERS": "kafka:9092"},
+            clear=False,
+        ):
+            import os
+
+            os.environ.pop("LOG_INGEST_URL", None)
+            os.environ.pop("LOG_INGEST_TOKEN", None)
             with patch("app.kafka_logging.KafkaLogHandler") as MockHandler:
                 from app.logging_config import configure_logging
 
@@ -159,7 +167,10 @@ class TestConfigureLogging:
     def test_no_kafka_handler_without_env(self):
         with patch.dict("os.environ", {}, clear=False):
             import os
+
             os.environ.pop("KAFKA_BOOTSTRAP_SERVERS", None)
+            os.environ.pop("LOG_INGEST_URL", None)
+            os.environ.pop("LOG_INGEST_TOKEN", None)
 
             from app.logging_config import configure_logging
 
@@ -172,6 +183,10 @@ class TestConfigureLogging:
                 h for h in root.handlers if type(h).__name__ == "KafkaLogHandler"
             ]
             assert len(kafka_handlers) == 0
+            http_handlers = [
+                h for h in root.handlers if type(h).__name__ == "HttpLogIngestHandler"
+            ]
+            assert len(http_handlers) == 0
 
             # Cleanup
             root.handlers = original_handlers
