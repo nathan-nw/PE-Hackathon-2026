@@ -24,6 +24,7 @@ import {
   labelForInstanceId,
 } from "@/lib/compose-instance";
 import { ErrorMonitor } from "@/components/error-monitor";
+import { GoldenSignals } from "@/components/golden-signals";
 import { LoadTest } from "@/components/load-test";
 import { cn } from "@/lib/utils";
 import {
@@ -1202,8 +1203,9 @@ export function OpsDashboard() {
           <LoadTest />
         </TabsContent>
 
-        <TabsContent value="telemetry">
-          <div className="grid gap-4 sm:grid-cols-2">
+        <TabsContent value="telemetry" keepMounted>
+          <GoldenSignals />
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <Card>
               <CardHeader>
                 <CardTitle>Prometheus</CardTitle>

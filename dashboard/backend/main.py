@@ -380,3 +380,71 @@ def k6_status():
 def k6_stop():
     """Stop the running k6 test."""
     return k6.stop()
+
+
+# ── Alertmanager → Discord Bridge ──────────────────────────────────────────
+
+
+@app.post("/api/alertmanager-webhook")
+async def alertmanager_webhook(request: Request):
+    """Receive Alertmanager webhook POSTs and forward to Discord as embeds."""
+    webhook_url = DISCORD_WEBHOOK_URL
+    if not webhook_url:
+        return {"status": "skipped", "reason": "no DISCORD_WEBHOOK_URL configured"}
+
+    import json
+    import urllib.request
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON body required") from None
+
+    alerts = body.get("alerts", [])
+    if not alerts:
+        return {"status": "ok", "forwarded": 0}
+
+    forwarded = 0
+    for alert in alerts:
+        status = alert.get("status", "firing")
+        labels = alert.get("labels", {})
+        annotations = alert.get("annotations", {})
+        severity = labels.get("severity", "warning")
+
+        color = 15158332 if severity == "critical" else 16776960  # red / yellow
+        if status == "resolved":
+            color = 3066993  # green
+
+        emoji = "🔴" if severity == "critical" else "🟡"
+        if status == "resolved":
+            emoji = "✅"
+
+        payload = json.dumps({
+            "embeds": [{
+                "title": f"{emoji} [{status.upper()}] {labels.get('alertname', 'Unknown')}",
+                "color": color,
+                "description": annotations.get("description", annotations.get("summary", "")),
+                "fields": [
+                    {"name": "Severity", "value": severity, "inline": True},
+                    {"name": "Source", "value": "Prometheus → Alertmanager", "inline": True},
+                    {"name": "Summary", "value": annotations.get("summary", "—")[:200]},
+                ],
+            }],
+        }).encode("utf-8")
+
+        try:
+            req = urllib.request.Request(
+                webhook_url,
+                data=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "PE-Hackathon-AlertmanagerBridge/1.0",
+                },
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=5)
+            forwarded += 1
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Discord forward failed: %s", exc)
+
+    return {"status": "ok", "forwarded": forwarded}
