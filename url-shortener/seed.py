@@ -25,7 +25,7 @@ if "DATABASE_URL" in os.environ and not os.environ.get("DATABASE_URL", "").strip
 from peewee import PostgresqlDatabase, chunked
 
 from app import create_app
-from app.database import db
+from app.database import db, sync_postgres_serial_sequences
 from app.models.event import Event
 from app.models.url import Url
 from app.models.user import User
@@ -34,23 +34,8 @@ DEFAULT_CSV_DIR = os.path.join(os.path.dirname(__file__), "csv_data")
 
 
 def _reset_postgres_serial_sequences():
-    """Advance SERIAL sequences after INSERTs with explicit ids (CSV seed).
-
-    PostgreSQL does not bump the sequence when rows are inserted with explicit primary keys,
-    so the next DEFAULT can collide (e.g. duplicate key on urls_pkey). Safe to call anytime.
-    """
-    underlying = getattr(db, "obj", db)
-    if not isinstance(underlying, PostgresqlDatabase):
-        return
-    for table in ("users", "urls", "events"):
-        db.execute_sql(
-            f"""
-            SELECT setval(
-                pg_get_serial_sequence('{table}', 'id'),
-                COALESCE((SELECT MAX(id) FROM {table}), 0)
-            )
-            """
-        )
+    """Same as app startup sync; kept for explicit seed completion and ``--fix-sequences-only``."""
+    sync_postgres_serial_sequences()
 
 
 def _insert_many(model, batch, merge: bool):

@@ -6,7 +6,7 @@ from functools import wraps
 from urllib.parse import parse_qs, unquote, urlparse
 
 from flask import request
-from peewee import DatabaseProxy, Model, OperationalError
+from peewee import DatabaseProxy, Model, OperationalError, PostgresqlDatabase
 from playhouse.pool import PooledPostgresqlDatabase
 
 logger = logging.getLogger(__name__)
@@ -80,12 +80,35 @@ def _postgres_connection_kwargs():
         "user": os.environ.get("DATABASE_USER", "postgres"),
         "password": os.environ.get("DATABASE_PASSWORD", "postgres"),
     }
-    sslmode = os.environ.get("PGSSLMODE", "").strip() or _default_sslmode_for_postgres_host(
-        discrete_host
-    )
+    sslmode = os.environ.get("PGSSLMODE", "").strip() or _default_sslmode_for_postgres_host(discrete_host)
     if sslmode:
         kw["sslmode"] = sslmode
     return kw
+
+
+def sync_postgres_serial_sequences() -> None:
+    """Align SERIAL sequences with MAX(id) after bulk loads that used explicit ids (CSV seed).
+
+    Without this, ``nextval`` can return an id that already exists → ``urls_pkey`` duplicate key.
+    Safe to call repeatedly; only runs meaningful work on PostgreSQL.
+    """
+    underlying = getattr(db, "obj", db)
+    if not isinstance(underlying, PostgresqlDatabase):
+        return
+    for table in ("users", "urls", "events"):
+        db.execute_sql(
+            """
+            SELECT setval(
+                seq::regclass,
+                COALESCE((SELECT MAX(id) FROM """
+            + table
+            + """), 0)
+            )
+            FROM (SELECT pg_get_serial_sequence(%s, 'id') AS seq) t
+            WHERE seq IS NOT NULL
+            """,
+            [table],
+        )
 
 
 def init_db(app):
@@ -109,6 +132,17 @@ def init_db(app):
             return
         try:
             db.connect(reuse_if_open=True)
+            if not getattr(app, "_pg_serial_sequences_synced", False):
+                if os.environ.get("SKIP_PG_SEQUENCE_SYNC", "").strip().lower() not in (
+                    "1",
+                    "true",
+                    "yes",
+                ):
+                    try:
+                        sync_postgres_serial_sequences()
+                    except Exception as e:
+                        logger.warning("PostgreSQL serial sequence sync failed: %s", e)
+                app._pg_serial_sequences_synced = True
         except OperationalError as e:
             logger.error(f"Database connection failed: {e}")
             raise
