@@ -15,8 +15,6 @@ def store_test_result():
         return jsonify({"error": "No data provided"}), 400
 
     metrics = data.get("metrics", {})
-    root_group = data.get("root_group", {})
-
     # Extract key metrics from k6 summary
     http_req_duration = metrics.get("http_req_duration", {}).get("values", {})
     http_reqs = metrics.get("http_reqs", {}).get("values", {})
@@ -27,7 +25,7 @@ def store_test_result():
     # Count threshold passes/failures
     thresholds_passed = 0
     thresholds_failed = 0
-    for metric_name, metric_data in metrics.items():
+    for _metric_name, metric_data in metrics.items():
         for t in metric_data.get("thresholds", {}).values():
             if t.get("ok", False):
                 thresholds_passed += 1
@@ -65,20 +63,22 @@ def list_test_results():
 
     results = []
     for r in query.limit(50):
-        results.append({
-            "id": r.id,
-            "tier": r.tier,
-            "ran_at": r.ran_at.isoformat(),
-            "duration_s": r.duration_s,
-            "vus_max": r.vus_max,
-            "iterations": r.iterations,
-            "requests_total": r.requests_total,
-            "requests_per_sec": round(r.requests_per_sec, 2),
-            "avg_response_ms": round(r.avg_response_ms, 2),
-            "p95_response_ms": round(r.p95_response_ms, 2),
-            "error_rate": round(r.error_rate * 100, 2),
-            "thresholds_passed": r.thresholds_passed,
-            "thresholds_failed": r.thresholds_failed,
-        })
+        results.append(
+            {
+                "id": r.id,
+                "tier": r.tier,
+                "ran_at": r.ran_at.isoformat(),
+                "duration_s": r.duration_s,
+                "vus_max": r.vus_max,
+                "iterations": r.iterations,
+                "requests_total": r.requests_total,
+                "requests_per_sec": round(r.requests_per_sec, 2),
+                "avg_response_ms": round(r.avg_response_ms, 2),
+                "p95_response_ms": round(r.p95_response_ms, 2),
+                "error_rate": round(r.error_rate * 100, 2),
+                "thresholds_passed": r.thresholds_passed,
+                "thresholds_failed": r.thresholds_failed,
+            }
+        )
 
     return jsonify(results)

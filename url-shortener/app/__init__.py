@@ -24,14 +24,17 @@ def create_app():
 
     configure_logging()
 
-    # Rate limiting — backed by Redis so limits are shared across containers
+    # Rate limiting — backed by Redis so limits are shared across containers.
+    # The dynamic_rate_limit module adjusts the effective limit based on active connections,
+    # but Flask-Limiter needs a static default. We set it high here and let the dynamic
+    # system + Nginx handle the real throttling.
     from flask_limiter import Limiter
     from flask_limiter.util import get_remote_address
 
     limiter = Limiter(
         app=app,
         key_func=get_remote_address,
-        default_limits=[os.environ.get("RATE_LIMIT_DEFAULT", "200 per minute")],
+        default_limits=[os.environ.get("RATE_LIMIT_DEFAULT", "5000 per minute")],
         storage_uri=os.environ.get("RATE_LIMIT_STORAGE", "memory://"),
     )
     app.limiter = limiter
@@ -39,6 +42,13 @@ def create_app():
     init_db(app)
     init_cache()
     register_middleware(app)
+
+    @app.after_request
+    def _add_cors(response):
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        return response
 
     from app import models  # noqa: F401 - registers models with Peewee
 

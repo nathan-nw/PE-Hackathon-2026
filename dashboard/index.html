@@ -1,12 +1,441 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Admin dashboard</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            min-height: 100vh;
+        }
+        .container { max-width: 1000px; margin: 0 auto; padding: 2rem 1rem; }
+        h1 {
+            text-align: center;
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, #818cf8, #c084fc);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .subtitle { text-align: center; color: #94a3b8; margin-bottom: 2rem; }
+        .card {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            border: 1px solid #334155;
+        }
+        h2 {
+            font-size: 1.25rem;
+            margin-bottom: 1rem;
+            color: #cbd5e1;
+        }
+        h3 {
+            font-size: 1rem;
+            color: #94a3b8;
+            margin-bottom: 0.75rem;
+        }
+
+        /* Stats grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        .stat-card {
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 1rem;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+        }
+        .stat-value.green { color: #34d399; }
+        .stat-value.yellow { color: #fbbf24; }
+        .stat-value.red { color: #f87171; }
+        .stat-value.purple { color: #c084fc; }
+        .stat-label { font-size: 0.8rem; color: #64748b; margin-top: 0.25rem; }
+
+        /* Tier table */
+        table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
+        th, td {
+            text-align: left;
+            padding: 0.6rem 0.75rem;
+            border-bottom: 1px solid #334155;
+            font-size: 0.875rem;
+        }
+        th { color: #94a3b8; font-weight: 500; }
+        .tier-active { background: rgba(129, 140, 248, 0.1); border-left: 3px solid #818cf8; }
+
+        /* Buttons */
+        button {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+        button:hover { opacity: 0.85; }
+        .btn-danger { background: #dc2626; color: #fff; }
+        .btn-success { background: #059669; color: #fff; }
+        .btn-primary {
+            background: linear-gradient(135deg, #818cf8, #c084fc);
+            color: #fff;
+            font-weight: 600;
+        }
+        .btn-sm { padding: 0.35rem 0.7rem; font-size: 0.8rem; }
+
+        /* Ban list */
+        .ban-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 1rem;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            margin-bottom: 0.5rem;
+        }
+        .ban-info { flex: 1; }
+        .ban-ip { font-weight: 600; color: #e2e8f0; font-size: 0.95rem; }
+        .ban-detail { font-size: 0.8rem; color: #94a3b8; margin-top: 0.2rem; }
+        .badge {
+            display: inline-block;
+            padding: 0.15rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .badge-red { background: rgba(220, 38, 38, 0.2); color: #f87171; }
+        .badge-yellow { background: rgba(251, 191, 36, 0.2); color: #fbbf24; }
+        .empty-state { text-align: center; color: #64748b; padding: 2rem; }
+
+        /* Toggle switch */
+        .toggle-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1rem;
+        }
+        .toggle {
+            position: relative;
+            width: 48px;
+            height: 26px;
+        }
+        .toggle input { opacity: 0; width: 0; height: 0; }
+        .toggle-slider {
+            position: absolute;
+            inset: 0;
+            background: #475569;
+            border-radius: 26px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        .toggle-slider::before {
+            content: "";
+            position: absolute;
+            height: 20px; width: 20px;
+            left: 3px; bottom: 3px;
+            background: #fff;
+            border-radius: 50%;
+            transition: transform 0.3s;
+        }
+        .toggle input:checked + .toggle-slider { background: #818cf8; }
+        .toggle input:checked + .toggle-slider::before { transform: translateX(22px); }
+
+        /* Manual unban input */
+        .unban-form {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 1rem;
+        }
+        .unban-form input {
+            flex: 1;
+            padding: 0.5rem 0.75rem;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            background: #0f172a;
+            color: #e2e8f0;
+            font-size: 0.9rem;
+            outline: none;
+        }
+        .unban-form input:focus { border-color: #818cf8; }
+        .toast {
+            position: fixed;
+            bottom: 1.5rem;
+            right: 1.5rem;
+            padding: 0.75rem 1.25rem;
+            border-radius: 8px;
+            font-size: 0.875rem;
+            color: #fff;
+            z-index: 1000;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        .toast.show { opacity: 1; }
+        .toast.success { background: #059669; }
+        .toast.error { background: #dc2626; }
+
+        /* Refresh indicator */
+        .refresh-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.75rem;
+        }
+        .last-updated { font-size: 0.75rem; color: #64748b; }
+    </style>
 </head>
 <body>
-  <h1>Dashboard</h1>
-  <p>Placeholder for the admin / ops dashboard. Build your UI here (e.g. Vite, React).</p>
+    <div class="container">
+        <h1>Admin Dashboard</h1>
+        <p class="subtitle">IP Ban Management & Dynamic Rate Limiting</p>
+
+        <!-- Live Stats -->
+        <div class="stats-grid" id="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value green" id="stat-connections">-</div>
+                <div class="stat-label">Effective Users (last 60s)</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value purple" id="stat-rate-limit">-</div>
+                <div class="stat-label">Current Rate Limit (req/min)</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value yellow" id="stat-tier">-</div>
+                <div class="stat-label">Active Tier</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value red" id="stat-banned">-</div>
+                <div class="stat-label">Banned IPs</div>
+            </div>
+        </div>
+
+        <!-- Detailed user metrics -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value green" id="stat-unique-ips" style="font-size:1.5rem">-</div>
+                <div class="stat-label">Unique IPs</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value purple" id="stat-request-volume" style="font-size:1.5rem">-</div>
+                <div class="stat-label">Requests (last 60s)</div>
+            </div>
+        </div>
+
+        <!-- Dynamic Rate Limiting -->
+        <div class="card">
+            <div class="refresh-bar">
+                <h2>Dynamic Rate Limiting</h2>
+                <span class="last-updated" id="rl-updated"></span>
+            </div>
+
+            <div class="toggle-row">
+                <span>Dynamic rate limiting</span>
+                <label class="toggle">
+                    <input type="checkbox" id="rl-toggle" checked onchange="toggleRateLimit()">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+
+            <h3>Scaling Tiers</h3>
+            <table id="tiers-table">
+                <thead>
+                    <tr>
+                        <th>Tier</th>
+                        <th>Max Users</th>
+                        <th>Rate Limit (req/min)</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody id="tiers-body"></tbody>
+            </table>
+        </div>
+
+        <!-- IP Ban Management -->
+        <div class="card">
+            <div class="refresh-bar">
+                <h2>Banned IPs</h2>
+                <span class="last-updated" id="bans-updated"></span>
+            </div>
+
+            <div id="ban-list"></div>
+
+            <div class="unban-form">
+                <input type="text" id="unban-ip" placeholder="Enter IP address to unban">
+                <button class="btn-success btn-sm" onclick="manualUnban()">Unban IP</button>
+            </div>
+        </div>
+
+        <!-- Ban Strike System Info -->
+        <div class="card">
+            <h2>Ban Escalation Policy</h2>
+            <table>
+                <thead>
+                    <tr><th>Violation</th><th>Action</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td>1st violation</td><td>Warning (request continues)</td></tr>
+                    <tr><td>2nd violation</td><td>1-hour ban (#1)</td></tr>
+                    <tr><td>After ban #1 expires + new violation</td><td>Warning, then 1-hour ban (#2)</td></tr>
+                    <tr><td>After ban #2 expires + new violation</td><td>Warning, then 1-hour ban (#3)</td></tr>
+                    <tr><td>After ban #3 expires + new violation</td><td>Permanent ban</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        const API = "http://localhost:8080";
+        let currentTierIndex = -1;
+
+        // ── Toast ───────────────────────────────────────────────────
+        function showToast(msg, type = "success") {
+            const t = document.getElementById("toast");
+            t.textContent = msg;
+            t.className = `toast show ${type}`;
+            setTimeout(() => t.classList.remove("show"), 3000);
+        }
+
+        // ── Rate Limit Status ───────────────────────────────────────
+        async function refreshRateLimit() {
+            try {
+                const res = await fetch(`${API}/admin/rate-limit`);
+                if (!res.ok) throw new Error("Failed to fetch");
+                const data = await res.json();
+
+                document.getElementById("stat-connections").textContent = data.active_users;
+                document.getElementById("stat-unique-ips").textContent = (data.unique_ips || 0).toLocaleString();
+                document.getElementById("stat-request-volume").textContent = (data.request_volume || 0).toLocaleString();
+                document.getElementById("stat-rate-limit").textContent = data.current_rate_limit.toLocaleString();
+                currentTierIndex = data.current_tier_index;
+
+                // Tier label
+                const tierNames = ["Low", "Moderate", "High", "Extreme"];
+                const tierIdx = data.current_tier_index >= 0 ? data.current_tier_index : 0;
+                document.getElementById("stat-tier").textContent = tierNames[tierIdx] || `Tier ${tierIdx}`;
+
+                // Color the connections stat
+                const connEl = document.getElementById("stat-connections");
+                if (data.active_users > 500) connEl.className = "stat-value red";
+                else if (data.active_users > 200) connEl.className = "stat-value yellow";
+                else connEl.className = "stat-value green";
+
+                // Toggle
+                document.getElementById("rl-toggle").checked = data.enabled;
+
+                // Tiers table
+                const tbody = document.getElementById("tiers-body");
+                const tiers = data.tiers || [];
+                tbody.innerHTML = tiers.map((t, i) => {
+                    const active = i === data.current_tier_index;
+                    const maxConn = t.max_users >= 999999 ? "Unlimited" : t.max_users;
+                    return `<tr class="${active ? 'tier-active' : ''}">
+                        <td>Tier ${i + 1}</td>
+                        <td>${typeof maxConn === 'number' ? maxConn.toLocaleString() : maxConn}</td>
+                        <td>${t.rate_limit.toLocaleString()}/min</td>
+                        <td>${active ? '<span class="badge badge-yellow">ACTIVE</span>' : ''}</td>
+                    </tr>`;
+                }).join("");
+
+                document.getElementById("rl-updated").textContent = `Updated ${new Date().toLocaleTimeString()}`;
+            } catch (e) {
+                document.getElementById("rl-updated").textContent = "Failed to connect";
+            }
+        }
+
+        async function toggleRateLimit() {
+            const enabled = document.getElementById("rl-toggle").checked;
+            try {
+                const res = await fetch(`${API}/admin/rate-limit/config`, {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ enabled }),
+                });
+                if (!res.ok) throw new Error("Failed");
+                showToast(`Dynamic rate limiting ${enabled ? "enabled" : "disabled"}`);
+                refreshRateLimit();
+            } catch (e) {
+                showToast("Failed to update config", "error");
+            }
+        }
+
+        // ── Ban Management ──────────────────────────────────────────
+        async function refreshBans() {
+            try {
+                const res = await fetch(`${API}/admin/bans`);
+                if (!res.ok) throw new Error("Failed to fetch");
+                const bans = await res.json();
+
+                document.getElementById("stat-banned").textContent = bans.length;
+
+                const list = document.getElementById("ban-list");
+                if (bans.length === 0) {
+                    list.innerHTML = '<div class="empty-state">No banned IPs</div>';
+                } else {
+                    list.innerHTML = bans.map(b => {
+                        let detail = "";
+                        let badge = "";
+                        if (b.permanent) {
+                            badge = '<span class="badge badge-red">PERMANENT</span>';
+                            detail = `${b.hour_bans} hour ban(s) exhausted`;
+                        } else {
+                            const mins = Math.ceil((b.ban_remaining_s || 0) / 60);
+                            badge = '<span class="badge badge-yellow">TEMPORARY</span>';
+                            detail = `Ban #${b.hour_bans}/3 — ${mins} min remaining`;
+                        }
+                        return `<div class="ban-row">
+                            <div class="ban-info">
+                                <div class="ban-ip">${b.ip} ${badge}</div>
+                                <div class="ban-detail">${detail} | ${b.strikes} total strike(s)</div>
+                            </div>
+                            <button class="btn-success btn-sm" onclick="unbanIp('${b.ip}')">Unban</button>
+                        </div>`;
+                    }).join("");
+                }
+
+                document.getElementById("bans-updated").textContent = `Updated ${new Date().toLocaleTimeString()}`;
+            } catch (e) {
+                document.getElementById("bans-updated").textContent = "Failed to connect";
+            }
+        }
+
+        async function unbanIp(ip) {
+            try {
+                const res = await fetch(`${API}/admin/bans/${ip}/unban`, { method: "POST" });
+                if (!res.ok) throw new Error("Failed");
+                showToast(`${ip} has been unbanned`);
+                refreshBans();
+            } catch (e) {
+                showToast("Failed to unban IP", "error");
+            }
+        }
+
+        function manualUnban() {
+            const ip = document.getElementById("unban-ip").value.trim();
+            if (!ip) return;
+            unbanIp(ip);
+            document.getElementById("unban-ip").value = "";
+        }
+
+        // ── Polling ─────────────────────────────────────────────────
+        refreshRateLimit();
+        refreshBans();
+        setInterval(refreshRateLimit, 3000);
+        setInterval(refreshBans, 5000);
+    </script>
 </body>
 </html>

@@ -21,7 +21,7 @@ _redis_client: redis.Redis | None = None
 
 # Cache TTLs (seconds)
 REDIRECT_TTL = 300  # 5 minutes for short_code -> URL mappings
-URL_LIST_TTL = 10   # 10 seconds for paginated list (short-lived, high churn)
+URL_LIST_TTL = 10  # 10 seconds for paginated list (short-lived, high churn)
 
 
 def init_cache():
@@ -42,6 +42,7 @@ def get_client() -> redis.Redis | None:
 
 
 # ── Redirect cache ──────────────────────────────────────────────────────────
+
 
 def cache_redirect(short_code: str, original_url: str, is_active: bool):
     """Store a short_code -> URL mapping in Redis."""
@@ -78,6 +79,7 @@ def invalidate_redirect(short_code: str):
 
 
 # ── URL list cache ──────────────────────────────────────────────────────────
+
 
 def cache_url_list(page: int, per_page: int, data: dict):
     """Cache a paginated URL list response."""
