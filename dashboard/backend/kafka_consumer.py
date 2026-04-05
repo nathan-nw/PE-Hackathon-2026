@@ -9,6 +9,7 @@ import time
 from confluent_kafka import Consumer, KafkaError
 
 from cache import LogCache
+from discord_alerter import DiscordAlerter
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,7 @@ def run_consumer(
     bootstrap_servers: str,
     topic: str,
     group_id: str = "dashboard-cache",
+    alerter: DiscordAlerter | None = None,
 ) -> None:
     """Blocking loop: consume from Kafka and write into the cache.
 
@@ -56,6 +58,8 @@ def run_consumer(
             try:
                 payload = json.loads(msg.value().decode("utf-8"))
                 cache.add(payload)
+                if alerter:
+                    alerter.maybe_alert(payload)
             except (json.JSONDecodeError, UnicodeDecodeError) as exc:
                 logger.warning("Skipping bad message: %s", exc)
     except Exception as exc:

@@ -300,6 +300,7 @@ services:
       DASHBOARD_DB_PORT: "5432"
       DASHBOARD_DB_USER: postgres
       DASHBOARD_DB_PASSWORD: postgres
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
     depends_on:
       kafka:
         condition: service_healthy
