@@ -14,10 +14,19 @@ is_railway() {
     [ -n "${RAILWAY_PUBLIC_DOMAIN:-}" ]
 }
 
-# Per-replica port: Railway sets PORT per service (Gunicorn binds to it) — not necessarily 5000.
-# Optional: URL_SHORTENER_A_PORT / URL_SHORTENER_B_PORT, else URL_SHORTENER_PORT, else 5000 (Compose).
+# Per-replica port: optional URL_SHORTENER_A_PORT / URL_SHORTENER_B_PORT, else URL_SHORTENER_PORT, else 5000 (Compose).
+# On Railway, set ports explicitly (SYNC_VARIABLES=1) — do not rely on 5000 unless API PORT matches (see setup-railway.js).
 _shortener_port_a="${URL_SHORTENER_A_PORT:-${URL_SHORTENER_PORT:-5000}}"
 _shortener_port_b="${URL_SHORTENER_B_PORT:-${URL_SHORTENER_PORT:-5000}}"
+
+if is_railway && [ -n "${URL_SHORTENER_A_HOST:-}" ]; then
+  if [ -z "${URL_SHORTENER_A_PORT:-}" ] && [ -z "${URL_SHORTENER_B_PORT:-}" ] && [ -z "${URL_SHORTENER_PORT:-}" ]; then
+    echo "ERROR: Railway load-balancer needs URL_SHORTENER_A_PORT and URL_SHORTENER_B_PORT (or URL_SHORTENER_PORT)." >&2
+    echo "       Runtime PORT is not referenceable across services unless PORT is set on each API service." >&2
+    echo "       Run: SYNC_VARIABLES=1 node setup-railway.js  (sets PORT=5000 on APIs + port refs on this service)" >&2
+    exit 1
+  fi
+fi
 
 # --- upstream host:port -------------------------------------------------
 if [ -n "${URL_SHORTENER_A_HOST:-}" ]; then
@@ -52,6 +61,8 @@ if [ -n "${URL_SHORTENER_B_HOST:-}" ] && [ -z "${URL_SHORTENER_A_HOST:-}" ]; the
   exit 1
 fi
 
+echo "load-balancer: resolved upstreams UPSTREAM_A=${UPSTREAM_A} UPSTREAM_B=${UPSTREAM_B}" >&2
+
 # Railway sets PORT; Compose publishes container port 80 -> omit PORT (default 80).
 NGINX_LISTEN_PORT="${PORT:-80}"
 
@@ -64,9 +75,9 @@ sed -e "s|@UPSTREAM_A@|${UPSTREAM_A}|g" \
 # (Compose: LB can start before API DNS is registered) and TCP is accepting.
 wait_live() {
   target="$1"
-  max="${2:-120}"
+  max="${2:-300}"
   i=0
-  echo "load-balancer: waiting for http://${target}/live ..."
+  echo "load-balancer: waiting for http://${target}/live (max ${max}s) ..."
   while [ "$i" -lt "$max" ]; do
     if curl -fsS --connect-timeout 2 --max-time 5 "http://${target}/live" >/dev/null 2>&1; then
       echo "load-balancer: OK ${target}"
@@ -76,10 +87,12 @@ wait_live() {
     sleep 1
   done
   echo "ERROR: upstream not ready: http://${target}/live (timed out after ${max}s)" >&2
+  echo "       Check: same PORT as Gunicorn (API), private networking, DB migrations finished." >&2
   exit 1
 }
 
-wait_live "$UPSTREAM_A"
-wait_live "$UPSTREAM_B"
+_wait_sec="${LB_UPSTREAM_WAIT_SEC:-300}"
+wait_live "$UPSTREAM_A" "$_wait_sec"
+wait_live "$UPSTREAM_B" "$_wait_sec"
 
 exec nginx -g 'daemon off;'

@@ -374,7 +374,10 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
   const pgDashboard = dashboardPg || pg;
 
   // url-shortener-a / url-shortener-b: same env as compose replicas (shared DB; distinct INSTANCE_ID).
+  // Explicit PORT so ${{ url-shortener-a.PORT }} resolves on the load-balancer (runtime-only PORT is
+  // not referenceable from other services — see Railway variables docs / Help Station).
   const urlShortenerBase = {
+    PORT: "5000",
     DATABASE_URL: varRef(pg, dbUrlKey),
     FLASK_DEBUG: "false",
     KAFKA_LOG_TOPIC: "app-logs",
