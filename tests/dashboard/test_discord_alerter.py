@@ -63,11 +63,11 @@ class TestShouldAlert:
 class TestDisabledAlerter:
     def test_no_url_disables(self):
         alerter = DiscordAlerter(webhook_url=None)
-        assert not alerter._enabled
+        assert not alerter._effective_webhook()
 
     def test_empty_url_disables(self):
         alerter = DiscordAlerter(webhook_url="")
-        assert not alerter._enabled
+        assert not alerter._effective_webhook()
 
     @patch("discord_alerter.urllib.request.urlopen")
     def test_maybe_alert_noop_when_disabled(self, mock_urlopen):

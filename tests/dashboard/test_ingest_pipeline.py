@@ -74,6 +74,17 @@ class TestIngestPipeline:
             e.get("path") == "/health" and e.get("instance_id") == "1" for e in logs
         )
 
+    def test_ingest_invokes_discord_maybe_alert(self, ingest_client):
+        """Hosted (HTTP ingest) path must call the alerter — same as Kafka consumer."""
+        client, main_mod = ingest_client
+        with patch.object(main_mod.alerter, "maybe_alert") as m:
+            client.post(
+                "/api/ingest",
+                json=[_SAMPLE_INGEST],
+                headers={"X-Log-Ingest-Token": "test-ingest-token"},
+            )
+        assert m.call_count == 1
+
     def test_ingest_batch_array(self, ingest_client):
         client, main_mod = ingest_client
         second = {**_SAMPLE_INGEST, "instance_id": "2", "path": "/metrics"}

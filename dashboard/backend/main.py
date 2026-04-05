@@ -239,6 +239,7 @@ async def ingest_logs(request: Request):
     for e in entries:
         if isinstance(e, dict):
             cache.add(e)
+            alerter.maybe_alert(e)
             n += 1
     return {"ingested": n, "status": "ok"}
 

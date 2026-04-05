@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import urllib.request
 import urllib.error
@@ -19,16 +20,21 @@ class DiscordAlerter:
     """
 
     def __init__(self, webhook_url: str | None) -> None:
-        self._webhook_url = webhook_url or ""
-        self._enabled = bool(self._webhook_url)
+        self._webhook_url = (webhook_url or "").strip()
         self._last_sent: float = 0.0
         self._min_interval: float = (
             1.0  # seconds between sends (Discord rate-limit guard)
         )
-        if self._enabled:
+        if self._effective_webhook():
             logger.info("Discord alerter enabled")
         else:
-            logger.info("Discord alerter disabled (no webhook URL)")
+            logger.info(
+                "Discord alerter idle until DISCORD_WEBHOOK_URL is set (checked each alert)"
+            )
+
+    def _effective_webhook(self) -> str:
+        """Prefer live ``os.environ`` so hosted platforms pick up variables without stale imports."""
+        return (os.environ.get("DISCORD_WEBHOOK_URL") or self._webhook_url or "").strip()
 
     def should_alert(self, entry: dict) -> bool:
         """Decide whether this log entry should trigger a Discord alert."""
@@ -38,6 +44,10 @@ class DiscordAlerter:
 
     def send_alert(self, entry: dict) -> None:
         """POST a formatted embed to the Discord webhook."""
+        webhook = self._effective_webhook()
+        if not webhook:
+            return
+
         now = time.monotonic()
         if now - self._last_sent < self._min_interval:
             return
@@ -84,7 +94,7 @@ class DiscordAlerter:
         ).encode("utf-8")
 
         req = urllib.request.Request(
-            self._webhook_url,
+            webhook,
             data=payload,
             headers={
                 "Content-Type": "application/json",
@@ -97,7 +107,7 @@ class DiscordAlerter:
 
     def maybe_alert(self, entry: dict) -> None:
         """Check and send alert. Never raises — safe to call from the consumer loop."""
-        if not self._enabled:
+        if not self._effective_webhook():
             return
         try:
             if self.should_alert(entry):
@@ -114,7 +124,7 @@ class DiscordAlerter:
 
         Returns the number of alerts forwarded.
         """
-        if not self._enabled:
+        if not self._effective_webhook():
             return 0
 
         alerts = payload.get("alerts", [])
@@ -181,7 +191,7 @@ class DiscordAlerter:
                 body = json.dumps({"embeds": batch}).encode("utf-8")
                 logger.info("Sending %d Alertmanager alert(s) to Discord", len(batch))
                 req = urllib.request.Request(
-                    self._webhook_url,
+                    self._effective_webhook(),
                     data=body,
                     headers={
                         "Content-Type": "application/json",

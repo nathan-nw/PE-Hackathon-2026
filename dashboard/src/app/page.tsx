@@ -1,3 +1,4 @@
+import { HappyChat } from "@/components/happy-chat";
 import { OpsDashboard } from "@/components/ops-dashboard";
 
 export default function Home() {
@@ -15,6 +16,7 @@ export default function Home() {
         </div>
       </header>
       <OpsDashboard />
+      <HappyChat />
     </div>
   );
 }

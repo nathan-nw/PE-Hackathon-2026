@@ -236,6 +236,10 @@ services:
       VISIBILITY_ALERTMANAGER_DISABLED: "1"
       # FastAPI log cache (Kafka → in-memory → dashboard /api/logs proxy)
       DASHBOARD_BACKEND_URL: http://dashboard-backend:8000
+      # Happy AI chat (OpenAI). Set in repo root .env or compose env.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # Optional override (default gpt-4o-mini in API route)
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
 
   dashboard-db:
     image: postgres:16-alpine
