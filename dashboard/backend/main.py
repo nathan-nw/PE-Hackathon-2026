@@ -31,6 +31,12 @@ from db import (
 from discord_alerter import DiscordAlerter
 from k6_runner import K6Runner
 from kafka_consumer import run_consumer
+from telemetry import (
+    aggregate_instance_stats,
+    prometheus_base,
+    prometheus_proxy,
+    telemetry_load_balancer_base,
+)
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO").upper(),
@@ -160,7 +166,23 @@ def health():
     n = count_kafka_logs()
     if n is not None:
         out["persisted_kafka_logs"] = n
+    out["telemetry"] = {
+        "prometheus_base": prometheus_base(),
+        "telemetry_load_balancer_base": telemetry_load_balancer_base(),
+    }
     return out
+
+
+@app.get("/api/telemetry/prometheus")
+def telemetry_prometheus(request: Request):
+    """Proxy PromQL to Prometheus (Ops Telemetry tab; used from Next.js via ``DASHBOARD_BACKEND_URL``)."""
+    return prometheus_proxy(request)
+
+
+@app.get("/api/telemetry/instance-stats")
+def telemetry_instance_stats():
+    """Unique Flask replica snapshots from ``GET /api/instance-stats`` via the load balancer."""
+    return aggregate_instance_stats()
 
 
 @app.get("/api/introspect/postgres")

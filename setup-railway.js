@@ -4,7 +4,7 @@
  * https://docs.railway.com/integrations/api
  *
  * - Ensures Git-linked app services exist (same repo, different root directories):
- *   url-shortener-a, url-shortener-b, load-balancer, user-frontend, dashboard, dashboard-backend.
+ *   url-shortener-a, url-shortener-b, load-balancer, user-frontend, dashboard, dashboard-backend, prometheus (optional Telemetry).
  * - Sets the deploy branch (default: staging) on each service's deployment trigger.
  * - Sets rootDirectory, railwayConfigFile, and watchPatterns on each service instance (matches each
  *   app folder's railway.toml — same paths as Settings → Root / Config-as-code / Watch paths).
@@ -33,7 +33,7 @@
  *   RAILWAY_KAFKA_BOOTSTRAP_VAR=KAFKA_URL  — variable name on the Kafka service for the broker URL (template differs by provider)
  *   DASHBOARD_RAILWAY_PROJECT_TOKEN=…  — optional; with SYNC_VARIABLES=1, upserts RAILWAY_PROJECT_TOKEN on the dashboard service (Ops tab GraphQL)
  *   DASHBOARD_RAILWAY_API_TOKEN=…  — optional; same but RAILWAY_API_TOKEN (account token); used only if project token is unset
- *   USER_FRONTEND_BACKEND_URL=…  — optional; with SYNC_VARIABLES=1, sets user-frontend BACKEND_URL to this literal (e.g. https://load-balancer-….up.railway.app) instead of the load-balancer service reference
+ *   USER_FRONTEND_BACKEND_URL=…  — optional; with SYNC_VARIABLES=1, sets user-frontend BACKEND_URL to this literal (e.g. https://load-balancer-….up.railway.app) instead of deriving https://<load-balancer RAILWAY_PUBLIC_DOMAIN> (Next.js reads BACKEND_URL at runtime; browser gets the base URL from GET /api/config)
  *   LOG_INGEST_TOKEN=…  — shared secret for HTTP log shipping when no Kafka plugin: set the same value on dashboard-backend and url-shortener replicas (required for /api/ingest on hosted)
  *   SKIP_LOG_INGEST_AUTO_TOKEN=1  — do not auto-generate LOG_INGEST_TOKEN when unset (SYNC_VARIABLES + no Kafka)
  *   LOG_INGEST_USE_PRIVATE_URL=1  — set LOG_INGEST_URL to http://<private>:PORT/api/ingest (default: https://<RAILWAY_PUBLIC_DOMAIN>/api/ingest — works through Railway edge)
@@ -207,6 +207,12 @@ const SERVICE_SPECS = [
     rootDirectory: "dashboard/backend",
     railwayConfigFile: "/dashboard/backend/railway.toml",
     watchPatterns: ["/dashboard/backend/**"],
+  },
+  {
+    name: "prometheus",
+    rootDirectory: "prometheus",
+    railwayConfigFile: "/prometheus/railway.toml",
+    watchPatterns: ["/prometheus/**"],
   },
   {
     name: "railway-watchdog",
@@ -640,6 +646,11 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
       ? {
           LOAD_TEST_TARGET_URL:
             "https://" + varRef("load-balancer", "RAILWAY_PUBLIC_DOMAIN"),
+          // Telemetry tab: aggregate /api/instance-stats (HTTPS edge is reliable between Railway services).
+          TELEMETRY_LOAD_BALANCER_URL:
+            "https://" + varRef("load-balancer", "RAILWAY_PUBLIC_DOMAIN"),
+          LOAD_BALANCER_URL:
+            "https://" + varRef("load-balancer", "RAILWAY_PUBLIC_DOMAIN"),
         }
       : byName.has("url-shortener-a")
         ? {
@@ -647,10 +658,23 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
               "https://" + varRef("url-shortener-a", "RAILWAY_PUBLIC_DOMAIN"),
           }
         : {}),
+    ...(byName.has("prometheus")
+      ? {
+          PROMETHEUS_URL:
+            "http://" +
+            varRef("prometheus", "RAILWAY_PRIVATE_DOMAIN") +
+            ":" +
+            varRef("prometheus", "PORT"),
+        }
+      : {}),
     ...(kafka ? { KAFKA_BOOTSTRAP_SERVERS: kafkaBootstrapRef(kafka) } : {}),
     ...(logIngestToken ? { LOG_INGEST_TOKEN: logIngestToken } : {}),
   };
   await upsert("dashboard-backend", dashboardBackendVars);
+
+  if (byName.has("prometheus")) {
+    await upsert("prometheus", { PORT: "9090" });
+  }
 
   const watchdogPoll = (process.env.RAILWAY_WATCHDOG_POLL_SEC || "").trim();
   const watchdogAutoRecoverRaw = (
@@ -754,14 +778,21 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
 
   if (byName.has("user-frontend")) {
     const explicitUf = (process.env.USER_FRONTEND_BACKEND_URL || "").trim().replace(/\/+$/, "");
-    const apiPublic = explicitUf
-      ? explicitUf
-      : byName.has("load-balancer")
-        ? "https://" + varRef("load-balancer", "RAILWAY_PUBLIC_DOMAIN")
-        : "https://" + varRef("url-shortener-a", "RAILWAY_PUBLIC_DOMAIN");
-    await upsert("user-frontend", {
-      BACKEND_URL: apiPublic,
-    });
+    let apiPublic = null;
+    if (explicitUf) {
+      apiPublic = explicitUf;
+    } else if (byName.has("load-balancer")) {
+      apiPublic = "https://" + varRef("load-balancer", "RAILWAY_PUBLIC_DOMAIN");
+    } else if (byName.has("url-shortener-a")) {
+      apiPublic = "https://" + varRef("url-shortener-a", "RAILWAY_PUBLIC_DOMAIN");
+    } else {
+      console.warn(
+        `(Variable sync) user-frontend: set USER_FRONTEND_BACKEND_URL in .env.railway.setup, or add a load-balancer / url-shortener-a service — skipping BACKEND_URL (Next.js needs it for /api/config → browser API calls).`
+      );
+    }
+    // PORT matches user-frontend/Dockerfile + Next standalone (cross-service ${{ user-frontend.PORT }} refs work).
+    const ufVars = { PORT: "3000", ...(apiPublic ? { BACKEND_URL: apiPublic } : {}) };
+    await upsert("user-frontend", ufVars);
   }
 }
 

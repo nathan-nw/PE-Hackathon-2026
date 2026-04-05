@@ -1,0 +1,10 @@
+# Root Directory: prometheus (repo root folder). Pair with Git-linked **prometheus** service on Railway.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+watchPatterns = ["/prometheus/**"]
+
+[deploy]
+healthcheckPath = "/-/ready"
+healthcheckTimeout = 30

@@ -322,6 +322,9 @@ services:
       # Ops tab: expand Compose ``db`` row → profile=main (same DB as url-shortener)
       INTROSPECT_DB_URL: postgresql://postgres:postgres@db:5432/hackathon_db
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      # Ops Telemetry tab: Next proxies PromQL + instance-stats via this service (see dashboard/backend/telemetry.py).
+      PROMETHEUS_URL: http://prometheus:9090
+      TELEMETRY_LOAD_BALANCER_URL: http://load-balancer:80
     depends_on:
       db:
         condition: service_healthy
@@ -329,6 +332,8 @@ services:
         condition: service_healthy
       dashboard-db:
         condition: service_healthy
+      prometheus:
+        condition: service_started
 
   user-frontend:
     build:
@@ -340,7 +345,7 @@ services:
     networks:
       - app_net
     ports:
-      - "3002:80"
+      - "3002:3000"
 
   # Polls the Docker API for this Compose project: starts exited containers (honors restart policy
   # unless WATCHDOG_ONLY_ALWAYS=1) and restarts persistently unhealthy ones. Skips itself.

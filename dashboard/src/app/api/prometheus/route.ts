@@ -1,17 +1,45 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { resolveDashboardBackendBase } from "@/lib/dashboard-backend-url";
+import { runtimeEnv } from "@/lib/server-runtime-env";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 function prometheusBase(): string {
-  if (process.env.VISIBILITY_PROMETHEUS_URL) {
-    return process.env.VISIBILITY_PROMETHEUS_URL.replace(/\/$/, "");
+  const v = runtimeEnv("VISIBILITY_PROMETHEUS_URL")?.trim();
+  if (v) {
+    return v.replace(/\/$/, "");
   }
   // next dev on the host: Compose publishes Prometheus on localhost.
   return "http://127.0.0.1:9090";
 }
 
 export async function GET(request: NextRequest) {
+  const qs = request.nextUrl.searchParams.toString();
+
+  const resolved = resolveDashboardBackendBase();
+  if (resolved.ok) {
+    let abortTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const controller = new AbortController();
+      abortTimer = setTimeout(() => controller.abort(), 15_000);
+      const res = await fetch(`${resolved.base}/api/telemetry/prometheus?${qs}`, {
+        signal: controller.signal,
+        next: { revalidate: 0 },
+        headers: { Accept: "application/json" },
+      });
+      if (res.ok) {
+        const body = (await res.json()) as unknown;
+        return NextResponse.json(body, { status: res.status });
+      }
+    } catch {
+      // Fall back to direct Prometheus (local Compose / next dev without backend).
+    } finally {
+      if (abortTimer) clearTimeout(abortTimer);
+    }
+  }
+
   const type = request.nextUrl.searchParams.get("type") || "query_range";
   const query = request.nextUrl.searchParams.get("query") || "";
   const start = request.nextUrl.searchParams.get("start") || "";

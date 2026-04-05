@@ -142,7 +142,9 @@ class LogCache:
             "global": {
                 "total_requests": total_requests,
                 "total_errors": total_errors,
-                "error_rate": round(total_errors / total_requests, 4) if total_requests else 0.0,
+                "error_rate": round(total_errors / total_requests, 4)
+                if total_requests
+                else 0.0,
             },
         }
 
@@ -199,7 +201,9 @@ class LogCache:
         except Exception as exc:
             logger.error("Final flush failed: %s", exc)
 
-    def get_error_buckets(self, window_minutes: int = 60, log_limit: int = 200) -> dict[str, Any]:
+    def get_error_buckets(
+        self, window_minutes: int = 60, log_limit: int = 200
+    ) -> dict[str, Any]:
         """Server-side per-minute error bucketing over the full cache.
 
         Returns:
@@ -256,12 +260,16 @@ class LogCache:
             if code >= 400:
                 bucket["errors"] += 1
                 code_str = str(code)
-                bucket["status_breakdown"][code_str] = bucket["status_breakdown"].get(code_str, 0) + 1
+                bucket["status_breakdown"][code_str] = (
+                    bucket["status_breakdown"].get(code_str, 0) + 1
+                )
                 error_logs.append(entry)
 
         # Compute error rates
         for b in buckets.values():
-            b["error_rate"] = round((b["errors"] / b["total"]) * 100, 2) if b["total"] > 0 else 0.0
+            b["error_rate"] = (
+                round((b["errors"] / b["total"]) * 100, 2) if b["total"] > 0 else 0.0
+            )
 
         sorted_buckets = sorted(buckets.values(), key=lambda x: x["timestamp"])
 
@@ -272,7 +280,9 @@ class LogCache:
         recent_buckets = sorted_buckets[-5:]
         recent_total = sum(b["total"] for b in recent_buckets)
         recent_errors = sum(b["errors"] for b in recent_buckets)
-        current_rate = round((recent_errors / recent_total) * 100, 2) if recent_total > 0 else 0.0
+        current_rate = (
+            round((recent_errors / recent_total) * 100, 2) if recent_total > 0 else 0.0
+        )
 
         # Sort error logs newest first, limit
         error_logs.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
@@ -353,10 +363,14 @@ class LogCache:
             if code >= 400:
                 bucket["errors"] += 1
                 cs = str(code)
-                bucket["status_breakdown"][cs] = bucket["status_breakdown"].get(cs, 0) + 1
+                bucket["status_breakdown"][cs] = (
+                    bucket["status_breakdown"].get(cs, 0) + 1
+                )
 
         for b in buckets.values():
-            b["error_rate"] = round((b["errors"] / b["total"]) * 100, 2) if b["total"] > 0 else 0.0
+            b["error_rate"] = (
+                round((b["errors"] / b["total"]) * 100, 2) if b["total"] > 0 else 0.0
+            )
 
         sorted_buckets = sorted(buckets.values(), key=lambda x: x["timestamp"])
         total_errors = sum(b["errors"] for b in sorted_buckets)
@@ -365,11 +379,13 @@ class LogCache:
         recent_buckets = sorted_buckets[-5:]
         recent_total = sum(b["total"] for b in recent_buckets)
         recent_errors = sum(b["errors"] for b in recent_buckets)
-        current_rate = round((recent_errors / recent_total) * 100, 2) if recent_total > 0 else 0.0
+        current_rate = (
+            round((recent_errors / recent_total) * 100, 2) if recent_total > 0 else 0.0
+        )
 
-        list_logs = sorted(filtered, key=lambda e: str(e.get("timestamp", "")), reverse=True)[
-            :log_limit
-        ]
+        list_logs = sorted(
+            filtered, key=lambda e: str(e.get("timestamp", "")), reverse=True
+        )[:log_limit]
 
         return {
             "buckets": sorted_buckets,

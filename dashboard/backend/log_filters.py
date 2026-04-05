@@ -50,7 +50,12 @@ def status_predicate(raw: str | None):
         return None
     s = str(raw).strip().lower()
     if s in ("2xx", "3xx", "4xx", "5xx"):
-        ranges = {"2xx": (200, 300), "3xx": (300, 400), "4xx": (400, 500), "5xx": (500, 600)}
+        ranges = {
+            "2xx": (200, 300),
+            "3xx": (300, 400),
+            "4xx": (400, 500),
+            "5xx": (500, 600),
+        }
         lo, hi = ranges[s]
 
         def _p(e: dict[str, Any]) -> bool:
@@ -85,7 +90,12 @@ def sql_status_condition(status_code: str | None) -> tuple[str, list[Any]]:
         return "", []
     s = str(status_code).strip().lower()
     if s in ("2xx", "3xx", "4xx", "5xx"):
-        ranges = {"2xx": (200, 300), "3xx": (300, 400), "4xx": (400, 500), "5xx": (500, 600)}
+        ranges = {
+            "2xx": (200, 300),
+            "3xx": (300, 400),
+            "4xx": (400, 500),
+            "5xx": (500, 600),
+        }
         lo, hi = ranges[s]
         return "status_code >= %s AND status_code < %s", [lo, hi]
     if "," in s:

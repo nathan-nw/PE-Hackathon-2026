@@ -74,7 +74,9 @@ def _db_config() -> dict[str, Any]:
         "host": host,
         "port": int(os.environ.get("DASHBOARD_DB_PORT", "5432")),
     }
-    sslmode = os.environ.get("PGSSLMODE", "").strip() or _default_sslmode_for_postgres_host(host)
+    sslmode = os.environ.get(
+        "PGSSLMODE", ""
+    ).strip() or _default_sslmode_for_postgres_host(host)
     if sslmode:
         cfg["sslmode"] = sslmode
     return cfg
@@ -120,7 +122,9 @@ def _connection_kwargs_explicit_db(dbname: str) -> dict[str, Any]:
         "host": host,
         "port": int(os.environ.get("DASHBOARD_DB_PORT", "5432")),
     }
-    sslmode = os.environ.get("PGSSLMODE", "").strip() or _default_sslmode_for_postgres_host(host)
+    sslmode = os.environ.get(
+        "PGSSLMODE", ""
+    ).strip() or _default_sslmode_for_postgres_host(host)
     if sslmode:
         cfg["sslmode"] = sslmode
     return cfg
@@ -318,20 +322,22 @@ def flush_logs(logs: list[dict[str, Any]]) -> int:
             with conn.cursor() as cur:
                 rows = []
                 for entry in logs:
-                    rows.append((
-                        entry.get("timestamp"),
-                        entry.get("level"),
-                        entry.get("logger"),
-                        entry.get("message"),
-                        str(entry.get("instance_id", "unknown")),
-                        entry.get("request_id"),
-                        entry.get("trace_id"),
-                        entry.get("method"),
-                        entry.get("path"),
-                        entry.get("status_code"),
-                        entry.get("duration_ms"),
-                        json.dumps(entry, ensure_ascii=False),
-                    ))
+                    rows.append(
+                        (
+                            entry.get("timestamp"),
+                            entry.get("level"),
+                            entry.get("logger"),
+                            entry.get("message"),
+                            str(entry.get("instance_id", "unknown")),
+                            entry.get("request_id"),
+                            entry.get("trace_id"),
+                            entry.get("method"),
+                            entry.get("path"),
+                            entry.get("status_code"),
+                            entry.get("duration_ms"),
+                            json.dumps(entry, ensure_ascii=False),
+                        )
+                    )
                 execute_values(
                     cur,
                     """INSERT INTO kafka_logs
@@ -353,7 +359,9 @@ def flush_logs(logs: list[dict[str, Any]]) -> int:
             conn.close()
 
 
-def query_error_buckets(window_minutes: int = 60, log_limit: int = 5000) -> dict[str, Any] | None:
+def query_error_buckets(
+    window_minutes: int = 60, log_limit: int = 5000
+) -> dict[str, Any] | None:
     """Query per-minute error buckets and recent error logs from the DB.
 
     Returns None if the query fails (caller should fall back to cache).
@@ -389,7 +397,9 @@ def query_error_buckets(window_minutes: int = 60, log_limit: int = 5000) -> dict
                         "timestamp": float(ts_ms),
                         "total": total,
                         "errors": errors,
-                        "error_rate": round((errors / total) * 100, 2) if total > 0 else 0.0,
+                        "error_rate": round((errors / total) * 100, 2)
+                        if total > 0
+                        else 0.0,
                         "status_breakdown": {},
                     }
 
@@ -500,7 +510,9 @@ def query_log_insights(
                         "timestamp": float(ts_ms),
                         "total": total,
                         "errors": errors,
-                        "error_rate": round((errors / total) * 100, 2) if total > 0 else 0.0,
+                        "error_rate": round((errors / total) * 100, 2)
+                        if total > 0
+                        else 0.0,
                         "status_breakdown": {},
                     }
 
@@ -562,15 +574,17 @@ def flush_stats(stats: dict[str, dict[str, Any]]) -> int:
             with conn.cursor() as cur:
                 rows = []
                 for instance_id, s in stats.items():
-                    rows.append((
-                        instance_id,
-                        s.get("request_count", 0),
-                        s.get("error_count", 0),
-                        s.get("avg_duration_ms", 0.0),
-                        s.get("error_rate", 0.0),
-                        json.dumps(s.get("status_codes", {})),
-                        json.dumps(s.get("levels", {})),
-                    ))
+                    rows.append(
+                        (
+                            instance_id,
+                            s.get("request_count", 0),
+                            s.get("error_count", 0),
+                            s.get("avg_duration_ms", 0.0),
+                            s.get("error_rate", 0.0),
+                            json.dumps(s.get("status_codes", {})),
+                            json.dumps(s.get("levels", {})),
+                        )
+                    )
                 execute_values(
                     cur,
                     """INSERT INTO instance_stats_snapshots
@@ -746,7 +760,9 @@ def fetch_incident_events(
                 rows = []
                 for row in cur.fetchall():
                     d = dict(zip(cols, row))
-                    d["created_at"] = d["created_at"].isoformat() if d["created_at"] else None
+                    d["created_at"] = (
+                        d["created_at"].isoformat() if d["created_at"] else None
+                    )
                     if isinstance(d["metadata"], str):
                         d["metadata"] = json.loads(d["metadata"])
                     rows.append(d)

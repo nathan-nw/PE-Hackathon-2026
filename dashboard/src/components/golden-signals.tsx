@@ -65,15 +65,32 @@ async function promQueryRange(query: string, rangeMin: number, step: string): Pr
 
 async function fetchInstanceStats(): Promise<InstanceStats[]> {
   const results: InstanceStats[] = [];
-  // Try both replicas via load balancer
+  const seen = new Set<string>();
+  const add = (row: InstanceStats) => {
+    const id = String(row.instance_id ?? "");
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    results.push(row);
+  };
+
+  // Backend may return one JSON array (aggregated); direct LB returns one replica per request.
   for (let i = 0; i < 4; i++) {
     try {
       const res = await fetch("/api/visibility/instance-stats");
       if (!res.ok) continue;
-      const data = await res.json();
-      if (data?.instance_id && !results.find((r) => r.instance_id === data.instance_id)) {
-        results.push(data);
+      const data = (await res.json()) as unknown;
+      if (Array.isArray(data)) {
+        for (const row of data) {
+          if (row && typeof row === "object" && "instance_id" in row) {
+            add(row as InstanceStats);
+          }
+        }
+        break;
       }
+      if (data && typeof data === "object" && data !== null && "instance_id" in data) {
+        add(data as InstanceStats);
+      }
+      if (results.length >= 2) break;
     } catch {
       break;
     }

@@ -28,12 +28,14 @@ def run_consumer(
     consumer = None
     for attempt in range(30):
         try:
-            consumer = Consumer({
-                "bootstrap.servers": bootstrap_servers,
-                "group.id": group_id,
-                "auto.offset.reset": "latest",
-                "enable.auto.commit": True,
-            })
+            consumer = Consumer(
+                {
+                    "bootstrap.servers": bootstrap_servers,
+                    "group.id": group_id,
+                    "auto.offset.reset": "latest",
+                    "enable.auto.commit": True,
+                }
+            )
             consumer.subscribe([topic])
             logger.info("Subscribed to %s at %s", topic, bootstrap_servers)
             break
