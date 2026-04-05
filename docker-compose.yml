@@ -57,6 +57,7 @@ services:
       retries: 10
       start_period: 30s
 
+  # Prints app-logs to container stdout only (debug). DB persistence is dashboard-backend → dashboard_db.kafka_logs.
   kafka-log-consumer:
     build:
       context: ./url-shortener

@@ -30,14 +30,27 @@ The Docker Compose stack is for **local** development. On [Railway](https://rail
 
 ## Dashboard logs in Postgres (`kafka_logs`)
 
-Without a Kafka plugin, **`url-shortener-a`** / **`url-shortener-b`** still ship structured logs to **`dashboard-backend`** over HTTP (`POST /api/ingest`). The backend persists them to the **`kafka_logs`** table in **`dashboard_db`** (same shape as the Kafka topic).
+### How this differs from `docker-compose.yml`
 
-- **`SYNC_VARIABLES=1`** sets **`LOG_INGEST_URL`** to the private **`dashboard-backend`** URL and **`LOG_INGEST_TOKEN`** on the API replicas and the backend.
-- If **`LOG_INGEST_TOKEN`** is not in **`.env.railway.setup`**, **`setup-railway.js`** generates one and saves it there (gitignored) so the next run stays consistent.
-- After the first sync with a new token, **redeploy** **`url-shortener-a`**, **`url-shortener-b`**, and **`dashboard-backend`** (or run variable sync with **`SKIP_DEPLOY_ON_VARIABLE_SYNC=0`** once) so containers pick up the variables.
-- Verify: **`GET https://<dashboard-backend>/api/health`** should show **`http_ingest_enabled`: true** and **`persisted_kafka_logs`** increasing after traffic and a flush interval (~30s).
+Compose runs **Zookeeper + one Kafka broker** (not multiple brokers for “separate logs”). The **`kafka-log-consumer`** service only **prints** `app-logs` to Docker stdout for debugging — it **does not** write to Postgres. **`dashboard-backend`** is the component that **consumes** `app-logs` (Kafka) or **`POST /api/ingest`** (HTTP) and **flushes** rows into **`dashboard_db.kafka_logs`**.
 
-To use a **Kafka / Redpanda** plugin instead, add the broker and run **`SYNC_VARIABLES=1`**; **`KAFKA_BOOTSTRAP_SERVERS`** is wired automatically when a Kafka-like service is detected. Set **`SKIP_LOG_INGEST_AUTO_TOKEN=1`** if you want HTTP ingest disabled when Kafka is absent.
+On Railway you **do not** add a separate “kafka-log-consumer” service for storage. Either:
+
+- **One** Kafka or Redpanda **plugin** (single cluster) + variable sync → same model as Compose (producers on the API replicas, consumer in **`dashboard-backend`**), or  
+- **No broker** → HTTP ingest only (below).
+
+### HTTP ingest (no Kafka plugin)
+
+Without a Kafka plugin, **`url-shortener-a`** / **`url-shortener-b`** ship structured logs to **`dashboard-backend`** with **`POST /api/ingest`**. The backend persists them to **`kafka_logs`** (same JSON shape as the Kafka topic).
+
+- **`SYNC_VARIABLES=1`** sets **`LOG_INGEST_URL`** to **`https://<dashboard-backend public host>/api/ingest`** (Railway edge; reliable from other services). It also sets **`LOG_INGEST_TOKEN`** on the API replicas and **`dashboard-backend`**. To use the older private URL instead, set **`LOG_INGEST_USE_PRIVATE_URL=1`** when running variable sync ( **`http://` + private domain + port** ).
+- If **`LOG_INGEST_TOKEN`** is not in **`.env.railway.setup`**, **`setup-railway.js`** can generate one and save it there (gitignored).
+- After changing ingest variables, **redeploy** **`url-shortener-a`**, **`url-shortener-b`**, and **`dashboard-backend`** (or run variable sync with **`SKIP_DEPLOY_ON_VARIABLE_SYNC=0`** once).
+- Verify: **`GET https://<dashboard-backend>/api/health`** → **`http_ingest_enabled`: true**; after traffic, **`persisted_kafka_logs`** increases following **`DB_FLUSH_INTERVAL`** (~30s).
+
+### Kafka plugin
+
+Add **one** broker plugin and run **`SYNC_VARIABLES=1`** — **`KAFKA_BOOTSTRAP_SERVERS`** is set when a Kafka-like service is detected. Use **`SKIP_LOG_INGEST_AUTO_TOKEN=1`** if you rely only on Kafka and do not want an HTTP ingest token generated when no broker is present.
 
 ## Seed CSV data (production)
 

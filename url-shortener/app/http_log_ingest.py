@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import queue
+import ssl
 import threading
 import urllib.error
 import urllib.request
@@ -54,8 +55,12 @@ class HttpLogIngestHandler(logging.Handler):
         if self._token:
             headers["X-Log-Ingest-Token"] = self._token
         req = urllib.request.Request(self._url, data=data, method="POST", headers=headers)
+        open_kw: dict = {"timeout": 15}
+        # Public HTTPS (e.g. Railway *.up.railway.app); omit context for plain http:// private URLs.
+        if self._url.lower().startswith("https://"):
+            open_kw["context"] = ssl.create_default_context()
         try:
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            with urllib.request.urlopen(req, **open_kw) as resp:
                 if resp.status >= 400 and self._failures < 5:
                     self._failures += 1
                     print(f"[HttpLogIngestHandler] ingest HTTP {resp.status}", flush=True)

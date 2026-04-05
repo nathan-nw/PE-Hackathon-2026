@@ -35,6 +35,7 @@
  *   USER_FRONTEND_BACKEND_URL=…  — optional; with SYNC_VARIABLES=1, sets user-frontend BACKEND_URL to this literal (e.g. https://load-balancer-….up.railway.app) instead of the load-balancer service reference
  *   LOG_INGEST_TOKEN=…  — shared secret for HTTP log shipping when no Kafka plugin: set the same value on dashboard-backend and url-shortener replicas (required for /api/ingest on hosted)
  *   SKIP_LOG_INGEST_AUTO_TOKEN=1  — do not auto-generate LOG_INGEST_TOKEN when unset (SYNC_VARIABLES + no Kafka)
+ *   LOG_INGEST_USE_PRIVATE_URL=1  — set LOG_INGEST_URL to http://<private>:PORT/api/ingest (default: https://<RAILWAY_PUBLIC_DOMAIN>/api/ingest — works through Railway edge)
  */
 
 const crypto = require("crypto");
@@ -476,13 +477,22 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
     ensureLogIngestTokenForHttpIngest(byName, kafka);
   }
   const logIngestToken = (process.env.LOG_INGEST_TOKEN || "").trim();
+  // Default: public HTTPS (edge terminates TLS and routes to the service). Private
+  // http://*.railway.internal:PORT often fails from other containers (DNS/IPv6/routing).
+  const usePrivateLogIngest =
+    process.env.LOG_INGEST_USE_PRIVATE_URL === "1" ||
+    process.env.LOG_INGEST_USE_PRIVATE_URL === "true";
   const logIngestUrl =
     byName.has("dashboard-backend") && !kafka && logIngestToken
-      ? "http://" +
-        varRef("dashboard-backend", "RAILWAY_PRIVATE_DOMAIN") +
-        ":" +
-        varRef("dashboard-backend", "PORT") +
-        "/api/ingest"
+      ? usePrivateLogIngest
+        ? "http://" +
+          varRef("dashboard-backend", "RAILWAY_PRIVATE_DOMAIN") +
+          ":" +
+          varRef("dashboard-backend", "PORT") +
+          "/api/ingest"
+        : "https://" +
+          varRef("dashboard-backend", "RAILWAY_PUBLIC_DOMAIN") +
+          "/api/ingest"
       : null;
 
   // url-shortener-a / url-shortener-b: same env as compose replicas (shared DB; distinct INSTANCE_ID).
