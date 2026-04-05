@@ -389,7 +389,7 @@ export function ChaosPanel() {
             {!watchdog
               ? "Loading watchdog status…"
               : watchdog.source === "railway"
-                ? "Polling Railway deployment status plus HTTP heartbeats to each service public URL (/live, /api/health, etc.). If the deployment is SUCCESS but the app stops responding, the watchdog redeploys after consecutive failed heartbeats (disable with RAILWAY_HEARTBEAT_RECOVER=0). CRASHED/FAILED still trigger auto-redeploy (disable with RAILWAY_WATCHDOG_AUTO_RECOVER=0). Chaos Kill is not auto-undone. Toasts fire on recoveries and heartbeat reboots; recent poll lines are below."
+                ? "HTTP heartbeats are for visibility only unless you set RAILWAY_HEARTBEAT_RECOVER=1 (off by default — probes are not reliable enough to auto-redeploy). Prefer Railway’s CRASHED/FAILED auto-redeploy (RAILWAY_WATCHDOG_AUTO_RECOVER, on by default). If you enable heartbeat recover, use RAILWAY_HEARTBEAT_RECOVER_COOLDOWN_MS (default 1h) and RAILWAY_HEARTBEAT_MAX_RECOVER (default 1). Toasts and log below."
                 : "Local stack: the compose-watchdog service scans Compose containers on each interval (starts exited tasks, restarts unhealthy ones). Alerts appear at the top-right when it acts."}
           </CardDescription>
         </CardHeader>

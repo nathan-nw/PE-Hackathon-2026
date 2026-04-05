@@ -29,22 +29,30 @@ function heartbeatMissThreshold(): number {
   return Number.isFinite(n) && n >= 1 ? n : 2;
 }
 
-/** Max heartbeat-triggered redeploys per deployment+status epoch; resets when Railway status or deployment id changes. */
+/** Max heartbeat-triggered redeploys per Railway deployment id epoch (default 1). */
 function heartbeatMaxRecoverPerEpoch(): number {
-  const n = parseInt(runtimeEnv("RAILWAY_HEARTBEAT_MAX_RECOVER") ?? "3", 10);
-  return Number.isFinite(n) && n >= 0 ? n : 3;
+  const n = parseInt(runtimeEnv("RAILWAY_HEARTBEAT_MAX_RECOVER") ?? "1", 10);
+  return Number.isFinite(n) && n >= 0 ? n : 1;
+}
+
+/** Min wall-clock time between heartbeat-triggered redeploys for the same service (stops restart storms). */
+function heartbeatRecoverCooldownMs(): number {
+  const n = parseInt(
+    runtimeEnv("RAILWAY_HEARTBEAT_RECOVER_COOLDOWN_MS") ?? "3600000",
+    10
+  );
+  return Number.isFinite(n) && n >= 0 ? n : 3_600_000;
 }
 
 type HeartbeatRecoverState = {
-  /** Last seen Railway deployment id for this service (epoch key). */
+  /** Epoch key: only when this changes do we reset recoveries / budget. */
   deploymentId: string;
-  /** Last seen deployment status string (epoch key — changes reset budget). */
   deploymentStatus: string;
   consecutiveMisses: number;
-  /** Heartbeat redeploys already triggered for this epoch. */
   recoveriesUsed: number;
-  /** Avoid spamming logs when budget is exhausted. */
   loggedBudgetExhausted: boolean;
+  /** One-shot log while waiting for heartbeat redeploy cooldown. */
+  loggedCooldownWait?: boolean;
 };
 
 const G = globalThis as typeof globalThis & {
@@ -58,8 +66,10 @@ const G = globalThis as typeof globalThis & {
   >;
   __railwayWatchdogLogTail?: string[];
   __railwayRecoverCooldown?: Map<string, number>;
-  /** Per Railway service: miss streak + redeploy budget; epoch resets when deployment id or status changes. */
+  /** Per Railway service: miss streak + redeploy budget; epoch resets only when deployment id changes. */
   __railwayHeartbeatRecoverState?: Map<string, HeartbeatRecoverState>;
+  /** Last successful heartbeat-triggered redeploy per service (wall-clock cooldown). */
+  __railwayHeartbeatLastRecoverAt?: Map<string, number>;
 };
 
 function pushRailwayLogLine(line: string) {
@@ -146,13 +156,16 @@ function railwayHeartbeatEnabled(): boolean {
   return true;
 }
 
+/**
+ * Opt-in only. HTTP probes are noisy (cold start, edge, TLS, wrong path) and are not a substitute
+ * for Railway’s own CRASHED/FAILED signals — auto-redeploy from heartbeat caused restart loops for many users.
+ */
 function railwayHeartbeatRecoverEnabled(): boolean {
   const raw = (runtimeEnv("RAILWAY_HEARTBEAT_RECOVER") ?? "").trim().toLowerCase();
-  if (!raw) return true;
-  if (raw === "0" || raw === "false" || raw === "no" || raw === "off") {
-    return false;
-  }
-  return true;
+  if (!raw) return false;
+  return (
+    raw === "1" || raw === "true" || raw === "yes" || raw === "on"
+  );
 }
 
 function heartbeatRecoverStateMap(): Map<string, HeartbeatRecoverState> {
@@ -160,6 +173,13 @@ function heartbeatRecoverStateMap(): Map<string, HeartbeatRecoverState> {
     G.__railwayHeartbeatRecoverState = new Map();
   }
   return G.__railwayHeartbeatRecoverState;
+}
+
+function heartbeatLastRecoverMap(): Map<string, number> {
+  if (!G.__railwayHeartbeatLastRecoverAt) {
+    G.__railwayHeartbeatLastRecoverAt = new Map();
+  }
+  return G.__railwayHeartbeatLastRecoverAt;
 }
 
 function recoverCooldownMap(): Map<string, number> {
@@ -196,8 +216,10 @@ export async function fetchRailwayWatchdogPayload(): Promise<WatchdogPayload> {
   const environmentId = runtimeEnv("RAILWAY_ENVIRONMENT_ID") ?? "";
   const autoRecover = railwayWatchdogAutoRecoverEnabled() && Boolean(environmentId);
   const hbStateMap = heartbeatRecoverStateMap();
+  const hbLastRecover = heartbeatLastRecoverMap();
   const hbThreshold = heartbeatMissThreshold();
   const hbMaxRecover = heartbeatMaxRecoverPerEpoch();
+  const hbCooldownMs = heartbeatRecoverCooldownMs();
   let hbProbes = 0;
   let hbOk = 0;
   let hbFail = 0;
@@ -211,20 +233,21 @@ export async function fetchRailwayWatchdogPayload(): Promise<WatchdogPayload> {
     const onlineNow = row.railwayOnlineStatus;
     const before = prev.get(sid);
 
-    // New epoch when Railway deployment id or status changes — resets miss streak and redeploy budget.
+    // Epoch resets only when Railway deployment *id* changes — not status (SUCCESS↔DEPLOYING flicker
+    // was resetting budgets and causing redeploy loops).
     let hbSt = hbStateMap.get(sid);
-    if (
-      !hbSt ||
-      hbSt.deploymentId !== depId ||
-      hbSt.deploymentStatus !== cur
-    ) {
+    if (!hbSt || hbSt.deploymentId !== depId) {
       hbSt = {
         deploymentId: depId,
         deploymentStatus: cur,
         consecutiveMisses: 0,
         recoveriesUsed: 0,
         loggedBudgetExhausted: false,
+        loggedCooldownWait: false,
       };
+    } else {
+      hbSt.deploymentStatus = cur;
+      if (hbSt.loggedCooldownWait === undefined) hbSt.loggedCooldownWait = false;
     }
 
     const probeUrl = buildHeartbeatProbeUrl(row.railwayPublicUrl, row.service);
@@ -234,6 +257,7 @@ export async function fetchRailwayWatchdogPayload(): Promise<WatchdogPayload> {
       if (pr.ok) {
         hbOk++;
         hbSt.consecutiveMisses = 0;
+        hbSt.loggedCooldownWait = false;
       } else {
         hbFail++;
         if (
@@ -245,24 +269,31 @@ export async function fetchRailwayWatchdogPayload(): Promise<WatchdogPayload> {
           hbSt.consecutiveMisses += 1;
           const canRecover =
             hbMaxRecover > 0 && hbSt.recoveriesUsed < hbMaxRecover;
+          const lastHbRecover = hbLastRecover.get(sid) ?? 0;
+          const cooldownOk =
+            hbCooldownMs === 0 ||
+            Date.now() - lastHbRecover >= hbCooldownMs;
           if (
             hbSt.consecutiveMisses >= hbThreshold &&
-            canRecover
+            canRecover &&
+            cooldownOk
           ) {
             try {
               await railwayServiceInstanceDeployLatest(environmentId, sid);
               hbSt.recoveriesUsed += 1;
               hbSt.consecutiveMisses = 0;
               hbSt.loggedBudgetExhausted = false;
+              hbSt.loggedCooldownWait = false;
+              hbLastRecover.set(sid, Date.now());
               events.push({
                 id: `${sid}-heartbeat-${Date.now()}`,
                 at: now,
                 service: name,
                 kind: "heartbeat_recover",
-                message: `HTTP heartbeat failed ${hbThreshold}+ time(s) for ${name} (deployment ${cur}); serviceInstanceDeploy(latest) (${hbSt.recoveriesUsed}/${hbMaxRecover} this epoch).`,
+                message: `HTTP heartbeat failed ${hbThreshold}+ time(s) for ${name} (deployment ${cur}); serviceInstanceDeploy(latest) (${hbSt.recoveriesUsed}/${hbMaxRecover} this deployment id). Next allowed after ${Math.round(hbCooldownMs / 60000)}m cooldown.`,
               });
               pushRailwayLogLine(
-                `watchdog: heartbeat redeploy ${name} (epoch recoveries ${hbSt.recoveriesUsed}/${hbMaxRecover}) → serviceInstanceDeploy`
+                `watchdog: heartbeat redeploy ${name} (epoch ${hbSt.recoveriesUsed}/${hbMaxRecover}) → serviceInstanceDeploy; cooldown ${hbCooldownMs}ms`
               );
             } catch (e) {
               const msg = e instanceof Error ? e.message : String(e);
@@ -272,12 +303,22 @@ export async function fetchRailwayWatchdogPayload(): Promise<WatchdogPayload> {
             }
           } else if (
             hbSt.consecutiveMisses >= hbThreshold &&
+            canRecover &&
+            !cooldownOk &&
+            !(hbSt.loggedCooldownWait ?? false)
+          ) {
+            hbSt.loggedCooldownWait = true;
+            pushRailwayLogLine(
+              `watchdog: heartbeat recover waiting on cooldown (${Math.round((hbCooldownMs - (Date.now() - lastHbRecover)) / 1000)}s left, ${Math.round(hbCooldownMs / 60000)}m total); RAILWAY_HEARTBEAT_RECOVER_COOLDOWN_MS`
+            );
+          } else if (
+            hbSt.consecutiveMisses >= hbThreshold &&
             !canRecover &&
             !hbSt.loggedBudgetExhausted
           ) {
             hbSt.loggedBudgetExhausted = true;
             pushRailwayLogLine(
-              `watchdog: heartbeat recover paused for ${name} — max ${hbMaxRecover} redeploy(s) for deployment ${depId || "?"}/${cur}; resets when status or deployment changes.`
+              `watchdog: heartbeat recover paused for ${name} — max ${hbMaxRecover} redeploy(s) for deployment id ${depId || "?"}; resets when Railway assigns a new deployment.`
             );
           }
         } else if (!isHealthy(cur)) {
@@ -394,6 +435,9 @@ export async function fetchRailwayWatchdogPayload(): Promise<WatchdogPayload> {
   }
   for (const k of [...hbStateMap.keys()]) {
     if (!ids.has(k)) hbStateMap.delete(k);
+  }
+  for (const k of [...hbLastRecover.keys()]) {
+    if (!ids.has(k)) hbLastRecover.delete(k);
   }
 
   const eventsOut = events.slice(0, 30);
