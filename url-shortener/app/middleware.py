@@ -12,13 +12,19 @@ import uuid
 from flask import g, jsonify, request
 from peewee import OperationalError as PeeweeOperationalError
 
-from app.instance_info import get_instance_id, increment_request_count, record_request_latency_ms
+from app.instance_info import (
+    get_instance_id,
+    increment_request_count,
+    record_request_latency_ms,
+)
 from app.metrics import HTTP_REQUEST_DURATION, HTTP_REQUESTS
 
 logger = logging.getLogger(__name__)
 
 # Paths not counted toward avg latency / requests_observed in /api/instance-stats (still in Prometheus).
-_EXCLUDE_FROM_INSTANCE_STATS = frozenset({"/api/instance-stats", "/metrics", "/health", "/live", "/ready"})
+_EXCLUDE_FROM_INSTANCE_STATS = frozenset(
+    {"/api/instance-stats", "/metrics", "/health", "/live", "/ready"}
+)
 
 
 def register_middleware(app):
@@ -113,7 +119,12 @@ def register_middleware(app):
     @app.errorhandler(Exception)
     def _unhandled_error(e):
         logger.exception("Unhandled exception: %s", e)
-        return jsonify({
-            "error": "Internal server error",
-            "detail": "An unexpected error occurred. Please try again.",
-        }), 500
+        return (
+            jsonify(
+                {
+                    "error": "Internal server error",
+                    "detail": "An unexpected error occurred. Please try again.",
+                }
+            ),
+            500,
+        )

@@ -23,6 +23,7 @@ def _validate_url(url_string):
         return "original_url must include a valid domain"
     return None
 
+
 urls_bp = Blueprint("urls", __name__)
 
 
@@ -38,10 +39,15 @@ def generate_short_code(length=6):
 def create_short_url():
     data = request.get_json(silent=True)
     if data is None:
-        return jsonify({
-            "error": "Invalid or missing JSON body",
-            "hint": "Send a JSON object with Content-Type: application/json",
-        }), 400
+        return (
+            jsonify(
+                {
+                    "error": "Invalid or missing JSON body",
+                    "hint": "Send a JSON object with Content-Type: application/json",
+                }
+            ),
+            400,
+        )
     if not isinstance(data, dict):
         return jsonify({"error": "Request body must be a JSON object"}), 400
     if "original_url" not in data or "user_id" not in data:
@@ -133,10 +139,15 @@ def update_url(url_id):
 
     data = request.get_json(silent=True)
     if data is None:
-        return jsonify({
-            "error": "Invalid or missing JSON body",
-            "hint": "Send a JSON object with Content-Type: application/json",
-        }), 400
+        return (
+            jsonify(
+                {
+                    "error": "Invalid or missing JSON body",
+                    "hint": "Send a JSON object with Content-Type: application/json",
+                }
+            ),
+            400,
+        )
     if not isinstance(data, dict) or len(data) == 0:
         return jsonify({"error": "No data provided"}), 400
 
@@ -212,7 +223,9 @@ def list_url_events(url_id):
     except Url.DoesNotExist:
         return jsonify({"error": "URL not found"}), 404
 
-    events = Event.select().where(Event.url_id == url_id).order_by(Event.timestamp.desc())
+    events = (
+        Event.select().where(Event.url_id == url_id).order_by(Event.timestamp.desc())
+    )
     return jsonify([model_to_dict(e, backrefs=False) for e in events])
 
 
