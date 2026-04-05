@@ -19,4 +19,5 @@ Below is visual confirmation of pytest successfully executing and persisting dat
 
 *(To capture the perfect screenshot for this requirement, open your terminal at the root and run `uv run pytest tests/url_shortener/routes/test_urls.py -v` to show all the explicit integration route checks!)*
 
-*[Insert Screenshot Here]*
+<img width="1166" height="779" alt="Screenshot 2026-04-05 at 9 51 41 AM" src="https://github.com/user-attachments/assets/d6a336aa-06c3-4985-ae00-a6319666c46b" />
+
