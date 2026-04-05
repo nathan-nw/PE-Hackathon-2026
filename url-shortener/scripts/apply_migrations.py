@@ -47,9 +47,7 @@ def _connect() -> PGConnection:
     Railway Postgres often exposes PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE on the
     plugin; referencing those into this service works if DATABASE_URL is not set.
     """
-    timeout = int(
-        os.environ.get("DATABASE_CONNECT_TIMEOUT_SEC", str(_DEFAULT_CONNECT_TIMEOUT_SEC))
-    )
+    timeout = int(os.environ.get("DATABASE_CONNECT_TIMEOUT_SEC", str(_DEFAULT_CONNECT_TIMEOUT_SEC)))
     url = os.environ.get("DATABASE_URL", "").strip()
     if url:
         return psycopg2.connect(_with_connect_timeout(url, timeout))
@@ -59,11 +57,7 @@ def _connect() -> PGConnection:
         raise RuntimeError("apply_migrations: _connect() requires DATABASE_URL or PGHOST/DATABASE_HOST")
 
     port = int(os.environ.get("PGPORT") or os.environ.get("DATABASE_PORT", "5432"))
-    dbname = (
-        os.environ.get("PGDATABASE")
-        or os.environ.get("DATABASE_NAME")
-        or "hackathon_db"
-    )
+    dbname = os.environ.get("PGDATABASE") or os.environ.get("DATABASE_NAME") or "hackathon_db"
     user = os.environ.get("PGUSER") or os.environ.get("DATABASE_USER", "postgres")
     password = os.environ.get("PGPASSWORD") or os.environ.get("DATABASE_PASSWORD", "")
     kwargs: dict = {

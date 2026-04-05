@@ -5,7 +5,7 @@
  *
  * - Ensures Git-linked app services exist (same repo, different root directories):
  *   url-shortener-a, url-shortener-b, load-balancer, user-frontend, dashboard, dashboard-backend.
- * - Sets the deploy branch (default: feature-hosting) on each service's deployment trigger.
+ * - Sets the deploy branch (default: staging) on each service's deployment trigger.
  * - Sets rootDirectory on each service instance for the environment in .railway/config.json.
  *
  * Auth: use an account API token from https://railway.com/account/tokens
@@ -19,7 +19,7 @@
  *
  * Optional env:
  *   RAILWAY_REPO=nathan-nw/PE-Hackathon-2026
- *   RAILWAY_BRANCH=feature-hosting
+ *   RAILWAY_BRANCH=staging
  *   DRY_RUN=1
  *   SKIP_REDEPLOY=1  — skip serviceInstanceDeploy after configuration
  *   FORCE_CLEAR_PREDEPLOY=1  — set preDeployCommand to [] even when already empty (rare)
@@ -158,7 +158,7 @@ function ensureLogIngestTokenForHttpIngest(byName, kafkaService) {
 const ENDPOINT = "https://backboard.railway.com/graphql/v2";
 
 const DEFAULT_REPO = "nathan-nw/PE-Hackathon-2026";
-const DEFAULT_BRANCH = "feature-hosting";
+const DEFAULT_BRANCH = "staging";
 
 /** @type {{ name: string, rootDirectory: string }[]} */
 const APP_SERVICES = [

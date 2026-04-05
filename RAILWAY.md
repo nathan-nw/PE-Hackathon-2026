@@ -12,7 +12,7 @@ The Docker Compose stack is for **local** development. On [Railway](https://rail
    $env:RAILWAY_API_TOKEN = "your-account-token"
    node setup-railway.js
    ```
-   This sets **`feature-hosting`** as the deploy branch and **Root Directory** for **`url-shortener-a`**, **`url-shortener-b`**, **`load-balancer`**, `user-frontend`, `dashboard`, and `dashboard-backend` (same NGINX + two-replica layout as `docker-compose.yml`). Override with `RAILWAY_BRANCH` / `RAILWAY_REPO` if needed. Use `DRY_RUN=1` to print actions only.
+   This sets **`staging`** as the deploy branch and **Root Directory** for **`url-shortener-a`**, **`url-shortener-b`**, **`load-balancer`**, `user-frontend`, `dashboard`, and `dashboard-backend` (same NGINX + two-replica layout as `docker-compose.yml`). Override with `RAILWAY_BRANCH` / `RAILWAY_REPO` if needed. Use `DRY_RUN=1` to print actions only.
 5. **Internal DB / Redis references (optional):** with the same token, run:
    ```powershell
    $env:RAILWAY_API_TOKEN = "your-account-token"
