@@ -6,11 +6,29 @@
  * Set `WATCHDOG_DISCORD_ALWAYS=1` to enable from the dashboard server (local dev).
  *
  * Uses WATCHDOG_DISCORD_WEBHOOK_URL if set, else DISCORD_WEBHOOK_URL (same as dashboard-backend alerts).
+ *
+ * Webhook messages use the same **username** and **avatar_url** as the Happy ops agent (`happy-branding.ts`).
+ * Override with `WATCHDOG_DISCORD_USERNAME` / `WATCHDOG_DISCORD_AVATAR_URL` (or `HAPPY_AGENT_*`).
  */
 
+import { HAPPY_AGENT_AVATAR_URL, HAPPY_AGENT_NAME } from "../happy-branding";
 import type { WatchdogEvent, WatchdogEventKind } from "./watchdog-types";
 
 const UA = "PE-Hackathon-Watchdog/1.0";
+
+function happyWebhookIdentity(): { username: string; avatar_url: string } {
+  const username = (
+    process.env.WATCHDOG_DISCORD_USERNAME ||
+    process.env.HAPPY_AGENT_DISCORD_USERNAME ||
+    HAPPY_AGENT_NAME
+  ).trim();
+  const avatar_url = (
+    process.env.WATCHDOG_DISCORD_AVATAR_URL ||
+    process.env.HAPPY_AGENT_AVATAR_URL ||
+    HAPPY_AGENT_AVATAR_URL
+  ).trim();
+  return { username, avatar_url };
+}
 
 function discordNotifyAllowed(): boolean {
   if ((process.env.WATCHDOG_DISCORD_NOTIFY || "").trim() === "0") {
@@ -68,6 +86,7 @@ async function postDiscord(embeds: Record<string, unknown>[]): Promise<void> {
     batches.push(embeds.slice(i, i + 10));
   }
 
+  const identity = happyWebhookIdentity();
   for (const batch of batches) {
     const res = await fetch(url, {
       method: "POST",
@@ -75,7 +94,11 @@ async function postDiscord(embeds: Record<string, unknown>[]): Promise<void> {
         "Content-Type": "application/json",
         "User-Agent": UA,
       },
-      body: JSON.stringify({ embeds: batch }),
+      body: JSON.stringify({
+        username: identity.username,
+        avatar_url: identity.avatar_url,
+        embeds: batch,
+      }),
     });
     if (!res.ok) {
       const t = await res.text().catch(() => "");
@@ -103,34 +126,34 @@ export async function notifyDiscordForWatchdogEvents(
 
   if (failure.length > 0) {
     embeds.push({
-      title: "Watchdog: deployment exited / stopped",
+      title: "Heads up — a deployment stopped",
       description:
         failure.map((e) => `**${e.service}** — ${e.message}`).join("\n\n") ||
         "A deployment stopped or was removed.",
       color: EMBED_RED,
-      footer: { text: "Railway watchdog" },
+      footer: { text: "Happy · Railway watchdog" },
     });
   }
 
   if (inProgress.length > 0) {
     embeds.push({
-      title: "Watchdog: deploy / recovery in progress",
+      title: "Deploy / recovery in progress",
       description:
         inProgress.map((e) => `**${e.service}** (${e.kind}) — ${e.message}`).join("\n\n") ||
-        "A rollout or recovery is in progress.",
+        "I'm watching a rollout or recovery.",
       color: EMBED_YELLOW,
-      footer: { text: "Railway watchdog" },
+      footer: { text: "Happy · Railway watchdog" },
     });
   }
 
   if (onlineOk.length > 0) {
     embeds.push({
-      title: "Watchdog: deployment online",
+      title: "Back online",
       description:
         onlineOk.map((e) => `**${e.service}** — ${e.message}`).join("\n\n") ||
-        "Service is online with a healthy deployment.",
+        "Service is healthy again.",
       color: EMBED_GREEN,
-      footer: { text: "Railway watchdog" },
+      footer: { text: "Happy · Railway watchdog" },
     });
   }
 

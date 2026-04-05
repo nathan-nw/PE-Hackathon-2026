@@ -10,9 +10,7 @@ import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-
-const HAPPY_AVATAR_URL =
-  "https://scontent-yyz1-1.xx.fbcdn.net/v/t39.30808-1/309431358_839585507201666_5985498661297484474_n.jpg?stp=dst-jpg_s200x200_tt6&_nc_cat=108&ccb=1-7&_nc_sid=2d3e12&_nc_ohc=KFjupLz53d4Q7kNvwFbX2BC&_nc_oc=AdoaeOOiDneeCg_USvKqpjpNxM5PNb9H122XsKrB3IJBjqw6DL9FYOQofTuBt7cYl4A&_nc_zt=24&_nc_ht=scontent-yyz1-1.xx&_nc_gid=SgAVuAma207_wNxbkFIvug&_nc_ss=7a3a8&oh=00_Af3p3gPSNBSYzggOstJkRUDatjpjl2dKqPiWxl-GsG6YfA&oe=69D83B42";
+import { HAPPY_AGENT_AVATAR_URL } from "@/lib/happy-branding";
 
 export const HAPPY_WELCOME =
   "**Hi — I'm Happy.** I’m wired into this dashboard’s APIs: **logs**, **errors**, **telemetry**, **Docker/Railway**, **alerts**, **incidents**, **k6** load tests, and **Postgres** introspection.\n\n" +
@@ -171,7 +169,7 @@ export function HappyChat() {
         )}
       >
         <Image
-          src={HAPPY_AVATAR_URL}
+          src={HAPPY_AGENT_AVATAR_URL}
           alt="Happy"
           width={60}
           height={60}
@@ -199,7 +197,7 @@ export function HappyChat() {
         <header className="flex shrink-0 items-center gap-3 border-b border-border bg-muted px-4 py-3.5">
           <div className="relative shrink-0">
             <Image
-              src={HAPPY_AVATAR_URL}
+              src={HAPPY_AGENT_AVATAR_URL}
               alt="Happy"
               width={44}
               height={44}

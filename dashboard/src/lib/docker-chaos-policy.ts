@@ -5,8 +5,8 @@
 
 import { runtimeEnv } from "@/lib/server-runtime-env";
 
-/** Never kill the Next.js Ops dashboard container (would disconnect the UI). */
-const BLOCKED_SERVICES = new Set(["dashboard"]);
+/** Never kill these — would disconnect Ops UI or stop the Railway watchdog worker. */
+const BLOCKED_SERVICES = new Set(["dashboard", "railway-watchdog"]);
 
 /** When CHAOS_ALLOWED_SERVICES is unset, only these Compose services may be killed. */
 const DEFAULT_ALLOWED_SERVICES = new Set([

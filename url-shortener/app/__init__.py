@@ -14,7 +14,7 @@ from flask_cors import CORS  # noqa: E402
 
 from app.cache import init_cache  # noqa: E402
 from app.circuit_breaker import db_circuit_breaker  # noqa: E402
-from app.database import db, init_db  # noqa: E402
+from app.database import db, init_db, sync_postgres_serial_sequences  # noqa: E402
 from app.instance_info import get_instance_id, get_instance_stats  # noqa: E402
 from app.logging_config import configure_logging  # noqa: E402
 from app.metrics import metrics_response  # noqa: E402
@@ -99,6 +99,14 @@ def create_app():
                     )
                     if attempt < 2:
                         time.sleep(0.5)
+
+            # Align SERIAL sequences with MAX(id) after CSV seed / explicit ids. Without this,
+            # nextval can lag behind existing rows → duplicate key on urls_pkey (5xx + Discord spam).
+            # Request-path sync in database.init_db skips /live, /metrics, etc., so startup sync is required.
+            try:
+                sync_postgres_serial_sequences()
+            except Exception as e:
+                logger.warning("PostgreSQL serial sequences sync at startup failed: %s", e)
 
     # Register before API blueprints so `/`, `/health`, and `/metrics` are not shadowed by `/<short_code>`.
     @app.route("/favicon.ico")

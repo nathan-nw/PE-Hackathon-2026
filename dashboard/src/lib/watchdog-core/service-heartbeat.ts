@@ -16,9 +16,29 @@
  * against a Next app fails repeatedly → false "exited" lifecycle → auto-redeploy loops. Use
  * `heartbeatInternalPortForService()` below; override with `RAILWAY_HEARTBEAT_INTERNAL_PORT` (8080 stack)
  * or `RAILWAY_HEARTBEAT_NEXTJS_INTERNAL_PORT` (default 3000).
+ *
+ * **`heartbeat_exit_redeploy`** for Next.js is **off** unless `RAILWAY_HEARTBEAT_EXIT_REDEPLOY_NEXTJS=1`
+ * (`railway-watchdog-tick.ts`) so flaky probes do not constantly redeploy the dashboard.
+ *
+ * The **dashboard** service is never HTTP-probed (`isRailwayWatchdogSkippedService`) — it hosts this UI.
  */
 
 import { runtimeEnv } from "./server-runtime-env";
+
+/**
+ * Railway watchdog must not HTTP-probe these (e.g. the dashboard serves this UI).
+ * Always includes **dashboard**. Append more via `RAILWAY_WATCHDOG_SKIP_SERVICES` (comma-separated).
+ */
+export function isRailwayWatchdogSkippedService(serviceName: string): boolean {
+  const s = serviceName.trim().toLowerCase();
+  if (!s) return false;
+  if (s === "dashboard") return true;
+  const raw = (runtimeEnv("RAILWAY_WATCHDOG_SKIP_SERVICES") ?? "").trim();
+  if (!raw) return false;
+  return raw
+    .split(",")
+    .some((p) => p.trim().toLowerCase() === s);
+}
 
 /** Services with no meaningful public HTTP probe (data / metrics / internal). */
 const INTERNAL_HTTP_SERVICES = new Set(
@@ -43,8 +63,9 @@ export function heartbeatPathForService(serviceName: string): string | null {
   if (INTERNAL_HTTP_SERVICES.has(s)) return null;
   if (s.includes("postgres") && !s.includes("shortener")) return null;
 
+  if (isRailwayWatchdogSkippedService(serviceName)) return null;
+
   if (s === "dashboard-backend") return "/api/health";
-  if (s === "dashboard") return "/api/health";
   if (s === "user-frontend") return "/";
   if (s === "load-balancer" || s.startsWith("url-shortener")) return "/live";
   if (s === "railway-watchdog") return "/health";

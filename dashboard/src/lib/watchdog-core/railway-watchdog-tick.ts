@@ -12,6 +12,7 @@ import {
 import { runtimeEnv } from "./server-runtime-env";
 import {
   buildHeartbeatProbeUrl,
+  isRailwayWatchdogSkippedService,
   pingHeartbeatUrl,
   shouldUsePrivateRailwayHeartbeat,
   type HeartbeatPingResult,
@@ -192,6 +193,24 @@ function railwayHeartbeatRecoverEnabled(): boolean {
   );
 }
 
+/**
+ * `heartbeat_exit_redeploy` redeploys when HTTP liveness fails while GraphQL still says SUCCESS.
+ * Next.js services listen on :3000 internally; wrong-port or flaky probes caused false "exited"
+ * and redeploy loops. Opt-in with `RAILWAY_HEARTBEAT_EXIT_REDEPLOY_NEXTJS=1`.
+ */
+function heartbeatExitRedeployAllowedForService(serviceName: string): boolean {
+  const s = serviceName.trim().toLowerCase();
+  if (s === "dashboard" || s === "user-frontend") {
+    const raw = (runtimeEnv("RAILWAY_HEARTBEAT_EXIT_REDEPLOY_NEXTJS") ?? "")
+      .trim()
+      .toLowerCase();
+    return (
+      raw === "1" || raw === "true" || raw === "yes" || raw === "on"
+    );
+  }
+  return true;
+}
+
 /** Previous tick looked like an active healthy deployment. */
 function wasActivelyDeployed(before: WatchdogPrevEntry): boolean {
   const d = before.deploymentId?.trim();
@@ -276,7 +295,8 @@ export async function runRailwayWatchdogTick(
     const before = prev.get(sid);
 
     if (
-      railwayHeartbeatEnabled()
+      !isRailwayWatchdogSkippedService(name)
+      && railwayHeartbeatEnabled()
       && railwayHeartbeatExitRedeployEnabled()
       && autoRecover
       && environmentId
@@ -449,7 +469,9 @@ export async function runRailwayWatchdogTick(
         depId,
         onlineNow,
         hbSynth,
-        { scheduleRedeem: true }
+        {
+          scheduleRedeem: heartbeatExitRedeployAllowedForService(name),
+        }
       );
       hbStateMap.set(sid, hbSt);
     } else if (railwayHeartbeatEnabled()) {

@@ -13,6 +13,7 @@ import time
 import uuid
 
 from flask import g, jsonify, request
+from peewee import IntegrityError as PeeweeIntegrityError
 from peewee import OperationalError as PeeweeOperationalError
 
 from app.dynamic_rate_limit import get_current_rate_limit, record_request
@@ -191,6 +192,20 @@ def register_middleware(app):
     def _internal_error(e):
         logger.error(f"Internal server error: {e}")
         return jsonify({"error": "Internal server error"}), 500
+
+    @app.errorhandler(PeeweeIntegrityError)
+    def _integrity_error(e):
+        """Duplicate key / FK violations — avoid 500 + Discord alert spam; client can retry."""
+        logger.warning("Database integrity constraint: %s", e)
+        return (
+            jsonify(
+                {
+                    "error": "Conflict",
+                    "detail": "A database constraint was violated. Try again.",
+                }
+            ),
+            409,
+        )
 
     @app.errorhandler(503)
     def _service_unavailable(e):
