@@ -5,7 +5,12 @@ import {
   isServiceKillAllowed,
 } from "@/lib/docker-chaos-policy";
 import { getDockerConnectionOptions } from "@/lib/docker-options";
-import { railwayIdsConfigured } from "@/lib/railway-visibility";
+import {
+  getRailwayChaosRowForService,
+  railwayDeploymentStop,
+  railwayIdsConfigured,
+  railwayVisibilityConfigured,
+} from "@/lib/railway-visibility";
 import { runtimeEnv } from "@/lib/server-runtime-env";
 
 export const runtime = "nodejs";
@@ -18,21 +23,13 @@ async function getDocker() {
 
 type KillBody = {
   containerId?: string;
-  /** Must match compose service name (case-insensitive) to confirm intent. */
+  /** Hosted dashboard: Railway service UUID from the visibility table. */
+  railwayServiceId?: string;
+  /** Must match compose / Railway service name (case-insensitive) to confirm intent. */
   confirmService?: string;
 };
 
 export async function POST(request: NextRequest) {
-  if (railwayIdsConfigured()) {
-    return NextResponse.json(
-      {
-        error:
-          "Chaos kill is only supported when the dashboard talks to the local Docker Engine (Compose). Not available for Railway visibility.",
-      },
-      { status: 400 }
-    );
-  }
-
   if (!chaosKillEnabled()) {
     return NextResponse.json(
       {
@@ -48,16 +45,106 @@ export async function POST(request: NextRequest) {
     body = (await request.json()) as KillBody;
   } catch {
     return NextResponse.json(
-      { error: "JSON body required with containerId and confirmService" },
+      {
+        error:
+          "JSON body required with confirmService and either containerId (Docker) or railwayServiceId (Railway)",
+      },
       { status: 400 }
     );
   }
 
-  const containerId = (body.containerId ?? "").trim();
   const confirmService = (body.confirmService ?? "").trim().toLowerCase();
-  if (!containerId || !confirmService) {
+  if (!confirmService) {
     return NextResponse.json(
-      { error: "containerId and confirmService are required" },
+      { error: "confirmService is required" },
+      { status: 400 }
+    );
+  }
+
+  if (railwayIdsConfigured()) {
+    if (!railwayVisibilityConfigured()) {
+      return NextResponse.json(
+        {
+          error:
+            "Railway API token missing — set RAILWAY_PROJECT_TOKEN or RAILWAY_API_TOKEN on the dashboard service.",
+        },
+        { status: 503 }
+      );
+    }
+
+    const railwayServiceId = (body.railwayServiceId ?? "").trim();
+    if (!railwayServiceId) {
+      return NextResponse.json(
+        {
+          error:
+            "railwayServiceId and confirmService are required for Railway chaos (kill stops the active deployment).",
+        },
+        { status: 400 }
+      );
+    }
+
+    try {
+      const row = await getRailwayChaosRowForService(railwayServiceId);
+      if (!row) {
+        return NextResponse.json(
+          {
+            error:
+              "Service not found or Railway visibility query failed — refresh the table and try again.",
+          },
+          { status: 404 }
+        );
+      }
+
+      if (row.service.trim().toLowerCase() !== confirmService) {
+        return NextResponse.json(
+          {
+            error:
+              "confirmService does not match this Railway service name.",
+          },
+          { status: 400 }
+        );
+      }
+
+      if (!isServiceKillAllowed(row.service)) {
+        return NextResponse.json(
+          {
+            error: `Service "${row.service}" is not allowed for chaos kill. Blocked or not in the allow list. Override with CHAOS_ALLOWED_SERVICES if needed.`,
+          },
+          { status: 403 }
+        );
+      }
+
+      const depId = row.railwayDeploymentId;
+      if (!depId) {
+        return NextResponse.json(
+          {
+            error:
+              "No active deployment to stop — deploy the service in Railway first.",
+          },
+          { status: 400 }
+        );
+      }
+
+      await railwayDeploymentStop(depId);
+
+      return NextResponse.json({
+        ok: true,
+        service: row.service,
+        message:
+          "Deployment stopped via Railway API (deploymentStop). Enable RAILWAY_WATCHDOG_AUTO_RECOVER (default) so the watchdog redeploys latest, or redeploy manually.",
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Unknown error";
+      return NextResponse.json({ error: message, ok: false }, { status: 503 });
+    }
+  }
+
+  const containerId = (body.containerId ?? "").trim();
+  if (!containerId) {
+    return NextResponse.json(
+      {
+        error: "containerId and confirmService are required for Docker chaos",
+      },
       { status: 400 }
     );
   }

@@ -36,7 +36,7 @@ export type RailwayVisibilityRow = {
 
 type GqlResponse<T> = { data?: T; errors?: { message: string }[] };
 
-async function gql<T>(
+export async function railwayGraphql<T>(
   query: string,
   variables?: Record<string, unknown>
 ): Promise<T> {
@@ -61,6 +61,9 @@ async function gql<T>(
   }
   return body.data;
 }
+
+/** @internal Alias for historical call sites in this file. */
+const gql = railwayGraphql;
 
 function deploymentStatusToState(status: string): {
   state: string;
@@ -404,4 +407,68 @@ export async function fetchRailwayVisibilityRows(options?: {
   }
 
   return { project: projectName, projectId, containers: rows };
+}
+
+const M_DEPLOYMENT_RESTART = `
+  mutation DeploymentRestart($id: String!) {
+    deploymentRestart(id: $id)
+  }
+`;
+
+const M_DEPLOYMENT_STOP = `
+  mutation DeploymentStop($id: String!) {
+    deploymentStop(id: $id)
+  }
+`;
+
+const M_SERVICE_INSTANCE_DEPLOY = `
+  mutation ServiceInstanceDeploy(
+    $environmentId: String!
+    $serviceId: String!
+    $latestCommit: Boolean
+  ) {
+    serviceInstanceDeploy(
+      environmentId: $environmentId
+      serviceId: $serviceId
+      latestCommit: $latestCommit
+    )
+  }
+`;
+
+/** Restart the running deployment (graceful reboot), same idea as `docker restart`. */
+export async function railwayDeploymentRestart(deploymentId: string): Promise<void> {
+  await railwayGraphql<{ deploymentRestart: boolean }>(M_DEPLOYMENT_RESTART, {
+    id: deploymentId,
+  });
+}
+
+/** Stop the deployment — service goes down until redeployed (chaos “kill”). */
+export async function railwayDeploymentStop(deploymentId: string): Promise<void> {
+  await railwayGraphql<{ deploymentStop: boolean }>(M_DEPLOYMENT_STOP, {
+    id: deploymentId,
+  });
+}
+
+/** Redeploy latest commit — used by the Railway watchdog to recover after stop/crash. */
+export async function railwayServiceInstanceDeployLatest(
+  environmentId: string,
+  serviceId: string
+): Promise<void> {
+  await railwayGraphql<{ serviceInstanceDeploy: boolean }>(
+    M_SERVICE_INSTANCE_DEPLOY,
+    {
+      environmentId,
+      serviceId,
+      latestCommit: true,
+    }
+  );
+}
+
+/** Resolve a service row for chaos actions (server-side validation). */
+export async function getRailwayChaosRowForService(
+  railwayServiceId: string
+): Promise<RailwayVisibilityRow | null> {
+  const r = await fetchRailwayVisibilityRows({ includeStats: false });
+  if (r.error) return null;
+  return r.containers.find((c) => c.railwayServiceId === railwayServiceId) ?? null;
 }

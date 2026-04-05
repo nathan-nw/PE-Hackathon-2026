@@ -51,6 +51,9 @@ type DockerContainer = {
   status: string;
   service: string;
   health?: string;
+  /** Set when Ops visibility source is Railway (GraphQL). */
+  railwayServiceId?: string;
+  railwayDeploymentId?: string;
 };
 
 type DockerResponse = {
@@ -70,6 +73,7 @@ type ChaosConfig = {
 
 type ChaosStatus = {
   found: boolean;
+  source?: "docker" | "railway";
   containerId?: string;
   name?: string;
   service?: string;
@@ -81,6 +85,8 @@ type ChaosStatus = {
   restartPolicy?: string;
   health?: string;
   startedAt?: string;
+  deploymentStatus?: string;
+  statusLine?: string;
   message?: string;
   error?: string;
 };
@@ -275,14 +281,23 @@ export function ChaosPanel() {
       action === "kill"
         ? "/api/visibility/docker/chaos/kill"
         : "/api/visibility/docker/chaos/restart";
+    const railwayServiceId = container.railwayServiceId?.trim();
+    const isRailway = Boolean(docker?.source === "railway" && railwayServiceId);
     try {
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          containerId: container.id,
-          confirmService: svc,
-        }),
+        body: JSON.stringify(
+          isRailway
+            ? {
+                railwayServiceId,
+                confirmService: svc,
+              }
+            : {
+                containerId: container.id,
+                confirmService: svc,
+              }
+        ),
       });
       const j = (await res.json()) as { ok?: boolean; error?: string };
       if (!res.ok) {
@@ -306,11 +321,13 @@ export function ChaosPanel() {
     (a.service || a.name).localeCompare(b.service || b.name)
   );
 
-  const dockerOk = docker?.source === "docker" && !docker?.error;
+  const visibilityOk =
+    (docker?.source === "docker" || docker?.source === "railway") &&
+    !docker?.error;
   const showKill =
     Boolean(config?.supportsDockerKill) &&
     Boolean(config?.killEnabled) &&
-    dockerOk;
+    visibilityOk;
 
   const allowedRaw =
     config?.allowedServices && config.allowedServices.length > 0
@@ -332,7 +349,7 @@ export function ChaosPanel() {
             {!watchdog
               ? "Loading watchdog status…"
               : watchdog.source === "railway"
-                ? "Polling Railway deployment status for this project. Alerts slide in at the top-right when a service recovers or redeploys; recent poll lines are in the log below."
+                ? "Polling Railway deployment status. When a deployment is CRASHED, FAILED, or REMOVED, the watchdog can trigger serviceInstanceDeploy(latest) to recover (disable with RAILWAY_WATCHDOG_AUTO_RECOVER=0). Toasts fire for recoveries and redeploys; recent poll lines are below."
                 : "Local stack: the compose-watchdog service scans Compose containers on each interval (starts exited tasks, restarts unhealthy ones). Alerts appear at the top-right when it acts."}
           </CardDescription>
         </CardHeader>
@@ -397,12 +414,30 @@ export function ChaosPanel() {
       <Card>
         <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <CardTitle>Container chaos (local Docker)</CardTitle>
+            <CardTitle>
+              {docker?.source === "railway"
+                ? "Service chaos (Railway)"
+                : "Container chaos (local Docker)"}
+            </CardTitle>
             <CardDescription>
-              <span className="font-mono">Reboot</span> runs <span className="font-mono">docker restart</span>{" "}
-              (graceful stop, then start). <span className="font-mono">Kill</span> sends{" "}
-              <span className="font-mono">SIGKILL</span> only (watchdog restarts later). Watch status after either action. See{" "}
-              <span className="font-mono">ARCHITECTURE.md</span> for Desktop restart quirks.
+              {docker?.source === "railway" ? (
+                <>
+                  <span className="font-mono">Reboot</span> calls Railway{" "}
+                  <span className="font-mono">deploymentRestart</span> on the active deployment.{" "}
+                  <span className="font-mono">Kill</span> calls{" "}
+                  <span className="font-mono">deploymentStop</span> — traffic fails until the watchdog
+                  runs <span className="font-mono">serviceInstanceDeploy(latest)</span> (see Watchdog card;
+                  set <span className="font-mono">RAILWAY_WATCHDOG_AUTO_RECOVER=0</span> to disable).
+                </>
+              ) : (
+                <>
+                  <span className="font-mono">Reboot</span> runs{" "}
+                  <span className="font-mono">docker restart</span> (graceful stop, then start).{" "}
+                  <span className="font-mono">Kill</span> sends <span className="font-mono">SIGKILL</span>{" "}
+                  only (watchdog restarts later). Watch status after either action. See{" "}
+                  <span className="font-mono">ARCHITECTURE.md</span> for Desktop restart quirks.
+                </>
+              )}
             </CardDescription>
           </div>
           <Button
@@ -426,11 +461,10 @@ export function ChaosPanel() {
               {config.hint}
             </p>
           )}
-          {!config?.supportsDockerKill && (
+          {!config?.supportsDockerKill && docker?.source === "railway" && (
             <p className="text-muted-foreground text-sm">
-              Railway project visibility is active — Kill/Reboot use the{" "}
-              <strong>local Docker socket</strong> only. The watchdog card above still polls
-              Railway deployments when the API token is set.
+              Set a Railway API token on this service so Kill/Reboot can call the GraphQL API. The
+              watchdog also needs the token to poll and auto-redeploy.
             </p>
           )}
           {docker?.error && (
@@ -471,16 +505,35 @@ export function ChaosPanel() {
                   <dd>{watchStatus.state}</dd>
                   <dt className="text-muted-foreground">Running</dt>
                   <dd>{watchStatus.running ? "yes" : "no"}</dd>
-                  <dt className="text-muted-foreground">Restart count</dt>
-                  <dd className="font-mono tabular-nums">{watchStatus.restartCount ?? "—"}</dd>
-                  <dt className="text-muted-foreground">Restart policy</dt>
-                  <dd className="font-mono text-xs">{watchStatus.restartPolicy}</dd>
-                  <dt className="text-muted-foreground">Health</dt>
-                  <dd>{watchStatus.health ?? "—"}</dd>
-                  <dt className="text-muted-foreground">Container ID</dt>
-                  <dd className="break-all font-mono text-xs">
-                    {watchStatus.containerId?.slice(0, 12)}…
-                  </dd>
+                  {watchStatus.source === "railway" ? (
+                    <>
+                      <dt className="text-muted-foreground">Deployment</dt>
+                      <dd className="font-mono text-xs">
+                        {watchStatus.deploymentStatus ?? "—"}
+                      </dd>
+                      <dt className="text-muted-foreground">Health</dt>
+                      <dd>{watchStatus.health ?? "—"}</dd>
+                      <dt className="text-muted-foreground">Status</dt>
+                      <dd className="max-w-md break-all text-xs">
+                        {watchStatus.statusLine ?? "—"}
+                      </dd>
+                    </>
+                  ) : (
+                    <>
+                      <dt className="text-muted-foreground">Restart count</dt>
+                      <dd className="font-mono tabular-nums">
+                        {watchStatus.restartCount ?? "—"}
+                      </dd>
+                      <dt className="text-muted-foreground">Restart policy</dt>
+                      <dd className="font-mono text-xs">{watchStatus.restartPolicy}</dd>
+                      <dt className="text-muted-foreground">Health</dt>
+                      <dd>{watchStatus.health ?? "—"}</dd>
+                      <dt className="text-muted-foreground">Container ID</dt>
+                      <dd className="break-all font-mono text-xs">
+                        {watchStatus.containerId?.slice(0, 12)}…
+                      </dd>
+                    </>
+                  )}
                 </dl>
               )}
             </div>
@@ -491,7 +544,7 @@ export function ChaosPanel() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Service</TableHead>
-                  <TableHead>Container</TableHead>
+                  <TableHead>{docker?.source === "railway" ? "Deployment" : "Container"}</TableHead>
                   <TableHead>State</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="min-w-[260px]">Actions</TableHead>
@@ -513,7 +566,8 @@ export function ChaosPanel() {
                     allowedSet.has(svcLower) &&
                     !config?.blockedServices?.some(
                       (b) => b.toLowerCase() === svcLower
-                    );
+                    ) &&
+                    (docker?.source !== "railway" || Boolean(c.railwayServiceId));
                   return (
                     <TableRow key={c.id}>
                       <TableCell className="font-medium">{c.service || "—"}</TableCell>
@@ -542,12 +596,16 @@ export function ChaosPanel() {
                             disabled={!canKill}
                             title={
                               !config?.supportsDockerKill
-                                ? "Docker Compose only"
+                                ? "Need Railway token or local Docker"
                                 : !config?.killEnabled
                                   ? "Set CHAOS_KILL_ENABLED=1"
-                                  : !canKill
-                                    ? "Not in allow list / blocked service"
-                                    : "Graceful stop then start (docker restart)"
+                                  : docker?.source === "railway" && !c.railwayServiceId
+                                    ? "Missing Railway service id — refresh"
+                                    : !canKill
+                                      ? "Not in allow list / blocked service"
+                                      : docker?.source === "railway"
+                                        ? "deploymentRestart (Railway)"
+                                        : "Graceful stop then start (docker restart)"
                             }
                             onClick={() => openChaos(c, "restart")}
                           >
@@ -562,12 +620,16 @@ export function ChaosPanel() {
                             disabled={!canKill}
                             title={
                               !config?.supportsDockerKill
-                                ? "Docker Compose only"
+                                ? "Need Railway token or local Docker"
                                 : !config?.killEnabled
                                   ? "Set CHAOS_KILL_ENABLED=1"
-                                  : !canKill
-                                    ? "Not in CHAOS_ALLOWED_SERVICES / blocked service"
-                                    : undefined
+                                  : docker?.source === "railway" && !c.railwayServiceId
+                                    ? "Missing Railway service id — refresh"
+                                    : !canKill
+                                      ? "Not in CHAOS_ALLOWED_SERVICES / blocked service"
+                                      : docker?.source === "railway"
+                                        ? "deploymentStop (Railway)"
+                                        : undefined
                             }
                             onClick={() => openChaos(c, "kill")}
                           >
@@ -599,11 +661,25 @@ export function ChaosPanel() {
               </CardTitle>
               <CardDescription>
                 {pendingChaos.action === "kill" ? (
+                  docker?.source === "railway" ? (
+                    <>
+                      This calls Railway <span className="font-mono">deploymentStop</span> on the
+                      active deployment. The watchdog can redeploy latest automatically (unless{" "}
+                      <span className="font-mono">RAILWAY_WATCHDOG_AUTO_RECOVER=0</span>).
+                    </>
+                  ) : (
+                    <>
+                      This sends <span className="font-mono">docker kill</span> (SIGKILL) only — it
+                      does not start the container. The{" "}
+                      <span className="font-mono">compose-watchdog</span> service (or Docker&apos;s
+                      restart policy) will bring it back; expect traffic to fail until then.
+                    </>
+                  )
+                ) : docker?.source === "railway" ? (
                   <>
-                    This sends <span className="font-mono">docker kill</span> (SIGKILL) only — it does
-                    not start the container. The{" "}
-                    <span className="font-mono">compose-watchdog</span> service (or Docker&apos;s
-                    restart policy) will bring it back; expect traffic to fail until then.
+                    This calls Railway <span className="font-mono">deploymentRestart</span> for{" "}
+                    <span className="font-mono">{pendingChaos.container.service}</span> (graceful
+                    restart of the running deployment).
                   </>
                 ) : (
                   <>
@@ -616,7 +692,7 @@ export function ChaosPanel() {
             </CardHeader>
             <CardContent className="space-y-3">
               <p className="text-sm">
-                Type the Compose service name{" "}
+                Type the service name{" "}
                 <span className="text-foreground font-mono font-semibold">
                   {pendingChaos.container.service}
                 </span>{" "}
@@ -653,7 +729,9 @@ export function ChaosPanel() {
                   {chaosBusy ? (
                     <Loader2 className="size-4 animate-spin" />
                   ) : pendingChaos.action === "kill" ? (
-                    "Kill container"
+                    docker?.source === "railway" ? "Stop deployment" : "Kill container"
+                  ) : docker?.source === "railway" ? (
+                    "Restart deployment"
                   ) : (
                     "Reboot container"
                   )}

@@ -2,7 +2,9 @@ export type WatchdogEventKind =
   | "recover"
   | "scan"
   | "railway_deploy"
-  | "railway_stalled";
+  | "railway_stalled"
+  /** Watchdog called serviceInstanceDeploy(latest) after CRASHED/FAILED/REMOVED. */
+  | "railway_auto_recover";
 
 export type WatchdogEvent = {
   id: string;

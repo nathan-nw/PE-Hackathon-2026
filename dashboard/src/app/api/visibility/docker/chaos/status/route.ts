@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { getDockerConnectionOptions } from "@/lib/docker-options";
-import { railwayIdsConfigured } from "@/lib/railway-visibility";
+import {
+  fetchRailwayVisibilityRows,
+  railwayIdsConfigured,
+  railwayVisibilityConfigured,
+} from "@/lib/railway-visibility";
 import { runtimeEnv } from "@/lib/server-runtime-env";
 
 export const runtime = "nodejs";
@@ -20,13 +24,6 @@ function healthFromStatus(status: string): string | undefined {
 }
 
 export async function GET(request: NextRequest) {
-  if (railwayIdsConfigured()) {
-    return NextResponse.json(
-      { error: "Chaos status is only available for local Docker Compose." },
-      { status: 400 }
-    );
-  }
-
   const service = request.nextUrl.searchParams.get("service")?.trim();
   const containerId = request.nextUrl.searchParams.get("id")?.trim();
   const project =
@@ -37,6 +34,64 @@ export async function GET(request: NextRequest) {
       { error: "Query parameter required: service=<compose-service> or id=<container-id>" },
       { status: 400 }
     );
+  }
+
+  if (railwayIdsConfigured()) {
+    if (!railwayVisibilityConfigured()) {
+      return NextResponse.json(
+        { error: "Railway API token missing for chaos status." },
+        { status: 503 }
+      );
+    }
+
+    const name = service ?? "";
+    if (!name) {
+      return NextResponse.json(
+        { error: "For Railway, use service=<railway-service-name>" },
+        { status: 400 }
+      );
+    }
+
+    try {
+      const r = await fetchRailwayVisibilityRows({ includeStats: false });
+      if (r.error) {
+        return NextResponse.json(
+          { error: r.error, found: false },
+          { status: 503 }
+        );
+      }
+
+      const row = r.containers.find(
+        (c) => c.service.trim().toLowerCase() === name.toLowerCase()
+      );
+      if (!row) {
+        return NextResponse.json({
+          found: false,
+          service: name,
+          message: `No Railway service named "${name}" in this project.`,
+        });
+      }
+
+      const ds = row.deploymentStatus ?? "UNKNOWN";
+      return NextResponse.json({
+        found: true,
+        source: "railway" as const,
+        containerId: row.railwayDeploymentId ?? row.id,
+        name: row.name,
+        service: row.service,
+        state: row.state,
+        running: row.state === "running",
+        restarting: ds === "DEPLOYING" || ds === "BUILDING",
+        deploymentStatus: ds,
+        health: row.health,
+        railwayServiceId: row.railwayServiceId,
+        railwayDeploymentId: row.railwayDeploymentId,
+        statusLine: row.status,
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Unknown error";
+      return NextResponse.json({ error: message, found: false }, { status: 503 });
+    }
   }
 
   try {
@@ -88,6 +143,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       found: true,
+      source: "docker" as const,
       containerId: info.Id ?? id,
       name: info.Name?.replace(/^\//, "") ?? "",
       service: svc,

@@ -6,7 +6,8 @@
  * - Ensures Git-linked app services exist (same repo, different root directories):
  *   url-shortener-a, url-shortener-b, load-balancer, user-frontend, dashboard, dashboard-backend.
  * - Sets the deploy branch (default: staging) on each service's deployment trigger.
- * - Sets rootDirectory on each service instance for the environment in .railway/config.json.
+ * - Sets rootDirectory, railwayConfigFile, and watchPatterns on each service instance (matches each
+ *   app folder's railway.toml — same paths as Settings → Root / Config-as-code / Watch paths).
  *
  * Auth: use an account API token from https://railway.com/account/tokens
  * (Authorization: Bearer). Project-scoped tokens often cannot create/link GitHub services.
@@ -36,6 +37,7 @@
  *   LOG_INGEST_TOKEN=…  — shared secret for HTTP log shipping when no Kafka plugin: set the same value on dashboard-backend and url-shortener replicas (required for /api/ingest on hosted)
  *   SKIP_LOG_INGEST_AUTO_TOKEN=1  — do not auto-generate LOG_INGEST_TOKEN when unset (SYNC_VARIABLES + no Kafka)
  *   LOG_INGEST_USE_PRIVATE_URL=1  — set LOG_INGEST_URL to http://<private>:PORT/api/ingest (default: https://<RAILWAY_PUBLIC_DOMAIN>/api/ingest — works through Railway edge)
+ *   RAILWAY_WATCHDOG_POLL_SEC=15  — optional; with SYNC_VARIABLES=1, sets hosted Ops watchdog poll interval (matches compose-watchdog default)
  */
 
 const crypto = require("crypto");
@@ -160,16 +162,64 @@ const ENDPOINT = "https://backboard.railway.com/graphql/v2";
 const DEFAULT_REPO = "nathan-nw/PE-Hackathon-2026";
 const DEFAULT_BRANCH = "staging";
 
-/** @type {{ name: string, rootDirectory: string }[]} */
-const APP_SERVICES = [
+/**
+ * Per-service deploy wiring: Root Directory, config-as-code path (repo-root), and watch patterns
+ * (see each folder's railway.toml). Passed to serviceInstanceUpdate alongside preDeployCommand cleanup.
+ * @type {{ name: string, rootDirectory: string, railwayConfigFile: string, watchPatterns: string[] }[]}
+ */
+const SERVICE_SPECS = [
   // Same topology as docker-compose.yml: two API replicas + NGINX (least_conn, CORS, rate limit).
-  { name: "url-shortener-a", rootDirectory: "url-shortener" },
-  { name: "url-shortener-b", rootDirectory: "url-shortener" },
-  { name: "load-balancer", rootDirectory: "load-balancer" },
-  { name: "user-frontend", rootDirectory: "user-frontend" },
-  { name: "dashboard", rootDirectory: "dashboard" },
-  { name: "dashboard-backend", rootDirectory: "dashboard/backend" },
+  {
+    name: "url-shortener-a",
+    rootDirectory: "url-shortener",
+    railwayConfigFile: "/url-shortener/railway.toml",
+    watchPatterns: ["/url-shortener/**"],
+  },
+  {
+    name: "url-shortener-b",
+    rootDirectory: "url-shortener",
+    railwayConfigFile: "/url-shortener/railway.toml",
+    watchPatterns: ["/url-shortener/**"],
+  },
+  {
+    name: "load-balancer",
+    rootDirectory: "load-balancer",
+    railwayConfigFile: "/load-balancer/railway.toml",
+    watchPatterns: ["/load-balancer/**"],
+  },
+  {
+    name: "user-frontend",
+    rootDirectory: "user-frontend",
+    railwayConfigFile: "/user-frontend/railway.toml",
+    watchPatterns: ["/user-frontend/**"],
+  },
+  {
+    name: "dashboard",
+    rootDirectory: "dashboard",
+    railwayConfigFile: "/dashboard/railway.toml",
+    watchPatterns: ["/dashboard/**"],
+  },
+  {
+    name: "dashboard-backend",
+    rootDirectory: "dashboard/backend",
+    railwayConfigFile: "/dashboard/backend/railway.toml",
+    watchPatterns: ["/dashboard/backend/**"],
+  },
 ];
+
+/** Normalize Railway "Config as code" path for comparison (leading slash). */
+function normRailwayConfigPath(p) {
+  const s = (p || "").trim();
+  if (!s) return "";
+  return s.startsWith("/") ? s : `/${s}`;
+}
+
+function watchPatternsEqual(current, wanted) {
+  const a = [...(current || [])].map((s) => s.trim()).sort();
+  const b = [...(wanted || [])].map((s) => s.trim()).sort();
+  if (a.length !== b.length) return false;
+  return a.every((v, i) => v === b[i]);
+}
 
 function loadRailwayConfig() {
   const p = path.join(__dirname, ".railway", "config.json");
@@ -263,6 +313,8 @@ const Q_SERVICE_INSTANCE = `
       id
       rootDirectory
       preDeployCommand
+      railwayConfigFile
+      watchPatterns
     }
   }
 `;
@@ -575,6 +627,7 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
   if (byName.has("dashboard")) {
     const dashboardPt = (process.env.DASHBOARD_RAILWAY_PROJECT_TOKEN || "").trim();
     const dashboardAt = (process.env.DASHBOARD_RAILWAY_API_TOKEN || "").trim();
+    const watchdogPoll = (process.env.RAILWAY_WATCHDOG_POLL_SEC || "").trim();
     const dashboardVars = {
       // Private HTTP URL: Next.js server-side fetch to the public HTTPS domain often fails
       // (edge/DNS/hairpin); same pattern as load-balancer → url-shortener via RAILWAY_PRIVATE_DOMAIN.
@@ -589,6 +642,7 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
       RAILWAY_PROJECT_ID: projectId,
       RAILWAY_ENVIRONMENT_ID: environmentId,
       VISIBILITY_ALERTMANAGER_DISABLED: "1",
+      ...(watchdogPoll ? { RAILWAY_WATCHDOG_POLL_SEC: watchdogPoll } : {}),
     };
     if (dashboardPt) {
       dashboardVars.RAILWAY_PROJECT_TOKEN = dashboardPt;
@@ -637,7 +691,7 @@ async function main() {
 
   let byName = await fetchServicesMap(projectId);
 
-  for (const spec of APP_SERVICES) {
+  for (const spec of SERVICE_SPECS) {
     console.log(`\n--- ${spec.name} (${spec.rootDirectory}) ---`);
     let svc = byName.get(spec.name);
 
@@ -761,17 +815,40 @@ async function main() {
     }
 
     const rootOk = curRoot === spec.rootDirectory;
-    if (rootOk && !mustClearPre) {
-      console.log(`  rootDirectory OK (${spec.rootDirectory})`);
+    const curConfig = normRailwayConfigPath(si.serviceInstance?.railwayConfigFile);
+    const wantConfig = normRailwayConfigPath(spec.railwayConfigFile);
+    const configOk = curConfig === wantConfig;
+    const curWatch = si.serviceInstance?.watchPatterns;
+    const watchOk = watchPatternsEqual(curWatch, spec.watchPatterns);
+
+    const needsInstanceUpdate =
+      !rootOk || mustClearPre || !configOk || !watchOk;
+
+    if (!needsInstanceUpdate) {
+      console.log(
+        `  rootDirectory, railwayConfigFile, watchPatterns OK (${spec.rootDirectory})`
+      );
     } else {
-      if (rootOk) {
-        console.log(`  rootDirectory OK (${spec.rootDirectory})`);
-      } else {
+      if (!rootOk) {
         console.log(`  rootDirectory: "${curRoot}" -> "${spec.rootDirectory}"`);
+      } else {
+        console.log(`  rootDirectory OK (${spec.rootDirectory})`);
+      }
+      if (!configOk) {
+        console.log(
+          `  railwayConfigFile: "${si.serviceInstance?.railwayConfigFile ?? ""}" -> "${spec.railwayConfigFile}"`
+        );
+      }
+      if (!watchOk) {
+        console.log(
+          `  watchPatterns: ${JSON.stringify(curWatch ?? [])} -> ${JSON.stringify(spec.watchPatterns)}`
+        );
       }
       const input = {};
       if (!rootOk) input.rootDirectory = spec.rootDirectory;
       if (mustClearPre) input.preDeployCommand = [];
+      if (!configOk) input.railwayConfigFile = spec.railwayConfigFile;
+      if (!watchOk) input.watchPatterns = spec.watchPatterns;
       if (!dry) {
         await gql(M_INSTANCE_UPDATE, {
           environmentId,
@@ -779,6 +856,8 @@ async function main() {
           input,
         });
         console.log("  serviceInstanceUpdate OK");
+      } else {
+        console.log("  (DRY_RUN: would serviceInstanceUpdate)");
       }
     }
   }
@@ -788,7 +867,7 @@ async function main() {
   if (!dry && !skipRedeploy) {
     console.log("\n--- Redeploy app services (latest commit) ---");
     byName = await fetchServicesMap(projectId);
-    for (const spec of APP_SERVICES) {
+    for (const spec of SERVICE_SPECS) {
       const svc = byName.get(spec.name);
       if (!svc) {
         console.warn(`  Skip ${spec.name}: not in project`);

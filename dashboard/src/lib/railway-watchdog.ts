@@ -4,7 +4,10 @@
  * dashboard Node instance (best-effort across cold starts).
  */
 
-import { fetchRailwayVisibilityRows } from "@/lib/railway-visibility";
+import {
+  fetchRailwayVisibilityRows,
+  railwayServiceInstanceDeployLatest,
+} from "@/lib/railway-visibility";
 import { runtimeEnv } from "@/lib/server-runtime-env";
 
 import type { WatchdogEvent, WatchdogPayload } from "@/lib/watchdog-types";
@@ -12,12 +15,16 @@ import type { WatchdogEvent, WatchdogPayload } from "@/lib/watchdog-types";
 /** Match compose-watchdog `LOG_TAIL_MAX` for parity. */
 const LOG_TAIL_MAX = 40;
 
+/** Min time between auto-redeploy attempts per service (avoids hammering the API). */
+const RECOVER_COOLDOWN_MS = 50_000;
+
 const G = globalThis as typeof globalThis & {
   __railwayWatchdogPrev?: Map<
     string,
     { deploymentStatus: string; deploymentId: string }
   >;
   __railwayWatchdogLogTail?: string[];
+  __railwayRecoverCooldown?: Map<string, number>;
 };
 
 function pushRailwayLogLine(line: string) {
@@ -62,6 +69,34 @@ function isHealthy(s: string): boolean {
   return u === "SUCCESS" || u === "SLEEPING";
 }
 
+function needsAutoRecoverTrigger(status: string): boolean {
+  const u = status.toUpperCase();
+  return (
+    u === "CRASHED" ||
+    u === "FAILED" ||
+    u === "REMOVED" ||
+    u === "STOPPED"
+  );
+}
+
+function railwayWatchdogAutoRecoverEnabled(): boolean {
+  const raw = (runtimeEnv("RAILWAY_WATCHDOG_AUTO_RECOVER") ?? "")
+    .trim()
+    .toLowerCase();
+  if (!raw) return true;
+  if (raw === "0" || raw === "false" || raw === "no" || raw === "off") {
+    return false;
+  }
+  return true;
+}
+
+function recoverCooldownMap(): Map<string, number> {
+  if (!G.__railwayRecoverCooldown) {
+    G.__railwayRecoverCooldown = new Map();
+  }
+  return G.__railwayRecoverCooldown;
+}
+
 export async function fetchRailwayWatchdogPayload(): Promise<WatchdogPayload> {
   const intervalSec = Math.max(
     5,
@@ -83,8 +118,11 @@ export async function fetchRailwayWatchdogPayload(): Promise<WatchdogPayload> {
   }
 
   const prev = prevMap();
+  const recoverCooldown = recoverCooldownMap();
   const events: WatchdogEvent[] = [];
   const now = new Date().toISOString();
+  const environmentId = runtimeEnv("RAILWAY_ENVIRONMENT_ID") ?? "";
+  const autoRecover = railwayWatchdogAutoRecoverEnabled() && Boolean(environmentId);
 
   for (const row of rows.containers) {
     const sid = row.railwayServiceId;
@@ -92,6 +130,37 @@ export async function fetchRailwayWatchdogPayload(): Promise<WatchdogPayload> {
     const depId = row.railwayDeploymentId ?? "";
     const cur = (row.deploymentStatus ?? "UNKNOWN").trim();
     const before = prev.get(sid);
+
+    if (isHealthy(cur)) {
+      recoverCooldown.delete(sid);
+    }
+
+    if (
+      autoRecover
+      && needsAutoRecoverTrigger(cur)
+      && !isDeploying(cur)
+    ) {
+      const last = recoverCooldown.get(sid) ?? 0;
+      if (Date.now() - last >= RECOVER_COOLDOWN_MS) {
+        try {
+          await railwayServiceInstanceDeployLatest(environmentId, sid);
+          recoverCooldown.set(sid, Date.now());
+          events.push({
+            id: `${sid}-autorecover-${Date.now()}`,
+            at: now,
+            service: name,
+            kind: "railway_auto_recover",
+            message: `Watchdog triggered serviceInstanceDeploy(latest) for ${name} (was ${cur}).`,
+          });
+          pushRailwayLogLine(
+            `watchdog: auto-redeploy ${name} (${cur}) → serviceInstanceDeploy`
+          );
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          pushRailwayLogLine(`watchdog: auto-redeploy failed ${name}: ${msg}`);
+        }
+      }
+    }
 
     if (before) {
       const b = before.deploymentStatus.toUpperCase();
