@@ -1,6 +1,7 @@
 import random
 import string
 from datetime import UTC, datetime
+from urllib.parse import urlparse
 
 from flask import Blueprint, abort, jsonify, redirect, request
 from playhouse.shortcuts import model_to_dict
@@ -18,6 +19,19 @@ from app.models.event import Event
 from app.models.url import Url
 from app.models.user import User
 
+
+def _validate_url(url_string):
+    """Return an error message if the URL is invalid, else None."""
+    if not isinstance(url_string, str) or not url_string.strip():
+        return "original_url must be a non-empty string"
+    parsed = urlparse(url_string)
+    if parsed.scheme not in ("http", "https"):
+        return "original_url must start with http:// or https://"
+    if not parsed.netloc:
+        return "original_url must include a valid domain"
+    return None
+
+
 urls_bp = Blueprint("urls", __name__)
 
 
@@ -31,13 +45,34 @@ def generate_short_code(length=6):
 
 @urls_bp.route("/shorten", methods=["POST"])
 def create_short_url():
-    data = request.get_json()
-    if not data or "original_url" not in data or "user_id" not in data:
+    data = request.get_json(silent=True)
+    if data is None:
+        return (
+            jsonify(
+                {
+                    "error": "Invalid or missing JSON body",
+                    "hint": "Send a JSON object with Content-Type: application/json",
+                }
+            ),
+            400,
+        )
+    if not isinstance(data, dict):
+        return jsonify({"error": "Request body must be a JSON object"}), 400
+    if "original_url" not in data or "user_id" not in data:
         return jsonify({"error": "original_url and user_id are required"}), 400
 
     original_url = data["original_url"]
+    url_err = _validate_url(original_url)
+    if url_err:
+        return jsonify({"error": url_err}), 400
+
     user_id = data["user_id"]
+    if not isinstance(user_id, int):
+        return jsonify({"error": "user_id must be an integer"}), 400
+
     title = data.get("title", "")
+    if not isinstance(title, str):
+        return jsonify({"error": "title must be a string"}), 400
 
     try:
         User.get_by_id(user_id)
@@ -127,9 +162,24 @@ def update_url(url_id):
     except Url.DoesNotExist:
         return jsonify({"error": "URL not found"}), 404
 
-    data = request.get_json()
-    if not data:
+    data = request.get_json(silent=True)
+    if data is None:
+        return (
+            jsonify(
+                {
+                    "error": "Invalid or missing JSON body",
+                    "hint": "Send a JSON object with Content-Type: application/json",
+                }
+            ),
+            400,
+        )
+    if not isinstance(data, dict) or len(data) == 0:
         return jsonify({"error": "No data provided"}), 400
+
+    if "original_url" in data:
+        url_err = _validate_url(data["original_url"])
+        if url_err:
+            return jsonify({"error": url_err}), 400
 
     now = datetime.now(UTC)
 
