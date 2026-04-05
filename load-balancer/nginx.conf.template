@@ -65,6 +65,14 @@ http {
         listen @NGINX_LISTEN_PORT@;
         server_name _;
 
+        # Browsers request /favicon.ico on every load; avoid proxying to the API (noise + avoids
+        # proxy_next_upstream interactions when replicas return application 503s).
+        location = /favicon.ico {
+            access_log off;
+            log_not_found off;
+            return 204;
+        }
+
         # Security headers at the edge (defense in depth; app may repeat).
         add_header X-Frame-Options "DENY" always;
         add_header X-Content-Type-Options "nosniff" always;
@@ -122,8 +130,9 @@ http {
             add_header Access-Control-Allow-Private-Network "true" always;
             add_header Vary "Origin, Access-Control-Request-Private-Network" always;
 
-            # If one replica is down or restarting, try the other (least_conn pool).
-            proxy_next_upstream error timeout http_502 http_503 http_504;
+            # Retry on connection errors and bad gateways. Do not retry on upstream 503 — both replicas
+            # usually share the same DB; retrying can hit a dead peer and nginx returns 502 instead of 503.
+            proxy_next_upstream error timeout http_502 http_504;
             proxy_next_upstream_tries 3;
 
             # Hide upstream Server header from clients (optional hygiene).

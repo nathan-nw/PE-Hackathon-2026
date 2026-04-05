@@ -321,7 +321,9 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
   const usePublicDbUrl =
     process.env.SYNC_VARIABLES_USE_PUBLIC_DATABASE_URL === "1" ||
     process.env.SYNC_VARIABLES_USE_PUBLIC_DATABASE_URL === "true";
-  const dbUrlKey = usePublicDbUrl ? "DATABASE_URL" : "DATABASE_PRIVATE_URL";
+  // Railway Postgres plugins expose DATABASE_URL (private host) and DATABASE_PUBLIC_URL (TCP proxy).
+  // DATABASE_PRIVATE_URL is not present on all templates — referencing it yields an empty DATABASE_URL on APIs.
+  const dbUrlKey = usePublicDbUrl ? "DATABASE_PUBLIC_URL" : "DATABASE_URL";
 
   if (!postgresService) {
     console.warn(

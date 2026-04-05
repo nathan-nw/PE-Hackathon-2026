@@ -31,6 +31,24 @@ def _database_host() -> str:
     return host
 
 
+def _default_sslmode_for_postgres_host(hostname: str | None) -> str | None:
+    """Railway Postgres (private *.railway.internal or public *.rlwy.net TCP proxy) expects TLS.
+
+    Without sslmode, psycopg2 often fails to connect. Set PGSSLMODE or add ?sslmode= to the URL
+    to override; set RAILWAY_DB_SSL_DISABLE=1 to skip this default on Railway-shaped hosts.
+    """
+    if not hostname or os.environ.get("RAILWAY_DB_SSL_DISABLE", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        return None
+    h = hostname.lower()
+    if h.endswith(".railway.internal") or "rlwy.net" in h:
+        return "require"
+    return None
+
+
 def _postgres_connection_kwargs():
     """Build Peewee kwargs from DATABASE_URL (e.g. Railway) or discrete DATABASE_* vars."""
     url = os.environ.get("DATABASE_URL", "").strip()
@@ -40,6 +58,10 @@ def _postgres_connection_kwargs():
         parsed = urlparse(url)
         q = parse_qs(parsed.query)
         sslmode = (q.get("sslmode") or [None])[0]
+        if not sslmode:
+            sslmode = os.environ.get("PGSSLMODE", "").strip() or None
+        if not sslmode:
+            sslmode = _default_sslmode_for_postgres_host(parsed.hostname)
         kw = {
             "database": unquote((parsed.path or "").lstrip("/") or "postgres"),
             "host": parsed.hostname or "127.0.0.1",
@@ -50,13 +72,20 @@ def _postgres_connection_kwargs():
         if sslmode:
             kw["sslmode"] = sslmode
         return kw
-    return {
+    discrete_host = _database_host()
+    kw = {
         "database": os.environ.get("DATABASE_NAME", "hackathon_db"),
-        "host": _database_host(),
+        "host": discrete_host,
         "port": int(os.environ.get("DATABASE_PORT", 5432)),
         "user": os.environ.get("DATABASE_USER", "postgres"),
         "password": os.environ.get("DATABASE_PASSWORD", "postgres"),
     }
+    sslmode = os.environ.get("PGSSLMODE", "").strip() or _default_sslmode_for_postgres_host(
+        discrete_host
+    )
+    if sslmode:
+        kw["sslmode"] = sslmode
+    return kw
 
 
 def init_db(app):

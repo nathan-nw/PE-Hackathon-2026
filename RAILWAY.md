@@ -19,12 +19,42 @@ The Docker Compose stack is for **local** development. On [Railway](https://rail
    $env:SYNC_VARIABLES = "1"
    node setup-railway.js
    ```
-   This upserts [variable references](https://docs.railway.com/reference/variables) aligned with **`docker-compose.yml`** (see **Parity with Docker Compose** below). Highlights: **`url-shortener-a`** / **`url-shortener-b`** get an explicit **`PORT=8080`** so Gunicorn and **`${{ url-shortener-a.PORT }}`** references stay aligned (Railway’s runtime-only `PORT` is not reliably referenceable from other services unless defined as a service variable). Local Docker Compose still uses the image default **`5000`**. They share `DATABASE_URL`, use `INSTANCE_ID` **1** and **2**, `KAFKA_LOG_TOPIC`, optional **`KAFKA_BOOTSTRAP_SERVERS`**, **`RATE_LIMIT_STORAGE`** from Redis or **`memory://`**. **`load-balancer`** gets **`URL_SHORTENER_A_HOST`** / **`URL_SHORTENER_B_HOST`** from each replica’s **`RAILWAY_PRIVATE_DOMAIN`**, plus **`URL_SHORTENER_A_PORT`** / **`URL_SHORTENER_B_PORT`** from **`${{ url-shortener-a.PORT }}`** / **`${{ url-shortener-b.PORT }}`**. **`dashboard-backend`**, **`dashboard`**, **`user-frontend`** as in the parity table; **`user-frontend`** `NEXT_PUBLIC_API_URL` points at the **load-balancer** public URL. If your Postgres plugin does not expose `DATABASE_PRIVATE_URL`, set **`SYNC_VARIABLES_USE_PUBLIC_DATABASE_URL=1`** to use **`DATABASE_URL`** instead. Variable updates default to **`skipDeploys`**; set **`SKIP_DEPLOY_ON_VARIABLE_SYNC=0`** to trigger a deploy for each change.
+   This upserts [variable references](https://docs.railway.com/reference/variables) aligned with **`docker-compose.yml`** (see **Parity with Docker Compose** below). Highlights: **`url-shortener-a`** / **`url-shortener-b`** get an explicit **`PORT=8080`** so Gunicorn and **`${{ url-shortener-a.PORT }}`** references stay aligned (Railway’s runtime-only `PORT` is not reliably referenceable from other services unless defined as a service variable). Local Docker Compose still uses the image default **`5000`**. They share `DATABASE_URL`, use `INSTANCE_ID` **1** and **2**, `KAFKA_LOG_TOPIC`, optional **`KAFKA_BOOTSTRAP_SERVERS`**, **`RATE_LIMIT_STORAGE`** from Redis or **`memory://`**. **`load-balancer`** gets **`URL_SHORTENER_A_HOST`** / **`URL_SHORTENER_B_HOST`** from each replica’s **`RAILWAY_PRIVATE_DOMAIN`**, plus **`URL_SHORTENER_A_PORT`** / **`URL_SHORTENER_B_PORT`** from **`${{ url-shortener-a.PORT }}`** / **`${{ url-shortener-b.PORT }}`**. **`dashboard-backend`**, **`dashboard`**, **`user-frontend`** as in the parity table; **`user-frontend`** `NEXT_PUBLIC_API_URL` points at the **load-balancer** public URL. Variable sync references **`Postgres.DATABASE_URL`** (private hostname) by default; set **`SYNC_VARIABLES_USE_PUBLIC_DATABASE_URL=1`** to use **`Postgres.DATABASE_PUBLIC_URL`** instead. Variable updates default to **`skipDeploys`**; set **`SKIP_DEPLOY_ON_VARIABLE_SYNC=0`** to trigger a deploy for each change.
 6. In the [Railway dashboard](https://railway.com/project/6b429b2a-8ef5-404a-aa8d-7c5091500077), confirm **Root Directory** per service if anything still looks wrong (`url-shortener-a`, `url-shortener-b`, `load-balancer`, `user-frontend`, `dashboard`, `dashboard/backend`).
 7. Wire **variables** manually if you did not run step 5: from **Postgres** and **Redis**, use **Variable References** into **`url-shortener-a`** and **`url-shortener-b`** (e.g. `DATABASE_URL`, `RATE_LIMIT_STORAGE`), and set **load-balancer** `URL_SHORTENER_*_HOST` to each API’s private hostname and **`URL_SHORTENER_A_PORT`** / **`URL_SHORTENER_B_PORT`** to `${{ url-shortener-a.PORT }}` / `${{ url-shortener-b.PORT }}` (same port Gunicorn listens on).
 8. Accept the **Railway GitHub app** for `nathan-nw/PE-Hackathon-2026` if prompted so webhooks can trigger deploys.
 
 `railway.toml` files under each app folder define Docker builds, health checks, and **watch paths** so changes in one folder do not rebuild unrelated services.
+
+## Seed CSV data (production)
+
+Migrations create tables; **`url-shortener/seed.py`** loads **`csv_data/*.csv`** (users, urls, events). Both API replicas share the same Postgres **`DATABASE_URL`**, so you only need to seed **once** (either service’s env is fine).
+
+From the **repository root**, with the [Railway CLI](https://docs.railway.com/guides/cli) linked to this project:
+
+```powershell
+.\scripts\seed-railway.ps1
+```
+
+Git Bash / WSL / macOS / Linux:
+
+```bash
+./scripts/seed-railway.sh
+```
+
+The scripts read **`DATABASE_PUBLIC_URL`** from the **Postgres** plugin (not `railway run --service url-shortener-a`, which can inject an **empty** `DATABASE_URL` and make the app fall back to local `url-shortener/.env` / `127.0.0.1:15432`). Wire **`DATABASE_URL`** on the API services via **`SYNC_VARIABLES=1`** in `setup-railway.js` so deploys see the DB; seeding from your laptop still uses the Postgres public URL.
+
+Equivalent manual command (after exporting a reachable `DATABASE_URL`, e.g. from the Postgres service variables):
+
+```bash
+uv run --directory url-shortener python seed.py --merge
+```
+
+(`uv run python seed.py` without `--directory` looks for `seed.py` in the **repo root**, which does not exist.)
+
+`--merge` uses PostgreSQL **`ON CONFLICT DO NOTHING`** so repeats are safe. To wipe and reload: `uv run --directory url-shortener python seed.py --drop` (destructive). To skip if data already exists: add **`--if-empty`**.
+
+If the API still returns **503** / “Database not reachable” after seeding, check **Postgres is running** and **`DATABASE_URL`** on **`url-shortener-a`** / **`url-shortener-b`** (run **`SYNC_VARIABLES=1 node setup-railway.js`** so the URL references **`Postgres.DATABASE_URL`** — private `postgres.railway.internal` — or **`Postgres.DATABASE_PUBLIC_URL`** with **`SYNC_VARIABLES_USE_PUBLIC_DATABASE_URL=1`** for the `junction.proxy.rlwy.net` proxy). The Flask and dashboard apps default **`sslmode=require`** for `*.railway.internal` and `*.rlwy.net` hosts when the URL omits `sslmode`; set **`PGSSLMODE`** or **`?sslmode=`** on the URL to override, or **`RAILWAY_DB_SSL_DISABLE=1`** for rare non-TLS cases.
 
 ## Parity with Docker Compose
 

@@ -5,12 +5,22 @@ Usage:
     uv run seed.py                          # seed from default CSV path
     uv run seed.py --csv-dir /path/to/csvs  # seed from custom path
     uv run seed.py --drop                   # drop and recreate tables first
+    uv run seed.py --merge                  # INSERT .. ON CONFLICT DO NOTHING (idempotent; safe for Railway re-runs)
+    uv run seed.py --if-empty               # skip if users table already has rows (unless --drop)
+
+Railway (from repo root, linked project):
+    See scripts/seed-railway.ps1 — uses Postgres DATABASE_PUBLIC_URL (API service may have empty DATABASE_URL).
 """
 
 import argparse
 import csv
 import os
 import sys
+
+# Railway sometimes exposes DATABASE_URL="" on a service; with python-dotenv (override=False) that blocks
+# loading a real URL from url-shortener/.env. Treat empty as unset before importing the app.
+if "DATABASE_URL" in os.environ and not os.environ.get("DATABASE_URL", "").strip():
+    del os.environ["DATABASE_URL"]
 
 from peewee import chunked
 
@@ -23,7 +33,14 @@ from app.models.user import User
 DEFAULT_CSV_DIR = os.path.join(os.path.dirname(__file__), "csv_data")
 
 
-def load_users(csv_dir):
+def _insert_many(model, batch, merge: bool):
+    q = model.insert_many(batch)
+    if merge:
+        q = q.on_conflict_ignore()
+    return q.execute()
+
+
+def load_users(csv_dir, merge: bool = False):
     filepath = os.path.join(csv_dir, "users.csv")
     with open(filepath, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -32,11 +49,11 @@ def load_users(csv_dir):
     print(f"  Loading {len(rows)} users...")
     with db.atomic():
         for batch in chunked(rows, 100):
-            User.insert_many(batch).execute()
+            _insert_many(User, batch, merge)
     print(f"  OK - {len(rows)} users loaded")
 
 
-def load_urls(csv_dir):
+def load_urls(csv_dir, merge: bool = False):
     filepath = os.path.join(csv_dir, "urls.csv")
     with open(filepath, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -48,11 +65,11 @@ def load_urls(csv_dir):
     print(f"  Loading {len(rows)} urls...")
     with db.atomic():
         for batch in chunked(rows, 100):
-            Url.insert_many(batch).execute()
+            _insert_many(Url, batch, merge)
     print(f"  OK - {len(rows)} urls loaded")
 
 
-def load_events(csv_dir):
+def load_events(csv_dir, merge: bool = False):
     filepath = os.path.join(csv_dir, "events.csv")
     with open(filepath, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -61,11 +78,11 @@ def load_events(csv_dir):
     print(f"  Loading {len(rows)} events...")
     with db.atomic():
         for batch in chunked(rows, 100):
-            Event.insert_many(batch).execute()
+            _insert_many(Event, batch, merge)
     print(f"  OK - {len(rows)} events loaded")
 
 
-def seed(csv_dir, drop=False):
+def seed(csv_dir, drop=False, merge: bool = False, if_empty: bool = False):
     tables = [User, Url, Event]
 
     if drop:
@@ -77,10 +94,20 @@ def seed(csv_dir, drop=False):
     db.create_tables(tables, safe=True)
     print("  OK - Tables created")
 
+    if if_empty and not drop:
+        try:
+            n = User.select().count()
+        except Exception as e:
+            print(f"Error checking users count: {e}")
+            raise
+        if n > 0:
+            print(f"Skipping seed: users table already has {n} row(s). Use --drop to replace, or omit --if-empty.")
+            return
+
     print("Seeding data...")
-    load_users(csv_dir)
-    load_urls(csv_dir)
-    load_events(csv_dir)
+    load_users(csv_dir, merge=merge)
+    load_urls(csv_dir, merge=merge)
+    load_events(csv_dir, merge=merge)
     print("\nDone! Database seeded successfully.")
 
 
@@ -96,6 +123,17 @@ if __name__ == "__main__":
         action="store_true",
         help="Drop and recreate tables before seeding",
     )
+    parser.add_argument(
+        "--merge",
+        action="store_true",
+        help="PostgreSQL: skip rows that already exist (ON CONFLICT DO NOTHING). Safe to re-run.",
+    )
+    parser.add_argument(
+        "--if-empty",
+        action="store_true",
+        dest="if_empty",
+        help="Do nothing if users table already has at least one row (ignored with --drop)",
+    )
     args = parser.parse_args()
 
     if not os.path.isdir(args.csv_dir):
@@ -106,7 +144,12 @@ if __name__ == "__main__":
     with app.app_context():
         db.connect(reuse_if_open=True)
         try:
-            seed(args.csv_dir, drop=args.drop)
+            seed(
+                args.csv_dir,
+                drop=args.drop,
+                merge=args.merge,
+                if_empty=args.if_empty,
+            )
         finally:
             if not db.is_closed():
                 db.close()

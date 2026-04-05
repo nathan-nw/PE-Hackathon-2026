@@ -91,7 +91,7 @@ def main() -> int:
         print(
             "apply_migrations: DATABASE_URL and PGHOST/DATABASE_HOST are unset — skipping migrations.\n"
             "Set DATABASE_URL on url-shortener (Variable Reference from your Postgres plugin), e.g.\n"
-            "  ${{ <Postgres-service-name>.DATABASE_PRIVATE_URL }}\n"
+            "  ${{ <Postgres-service-name>.DATABASE_URL }}\n"
             "then redeploy; or run: SYNC_VARIABLES=1 node setup-railway.js from the repo root.\n"
             "Set STRICT_MIGRATIONS=1 to fail the deploy instead of skipping.",
             file=sys.stderr,

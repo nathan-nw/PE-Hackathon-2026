@@ -79,7 +79,7 @@ Set Root Directory in the Railway dashboard for each Git-linked service (or run 
 Recommended shared variables (automated: `$env:SYNC_VARIABLES = '1'; node setup-railway.js` — see RAILWAY.md):
 
   url-shortener-a / url-shortener-b:
-    DATABASE_URL = ${{ Postgres.DATABASE_PRIVATE_URL }}   (internal; or DATABASE_URL if you set SYNC_VARIABLES_USE_PUBLIC_DATABASE_URL=1)
+    DATABASE_URL = ${{ Postgres.DATABASE_URL }}   (internal; or DATABASE_PUBLIC_URL if SYNC_VARIABLES_USE_PUBLIC_DATABASE_URL=1)
     RATE_LIMIT_STORAGE = ${{ Redis.REDIS_URL }}
     INSTANCE_ID = 1  (replica a) / 2  (replica b)
     FLASK_DEBUG = false
@@ -90,7 +90,7 @@ Recommended shared variables (automated: `$env:SYNC_VARIABLES = '1'; node setup-
     URL_SHORTENER_PORT = 5000
 
   dashboard-backend:
-    DASHBOARD_DATABASE_URL = ${{ Postgres.DATABASE_PRIVATE_URL }}
+    DASHBOARD_DATABASE_URL = ${{ Postgres.DATABASE_URL }}
     DASHBOARD_DB_NAME = dashboard_db
     (Create database dashboard_db once in Postgres — RAILWAY.md.)
     Leave KAFKA_* unset unless you add a broker.

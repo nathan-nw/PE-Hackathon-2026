@@ -12,12 +12,26 @@ import logging
 import os
 import time
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import psycopg2
 from psycopg2.extras import execute_values
 
 logger = logging.getLogger(__name__)
+
+
+def _default_sslmode_for_postgres_host(hostname: str | None) -> str | None:
+    """Match url-shortener/app/database.py — Railway Postgres requires TLS for *.railway.internal / *.rlwy.net."""
+    if not hostname or os.environ.get("RAILWAY_DB_SSL_DISABLE", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        return None
+    h = hostname.lower()
+    if h.endswith(".railway.internal") or "rlwy.net" in h:
+        return "require"
+    return None
 
 
 def _db_config() -> dict[str, Any]:
@@ -30,24 +44,38 @@ def _db_config() -> dict[str, Any]:
         if url.startswith("postgres://"):
             url = "postgresql://" + url[len("postgres://") :]
         parsed = urlparse(url)
+        q = parse_qs(parsed.query)
+        sslmode = (q.get("sslmode") or [None])[0]
+        if not sslmode:
+            sslmode = os.environ.get("PGSSLMODE", "").strip() or None
+        if not sslmode:
+            sslmode = _default_sslmode_for_postgres_host(parsed.hostname)
         dbname = unquote((parsed.path or "").lstrip("/") or "postgres")
         override_db = os.environ.get("DASHBOARD_DB_NAME", "").strip()
         if override_db:
             dbname = override_db
-        return {
+        cfg: dict[str, Any] = {
             "dbname": dbname,
             "user": unquote(parsed.username or "postgres"),
             "password": unquote(parsed.password or ""),
             "host": parsed.hostname or "127.0.0.1",
             "port": parsed.port or 5432,
         }
-    return {
+        if sslmode:
+            cfg["sslmode"] = sslmode
+        return cfg
+    host = os.environ.get("DASHBOARD_DB_HOST", "dashboard-db")
+    cfg = {
         "dbname": os.environ.get("DASHBOARD_DB_NAME", "dashboard_db"),
         "user": os.environ.get("DASHBOARD_DB_USER", "postgres"),
         "password": os.environ.get("DASHBOARD_DB_PASSWORD", "postgres"),
-        "host": os.environ.get("DASHBOARD_DB_HOST", "dashboard-db"),
+        "host": host,
         "port": int(os.environ.get("DASHBOARD_DB_PORT", "5432")),
     }
+    sslmode = os.environ.get("PGSSLMODE", "").strip() or _default_sslmode_for_postgres_host(host)
+    if sslmode:
+        cfg["sslmode"] = sslmode
+    return cfg
 
 CREATE_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS kafka_logs (

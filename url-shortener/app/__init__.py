@@ -4,7 +4,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Load `.env` before importing `app.metrics` so INSTANCE_ID is visible to Prometheus registration.
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+# Do not override variables already set by the host / `railway run` (e.g. DATABASE_URL).
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
 
 from flask import Flask, jsonify, render_template, request  # noqa: E402
 from flask_cors import CORS  # noqa: E402
@@ -51,6 +52,12 @@ def create_app():
     from app import models  # noqa: F401 - registers models with Peewee
 
     # Register before API blueprints so `/`, `/health`, and `/metrics` are not shadowed by `/<short_code>`.
+    @app.route("/favicon.ico")
+    @limiter.exempt
+    def favicon():
+        """Avoid /<short_code> treating 'favicon.ico' as a code (and hitting the DB)."""
+        return ("", 204)
+
     @app.route("/")
     def index():
         return render_template("index.html")

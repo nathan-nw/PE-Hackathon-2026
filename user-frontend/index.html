@@ -13,7 +13,7 @@
       min-height: 100vh;
       line-height: 1.5;
     }
-    .wrap { max-width: 36rem; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+    .wrap { max-width: 56rem; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
     h1 {
       font-size: 1.75rem;
       font-weight: 700;
@@ -113,18 +113,50 @@
     .recent a { color: #a5b4fc; text-decoration: none; }
     .recent a:hover { text-decoration: underline; }
     .recent .orig { color: #64748b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 55%; }
+    .browse h2 { font-size: 1rem; color: #e2e8f0; margin-bottom: 0.75rem; font-weight: 600; }
+    .browse .toolbar {
+      display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: flex-end;
+      margin-bottom: 1rem;
+    }
+    .browse .toolbar .field { margin-bottom: 0; min-width: 5rem; }
+    .browse .toolbar label { margin-bottom: 0.25rem; }
+    .table-wrap { overflow-x: auto; border-radius: 8px; border: 1px solid #334155; }
+    table.urls { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
+    table.urls th {
+      text-align: left; padding: 0.5rem 0.65rem; background: #0f172a; color: #94a3b8; font-weight: 600;
+      border-bottom: 1px solid #334155; white-space: nowrap;
+    }
+    table.urls td {
+      padding: 0.5rem 0.65rem; border-bottom: 1px solid #1e293b; vertical-align: top;
+    }
+    table.urls tr:last-child td { border-bottom: none; }
+    table.urls a.short { color: #a5b4fc; word-break: break-all; }
+    table.urls .orig-cell { color: #94a3b8; max-width: 14rem; }
+    table.urls .orig-cell span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .badge { font-size: 0.65rem; padding: 0.12rem 0.4rem; border-radius: 4px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+    .badge.on { background: #14532d; color: #bbf7d0; }
+    .badge.off { background: #450a0a; color: #fecaca; }
+    .browse .pager { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.75rem; font-size: 0.85rem; color: #94a3b8; }
+    .browse .pager button.ghost { margin: 0; }
+    .browse .empty { color: #64748b; font-size: 0.9rem; padding: 1rem 0; text-align: center; }
+    .events-panel {
+      margin-top: 0.75rem; padding: 0.75rem; background: #0f172a; border-radius: 8px; border: 1px solid #334155;
+      font-size: 0.75rem; max-height: 12rem; overflow: auto; display: none;
+    }
+    .events-panel.show { display: block; }
+    .events-panel pre { margin: 0; white-space: pre-wrap; word-break: break-word; color: #cbd5e1; font-family: ui-monospace, monospace; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <h1>Shorten a link</h1>
-    <p class="sub">Uses the Flask API <code style="color:#cbd5e1;">POST /shorten</code> · needs a valid <code style="color:#cbd5e1;">user_id</code> in the database</p>
+    <p class="sub">Flask API: <code style="color:#cbd5e1;">POST /shorten</code>, <code style="color:#cbd5e1;">GET /urls</code>, <code style="color:#cbd5e1;">GET /users/&lt;id&gt;/urls</code> · needs a valid <code style="color:#cbd5e1;">user_id</code> for new links</p>
 
     <div class="card">
       <div class="field">
         <label for="apiBase">API base URL</label>
         <input type="url" id="apiBase" placeholder="http://localhost:18080" autocomplete="off" />
-        <p class="hint">Local Docker: use the <strong>load balancer</strong> (NGINX), not the API container port. From the repo root run <code style="color:#cbd5e1;">docker compose port load-balancer 80</code> to see the host port (often <code>:8080</code> or <code>:18080</code> if <code>LB_HTTP_PORT</code> is set in <code>.env</code>). A CORS error usually means the URL is not NGINX (wrong port or another process bound there). Not <code>:5000</code> / not <code>:3000</code> (dashboard). On Railway, use your <strong>url-shortener</strong> HTTPS URL.</p>
+        <p class="hint">Local Docker: use the <strong>load balancer</strong> (NGINX), not the API container port. From the repo root run <code style="color:#cbd5e1;">docker compose port load-balancer 80</code> to see the host port (often <code>:8080</code> or <code>:18080</code> if <code>LB_HTTP_PORT</code> is set in <code>.env</code>). A CORS error usually means the URL is not NGINX (wrong port or another process bound there). Not <code>:5000</code> / not <code>:3000</code> (dashboard). On Railway, use the <strong>load-balancer</strong> service public HTTPS URL (same entrypoint as local NGINX).</p>
       </div>
       <div class="field">
         <label for="longUrl">Long URL</label>
@@ -159,6 +191,54 @@
     <div class="card recent" id="recentCard" style="display:none;">
       <h2>Recent (this browser)</h2>
       <ul id="recentList"></ul>
+    </div>
+
+    <div class="card browse">
+      <h2>URLs from the database</h2>
+      <p class="hint" style="margin-bottom: 1rem;">
+        Uses <code style="color:#cbd5e1;">GET /urls</code> (paginated) and <code style="color:#cbd5e1;">GET /users/&lt;id&gt;/urls</code>.
+        Actions: <code style="color:#cbd5e1;">DELETE /urls/&lt;id&gt;</code> (soft delete), <code style="color:#cbd5e1;">PUT</code> to reactivate, <code style="color:#cbd5e1;">GET /urls/&lt;id&gt;/events</code>.
+      </p>
+      <div class="toolbar">
+        <div class="field">
+          <label for="listPage">Page</label>
+          <input type="number" id="listPage" min="1" step="1" value="1" />
+        </div>
+        <div class="field">
+          <label for="listPerPage">Per page</label>
+          <input type="number" id="listPerPage" min="1" max="100" step="1" value="20" />
+        </div>
+        <button type="button" class="ghost" id="loadAllBtn">Load all URLs</button>
+        <button type="button" class="ghost" id="loadUserBtn">Load this user&apos;s URLs</button>
+      </div>
+      <div class="msg err" id="browseErr"></div>
+      <div class="pager" id="browsePager" style="display:none;">
+        <span id="browseMeta"></span>
+        <button type="button" class="ghost" id="prevPageBtn">Previous</button>
+        <button type="button" class="ghost" id="nextPageBtn">Next</button>
+      </div>
+      <div class="table-wrap" id="tableWrap" style="display:none;">
+        <table class="urls" id="urlsTable">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Short link</th>
+              <th>Original</th>
+              <th>Title</th>
+              <th>User</th>
+              <th>Status</th>
+              <th>Created</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="urlsTbody"></tbody>
+        </table>
+      </div>
+      <p class="empty" id="browseEmpty">Click <strong>Load all URLs</strong> or <strong>Load this user&apos;s URLs</strong> to fetch from the API.</p>
+      <div class="events-panel" id="eventsPanel">
+        <div style="color:#94a3b8;margin-bottom:0.35rem;">Events</div>
+        <pre id="eventsPre"></pre>
+      </div>
     </div>
   </div>
 
@@ -266,6 +346,387 @@
         document.getElementById("errMsg").classList.remove("show");
         document.getElementById("okMsg").classList.remove("show");
       }
+
+      var browseState = { mode: null, page: 1, perPage: 20, total: 0 };
+      var eventsOpenForId = null;
+
+      function fkId(v) {
+        if (v && typeof v === "object" && v.id != null) return v.id;
+        return v;
+      }
+
+      function formatWhen(iso) {
+        if (iso == null || iso === "") return "—";
+        try {
+          var d = new Date(iso);
+          if (isNaN(d.getTime())) return String(iso);
+          return d.toLocaleString();
+        } catch (e) {
+          return String(iso);
+        }
+      }
+
+      function shortFull(base, code) {
+        return base + "/" + encodeURIComponent(code);
+      }
+
+      function getBrowseBase() {
+        return normalizeLoopbackHost(normalizeBase(document.getElementById("apiBase").value.trim()));
+      }
+
+      function showBrowseErr(t) {
+        var e = document.getElementById("browseErr");
+        if (!t) {
+          e.classList.remove("show");
+          e.textContent = "";
+          return;
+        }
+        e.textContent = t;
+        e.classList.add("show");
+      }
+
+      function hideBrowseErr() {
+        showBrowseErr("");
+      }
+
+      function hideEventsPanel() {
+        eventsOpenForId = null;
+        document.getElementById("eventsPanel").classList.remove("show");
+      }
+
+      async function toggleEvents(urlId) {
+        var panel = document.getElementById("eventsPanel");
+        var pre = document.getElementById("eventsPre");
+        var base = getBrowseBase();
+        if (!base) {
+          showBrowseErr("Set API base URL.");
+          return;
+        }
+        if (eventsOpenForId === urlId) {
+          hideEventsPanel();
+          return;
+        }
+        eventsOpenForId = urlId;
+        pre.textContent = "Loading…";
+        panel.classList.add("show");
+        try {
+          var res = await fetch(base + "/urls/" + urlId + "/events", {
+            headers: { Accept: "application/json" }
+          });
+          var data = await res.json().catch(function () { return null; });
+          if (!res.ok) {
+            pre.textContent = (data && data.error) || res.statusText || "Failed";
+            return;
+          }
+          pre.textContent = JSON.stringify(data, null, 2);
+        } catch (ex) {
+          pre.textContent = ex.message || String(ex);
+        }
+      }
+
+      function renderBrowseTable(rows, meta) {
+        hideBrowseErr();
+        var tbody = document.getElementById("urlsTbody");
+        var wrap = document.getElementById("tableWrap");
+        var empty = document.getElementById("browseEmpty");
+        var pager = document.getElementById("browsePager");
+        var metaEl = document.getElementById("browseMeta");
+        tbody.innerHTML = "";
+        hideEventsPanel();
+
+        var base = getBrowseBase();
+
+        if (!rows || !rows.length) {
+          wrap.style.display = "none";
+          empty.style.display = "block";
+          empty.textContent = "No URLs returned.";
+          pager.style.display = "none";
+          return;
+        }
+        empty.style.display = "none";
+        wrap.style.display = "block";
+
+        if (meta && meta.mode === "all") {
+          browseState.mode = "all";
+          browseState.page = meta.page;
+          browseState.perPage = meta.perPage;
+          browseState.total = meta.total;
+          var lastPage = Math.max(1, Math.ceil(meta.total / meta.perPage) || 1);
+          metaEl.textContent =
+            "Page " + meta.page + " of " + lastPage + " · " + meta.total + " total";
+          pager.style.display = "flex";
+          document.getElementById("listPage").value = String(meta.page);
+          document.getElementById("prevPageBtn").disabled = meta.page <= 1;
+          document.getElementById("nextPageBtn").disabled = meta.page >= lastPage;
+        } else if (meta && meta.mode === "user") {
+          browseState.mode = "user";
+          metaEl.textContent = rows.length + " URL(s) for user " + meta.userId;
+          pager.style.display = "none";
+        } else {
+          pager.style.display = "none";
+        }
+
+        rows.forEach(function (row) {
+          var id = row.id;
+          var code = row.short_code;
+          var full = base && code ? shortFull(base, code) : "";
+          var uid = fkId(row.user_id);
+
+          var tr = document.createElement("tr");
+
+          var tdId = document.createElement("td");
+          tdId.textContent = String(id);
+
+          var tdShort = document.createElement("td");
+          if (base && code) {
+            var a = document.createElement("a");
+            a.className = "short";
+            a.href = full;
+            a.target = "_blank";
+            a.rel = "noopener noreferrer";
+            a.textContent = code;
+            tdShort.appendChild(a);
+          } else {
+            tdShort.textContent = code || "—";
+          }
+
+          var tdOrig = document.createElement("td");
+          tdOrig.className = "orig-cell";
+          var spOrig = document.createElement("span");
+          spOrig.title = row.original_url || "";
+          spOrig.textContent = row.original_url || "—";
+          tdOrig.appendChild(spOrig);
+
+          var tdTitle = document.createElement("td");
+          tdTitle.textContent = row.title || "—";
+
+          var tdUser = document.createElement("td");
+          tdUser.textContent = uid != null ? String(uid) : "—";
+
+          var tdStatus = document.createElement("td");
+          var badge = document.createElement("span");
+          badge.className = "badge " + (row.is_active ? "on" : "off");
+          badge.textContent = row.is_active ? "active" : "inactive";
+          tdStatus.appendChild(badge);
+
+          var tdCreated = document.createElement("td");
+          tdCreated.textContent = formatWhen(row.created_at);
+
+          var tdOps = document.createElement("td");
+          var ops = document.createElement("div");
+          ops.style.display = "flex";
+          ops.style.flexWrap = "wrap";
+          ops.style.gap = "0.35rem";
+
+          function addBtn(label, fn) {
+            var b = document.createElement("button");
+            b.type = "button";
+            b.className = "ghost";
+            b.textContent = label;
+            b.addEventListener("click", fn);
+            ops.appendChild(b);
+          }
+
+          addBtn("Copy", function () {
+            if (!full) return;
+            navigator.clipboard.writeText(full).then(function () {
+              hideBrowseErr();
+              showOk("Copied short URL.");
+            });
+          });
+          addBtn("Open", function () {
+            if (full) window.open(full, "_blank", "noopener,noreferrer");
+          });
+          addBtn("Events", function () {
+            toggleEvents(id);
+          });
+          if (row.is_active) {
+            addBtn("Deactivate", function () {
+              if (!confirm("Deactivate this short link? (soft delete)")) return;
+              deactivateUrl(id);
+            });
+          } else {
+            addBtn("Reactivate", function () {
+              reactivateUrl(id);
+            });
+          }
+
+          tdOps.appendChild(ops);
+
+          tr.appendChild(tdId);
+          tr.appendChild(tdShort);
+          tr.appendChild(tdOrig);
+          tr.appendChild(tdTitle);
+          tr.appendChild(tdUser);
+          tr.appendChild(tdStatus);
+          tr.appendChild(tdCreated);
+          tr.appendChild(tdOps);
+          tbody.appendChild(tr);
+        });
+      }
+
+      async function refreshBrowse() {
+        if (browseState.mode === "all") {
+          await doLoadAll(browseState.page);
+        } else if (browseState.mode === "user") {
+          await doLoadUser();
+        }
+      }
+
+      async function deactivateUrl(urlId) {
+        var base = getBrowseBase();
+        if (!base) {
+          showBrowseErr("Set API base URL.");
+          return;
+        }
+        try {
+          var res = await fetch(base + "/urls/" + urlId, { method: "DELETE" });
+          var data = await res.json().catch(function () { return {}; });
+          if (!res.ok) {
+            showBrowseErr((data.error || res.statusText) + " (" + res.status + ")");
+            return;
+          }
+          hideBrowseErr();
+          showOk("URL deactivated.");
+          await refreshBrowse();
+        } catch (ex) {
+          showBrowseErr(ex.message || String(ex));
+        }
+      }
+
+      async function reactivateUrl(urlId) {
+        var base = getBrowseBase();
+        if (!base) {
+          showBrowseErr("Set API base URL.");
+          return;
+        }
+        try {
+          var res = await fetch(base + "/urls/" + urlId, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify({ is_active: true })
+          });
+          var data = await res.json().catch(function () { return {}; });
+          if (!res.ok) {
+            showBrowseErr((data.error || res.statusText) + " (" + res.status + ")");
+            return;
+          }
+          hideBrowseErr();
+          showOk("URL reactivated.");
+          await refreshBrowse();
+        } catch (ex) {
+          showBrowseErr(ex.message || String(ex));
+        }
+      }
+
+      async function doLoadAll(page) {
+        var base = getBrowseBase();
+        if (!base) {
+          showBrowseErr("Set API base URL.");
+          return;
+        }
+        document.getElementById("apiBase").value = base;
+        saveApiBase();
+        var perPage = parseInt(document.getElementById("listPerPage").value, 10) || 20;
+        perPage = Math.min(100, Math.max(1, perPage));
+        document.getElementById("listPerPage").value = String(perPage);
+        var p = page != null ? page : parseInt(document.getElementById("listPage").value, 10) || 1;
+        p = Math.max(1, p);
+        document.getElementById("listPage").value = String(p);
+        var btn = document.getElementById("loadAllBtn");
+        btn.disabled = true;
+        hideBrowseErr();
+        try {
+          var res = await fetch(base + "/urls?page=" + p + "&per_page=" + perPage, {
+            headers: { Accept: "application/json" }
+          });
+          var data = await res.json().catch(function () { return null; });
+          if (!res.ok) {
+            showBrowseErr(
+              (data && data.error) || res.statusText || "Request failed (" + res.status + ")"
+            );
+            return;
+          }
+          renderBrowseTable(data.data || [], {
+            mode: "all",
+            page: data.page,
+            perPage: data.per_page,
+            total: data.total
+          });
+        } catch (ex) {
+          showBrowseErr(
+            ex.message ||
+              "Network error — check API base (NGINX / load balancer URL)."
+          );
+        } finally {
+          btn.disabled = false;
+        }
+      }
+
+      async function doLoadUser() {
+        var base = getBrowseBase();
+        if (!base) {
+          showBrowseErr("Set API base URL.");
+          return;
+        }
+        document.getElementById("apiBase").value = base;
+        saveApiBase();
+        var uid = parseInt(document.getElementById("userId").value, 10);
+        if (!uid || uid < 1) {
+          showBrowseErr("User ID must be a positive integer.");
+          return;
+        }
+        var btn = document.getElementById("loadUserBtn");
+        btn.disabled = true;
+        hideBrowseErr();
+        try {
+          var res = await fetch(base + "/users/" + uid + "/urls", {
+            headers: { Accept: "application/json" }
+          });
+          var data = await res.json().catch(function () { return null; });
+          if (!res.ok) {
+            showBrowseErr(
+              (data && data.error) || res.statusText || "Request failed (" + res.status + ")"
+            );
+            return;
+          }
+          var rows = Array.isArray(data) ? data : [];
+          renderBrowseTable(rows, { mode: "user", userId: uid });
+        } catch (ex) {
+          showBrowseErr(
+            ex.message ||
+              "Network error — check API base (NGINX / load balancer URL)."
+          );
+        } finally {
+          btn.disabled = false;
+        }
+      }
+
+      document.getElementById("loadAllBtn").addEventListener("click", function () {
+        var p = parseInt(document.getElementById("listPage").value, 10) || 1;
+        doLoadAll(Math.max(1, p));
+      });
+
+      document.getElementById("loadUserBtn").addEventListener("click", function () {
+        doLoadUser();
+      });
+
+      document.getElementById("prevPageBtn").addEventListener("click", function () {
+        if (browseState.mode !== "all") return;
+        var p = browseState.page - 1;
+        if (p < 1) return;
+        document.getElementById("listPage").value = String(p);
+        doLoadAll(p);
+      });
+
+      document.getElementById("nextPageBtn").addEventListener("click", function () {
+        if (browseState.mode !== "all") return;
+        var lastPage = Math.max(1, Math.ceil(browseState.total / browseState.perPage) || 1);
+        var p = browseState.page + 1;
+        if (p > lastPage) return;
+        document.getElementById("listPage").value = String(p);
+        doLoadAll(p);
+      });
 
       document.getElementById("submitBtn").addEventListener("click", async function () {
         hideMsgs();
