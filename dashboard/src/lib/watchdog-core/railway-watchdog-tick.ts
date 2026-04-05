@@ -587,6 +587,21 @@ export async function runRailwayWatchdogTick(
           message: `New deployment for ${name}; Railway is rolling out a new revision.`,
         });
       }
+
+      if (
+        onlineNow === "online" &&
+        isHealthy(cur) &&
+        before.onlineStatus !== "online"
+      ) {
+        events.push({
+          id: `${sid}-online-${now}`,
+          at: now,
+          service: name,
+          kind: "railway_online",
+          message: `${name} is online and the deployment is healthy (${cur}).`,
+        });
+        pushLogLine(state, `watchdog: ${name} railway_online (${before.onlineStatus} → online, ${cur})`);
+      }
     }
 
     prev.set(sid, {

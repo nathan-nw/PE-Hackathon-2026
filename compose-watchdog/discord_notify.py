@@ -11,6 +11,11 @@ import urllib.request
 
 logger = logging.getLogger(__name__)
 
+# Match dashboard watchdog-discord.ts: red = exited, yellow = restart/recovery, green = healthy again.
+_EMBED_RED = 15548997
+_EMBED_YELLOW = 16705372
+_EMBED_GREEN = 5763719
+
 _UA = "PE-Hackathon-ComposeWatchdog/1.0"
 _last_post_m = 0.0
 _MIN_INTERVAL = 0.9
@@ -65,7 +70,7 @@ def notify_exited(service: str, container_short: str) -> None:
                     f"**{service}** (`{container_short}`) is in **exited** state. "
                     "Starting it if restart policy allows."
                 ),
-                "color": 15158332,
+                "color": _EMBED_RED,
                 "footer": {"text": "compose-watchdog"},
             }
         ]
@@ -83,7 +88,7 @@ def notify_started_after_exit(service: str, container_short: str) -> None:
                 "description": (
                     f"**{service}** (`{container_short}`) was **started** after being exited."
                 ),
-                "color": 3447003,
+                "color": _EMBED_GREEN,
                 "footer": {"text": "compose-watchdog"},
             }
         ]
@@ -102,7 +107,7 @@ def notify_unhealthy_restart(service: str, container_short: str) -> None:
                     f"**{service}** (`{container_short}`) failed health checks; "
                     "**restarting** now."
                 ),
-                "color": 16750848,
+                "color": _EMBED_YELLOW,
                 "footer": {"text": "compose-watchdog"},
             }
         ]

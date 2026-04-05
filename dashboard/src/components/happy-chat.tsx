@@ -37,7 +37,7 @@ function MarkdownBody({ text, className }: { text: string; className?: string })
           a: ({ href, children }) => (
             <a
               href={href}
-              className="font-medium text-amber-900/90 underline decoration-amber-400/80 underline-offset-2 hover:text-amber-950"
+              className="text-foreground font-medium underline decoration-zinc-400 underline-offset-2 hover:text-zinc-950"
               target="_blank"
               rel="noreferrer"
             >
@@ -45,12 +45,12 @@ function MarkdownBody({ text, className }: { text: string; className?: string })
             </a>
           ),
           blockquote: ({ children }) => (
-            <blockquote className="border-amber-200/80 text-muted-foreground mb-2 border-l-[3px] pl-3 italic">
+            <blockquote className="text-muted-foreground mb-2 border-l-[3px] border-zinc-300 pl-3 italic">
               {children}
             </blockquote>
           ),
           pre: ({ children }) => (
-            <pre className="border-border/60 bg-zinc-950/[0.04] mb-2 max-w-full overflow-x-auto rounded-xl border border-zinc-200/80 p-3 font-mono text-[0.8rem] leading-relaxed shadow-inner dark:border-zinc-700/50">
+            <pre className="border-border mb-2 max-w-full overflow-x-auto rounded-xl border bg-zinc-50 p-3 font-mono text-[0.8rem] leading-relaxed shadow-inner dark:border-zinc-700 dark:bg-zinc-950">
               {children}
             </pre>
           ),
@@ -65,7 +65,7 @@ function MarkdownBody({ text, className }: { text: string; className?: string })
             }
             return (
               <code
-                className="rounded-md bg-amber-100/80 px-1.5 py-0.5 font-mono text-[0.85em] text-amber-950 [overflow-wrap:anywhere] dark:bg-amber-950/30 dark:text-amber-100"
+                className="rounded-md bg-zinc-100 px-1.5 py-0.5 font-mono text-[0.85em] text-zinc-900 [overflow-wrap:anywhere] dark:bg-zinc-800 dark:text-zinc-100"
                 {...props}
               >
                 {children}
@@ -73,12 +73,12 @@ function MarkdownBody({ text, className }: { text: string; className?: string })
             );
           },
           table: ({ children }) => (
-            <div className="mb-2 max-w-full overflow-x-auto rounded-lg border border-zinc-200/80">
+            <div className="mb-2 max-w-full overflow-x-auto rounded-lg border border-zinc-200">
               <table className="w-full text-xs">{children}</table>
             </div>
           ),
           th: ({ children }) => (
-            <th className="border-border bg-zinc-100/80 border px-2 py-1.5 text-left font-medium">{children}</th>
+            <th className="border-border border bg-zinc-100 px-2 py-1.5 text-left font-medium">{children}</th>
           ),
           td: ({ children }) => <td className="border-border border px-2 py-1.5">{children}</td>,
         }}
@@ -166,7 +166,7 @@ export function HappyChat() {
         aria-label="Open Happy chat"
         onClick={() => setOpen(true)}
         className={cn(
-          "fixed right-5 bottom-5 z-50 flex size-[3.75rem] cursor-pointer items-center justify-center overflow-hidden rounded-full border-2 border-amber-200/90 bg-white shadow-[0_8px_30px_rgb(0,0,0,0.12)] ring-2 ring-amber-100/80 transition hover:scale-[1.04] hover:shadow-[0_12px_40px_rgb(0,0,0,0.15)] focus-visible:ring-2 focus-visible:ring-amber-400 focus-visible:ring-offset-2 focus-visible:outline-none",
+          "fixed right-5 bottom-5 z-50 flex size-[3.75rem] cursor-pointer items-center justify-center overflow-hidden rounded-full border-2 border-zinc-300 bg-white shadow-[0_8px_30px_rgb(0,0,0,0.12)] ring-2 ring-zinc-200 transition hover:scale-[1.04] hover:shadow-[0_12px_40px_rgb(0,0,0,0.15)] focus-visible:ring-2 focus-visible:ring-zinc-400 focus-visible:ring-offset-2 focus-visible:outline-none",
           open && "pointer-events-none opacity-0"
         )}
       >
@@ -183,7 +183,7 @@ export function HappyChat() {
       <div
         role="presentation"
         className={cn(
-          "fixed inset-0 z-40 bg-zinc-900/20 backdrop-blur-[2px] transition-opacity duration-300",
+          "fixed inset-0 z-40 bg-black/50 transition-opacity duration-300",
           open ? "opacity-100" : "pointer-events-none opacity-0"
         )}
         onClick={() => setOpen(false)}
@@ -191,12 +191,12 @@ export function HappyChat() {
 
       <aside
         className={cn(
-          "border-amber-200/40 fixed top-0 right-0 z-40 flex h-full w-full max-w-full flex-col border-l bg-gradient-to-b from-amber-50/95 via-background to-muted/30 shadow-[-12px_0_40px_rgba(0,0,0,0.08)] transition-transform duration-300 ease-out sm:max-w-[min(100vw,42rem)] md:w-[40vw] md:min-w-[320px]",
+          "fixed top-0 right-0 z-40 flex h-full w-full max-w-full flex-col border-l border-border bg-background shadow-[-12px_0_40px_rgba(0,0,0,0.08)] transition-transform duration-300 ease-out sm:max-w-[min(100vw,42rem)] md:w-[40vw] md:min-w-[320px]",
           open ? "translate-x-0" : "translate-x-full"
         )}
         aria-hidden={!open}
       >
-        <header className="flex shrink-0 items-center gap-3 border-b border-amber-200/50 bg-gradient-to-r from-amber-100/50 via-white/80 to-amber-50/40 px-4 py-3.5">
+        <header className="flex shrink-0 items-center gap-3 border-b border-border bg-muted px-4 py-3.5">
           <div className="relative shrink-0">
             <Image
               src={HAPPY_AVATAR_URL}
@@ -206,7 +206,7 @@ export function HappyChat() {
               className="border-border size-11 rounded-full border-2 border-white object-cover shadow-md"
               unoptimized
             />
-            <span className="absolute -right-0.5 -bottom-0.5 flex size-5 items-center justify-center rounded-full bg-amber-400 text-white shadow-sm">
+            <span className="absolute -right-0.5 -bottom-0.5 flex size-5 items-center justify-center rounded-full bg-zinc-900 text-white shadow-sm">
               <Sparkles className="size-3" aria-hidden />
             </span>
           </div>
@@ -222,7 +222,7 @@ export function HappyChat() {
             size="icon"
             onClick={() => setOpen(false)}
             aria-label="Close chat"
-            className="rounded-full text-zinc-600 hover:bg-amber-100/60"
+            className="rounded-full text-zinc-600 hover:bg-zinc-200 dark:hover:bg-zinc-700"
           >
             <X className="size-5" />
           </Button>
@@ -233,7 +233,7 @@ export function HappyChat() {
           className="min-h-0 flex-1 overflow-y-auto px-4 py-4 [scrollbar-gutter:stable]"
         >
           <div className="mb-5 flex gap-2">
-            <div className="max-w-[92%] rounded-3xl rounded-bl-lg border border-amber-200/60 bg-white/90 px-4 py-3 shadow-sm ring-1 ring-amber-100/50">
+            <div className="max-w-[92%] rounded-3xl rounded-bl-lg border border-zinc-200 bg-white px-4 py-3 shadow-sm dark:border-zinc-700 dark:bg-zinc-950">
               <MarkdownBody text={HAPPY_WELCOME} />
             </div>
           </div>
@@ -247,8 +247,8 @@ export function HappyChat() {
                 className={cn(
                   "max-w-[92%] px-4 py-2.5",
                   m.role === "user"
-                    ? "rounded-3xl rounded-br-md bg-gradient-to-br from-zinc-800 to-zinc-950 text-white shadow-md"
-                    : "rounded-3xl rounded-bl-md border border-zinc-200/80 bg-white/95 shadow-sm ring-1 ring-zinc-100/80"
+                    ? "rounded-3xl rounded-br-md bg-zinc-900 text-white shadow-md"
+                    : "rounded-3xl rounded-bl-md border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-950"
                 )}
               >
                 {m.role === "user" ? (
@@ -264,17 +264,19 @@ export function HappyChat() {
             messages.length > 0 &&
             messages[messages.length - 1]?.role === "user" && (
               <div className="text-muted-foreground flex items-center gap-2 text-xs font-medium">
-                <Loader2 className="size-3.5 animate-spin text-amber-600" />
+                <Loader2 className="text-muted-foreground size-3.5 animate-spin" />
                 Fetching live data &amp; thinking…
               </div>
             )}
 
           {error && (
-            <div className="bg-destructive/10 text-destructive mb-2 rounded-xl px-3 py-2 text-xs">{error}</div>
+            <div className="mb-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900 dark:border-red-900/50 dark:bg-red-950 dark:text-red-100">
+              {error}
+            </div>
           )}
         </div>
 
-        <footer className="shrink-0 border-t border-amber-200/50 bg-gradient-to-t from-amber-50/40 to-transparent p-4 pt-3">
+        <footer className="shrink-0 border-t border-border bg-muted p-4 pt-3">
           <div className="flex items-end gap-3">
             <textarea
               value={input}
@@ -287,7 +289,7 @@ export function HappyChat() {
               }}
               placeholder="Ask about logs, errors, k6, or paste output…"
               rows={3}
-              className="border-input bg-background/80 focus-visible:ring-ring placeholder:text-muted-foreground/80 min-h-[5.25rem] flex-1 resize-none rounded-2xl border border-zinc-200/90 px-4 py-3 text-sm shadow-inner outline-none transition focus-visible:border-amber-300/80 focus-visible:ring-2"
+              className="border-input bg-background placeholder:text-muted-foreground focus-visible:ring-ring min-h-[5.25rem] flex-1 resize-none rounded-2xl border border-zinc-200 px-4 py-3 text-sm shadow-inner outline-none transition focus-visible:border-zinc-400 focus-visible:ring-2 dark:border-zinc-700"
               disabled={pending}
             />
             <button
@@ -296,8 +298,7 @@ export function HappyChat() {
               disabled={pending || !input.trim()}
               aria-label="Send message"
               className={cn(
-                "inline-flex h-[3.25rem] min-w-[3.75rem] shrink-0 items-center justify-center rounded-2xl px-5 text-base font-semibold shadow-md transition",
-                "bg-gradient-to-br from-amber-500 to-amber-600 text-white hover:from-amber-500 hover:to-amber-600 hover:brightness-[1.03] active:scale-[0.98]",
+                "inline-flex h-[3.25rem] min-w-[3.75rem] shrink-0 items-center justify-center rounded-2xl bg-zinc-900 px-5 text-base font-semibold text-white shadow-md transition hover:bg-zinc-800 active:scale-[0.98] dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white",
                 "disabled:pointer-events-none disabled:opacity-40"
               )}
             >

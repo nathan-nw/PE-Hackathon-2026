@@ -12,7 +12,9 @@ export type WatchdogEventKind =
   /** After lifecycle showed exited, next-tick serviceInstanceDeploy(latest) from exit-redeploy path. */
   | "heartbeat_exit_redeploy"
   /** Transition to no active deployment, STOPPED, or user stop — was running, now not. */
-  | "railway_stopped";
+  | "railway_stopped"
+  /** Was not online (e.g. deploying, exited, completed); now online with a healthy deployment. */
+  | "railway_online";
 
 export type WatchdogEvent = {
   id: string;

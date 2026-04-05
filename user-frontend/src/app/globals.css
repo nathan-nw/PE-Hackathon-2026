@@ -29,58 +29,28 @@
   --radius-xl: calc(var(--radius) * 1.4);
 }
 
-/* Light mode — cool neutrals, soft indigo primary, tuned for layered page BG */
+/* Light mode only — clean, high-contrast neutral with a soft indigo primary */
 :root {
   color-scheme: light;
-  --background: oklch(0.978 0.006 264);
-  --foreground: oklch(0.22 0.022 264);
-  --card: oklch(0.998 0.003 264);
-  --card-foreground: oklch(0.22 0.022 264);
-  --popover: oklch(0.998 0.003 264);
-  --popover-foreground: oklch(0.22 0.022 264);
-  --primary: oklch(0.44 0.175 264);
-  --primary-foreground: oklch(0.99 0.005 264);
-  --secondary: oklch(0.965 0.012 264);
-  --secondary-foreground: oklch(0.28 0.025 264);
-  --muted: oklch(0.955 0.012 264);
-  --muted-foreground: oklch(0.46 0.028 264);
-  --accent: oklch(0.945 0.028 264);
-  --accent-foreground: oklch(0.28 0.045 264);
+  --background: oklch(0.985 0.002 264);
+  --foreground: oklch(0.2 0.02 264);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.2 0.02 264);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.2 0.02 264);
+  --primary: oklch(0.45 0.19 264);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.96 0.01 264);
+  --secondary-foreground: oklch(0.25 0.02 264);
+  --muted: oklch(0.96 0.008 264);
+  --muted-foreground: oklch(0.45 0.02 264);
+  --accent: oklch(0.94 0.03 264);
+  --accent-foreground: oklch(0.25 0.05 264);
   --destructive: oklch(0.55 0.22 25);
-  --border: oklch(0.91 0.014 264);
-  --input: oklch(0.91 0.014 264);
-  --ring: oklch(0.52 0.14 264);
+  --border: oklch(0.9 0.01 264);
+  --input: oklch(0.9 0.01 264);
+  --ring: oklch(0.55 0.15 264);
   --radius: 0.625rem;
-}
-
-/* Subtle mesh + grain: reads as a calm studio surface, not flat white */
-.page-shell {
-  min-height: 100dvh;
-  color: var(--foreground);
-  background-color: var(--background);
-  background-image:
-    radial-gradient(ellipse 140% 90% at 8% -15%, oklch(0.9 0.045 270 / 0.38), transparent 52%),
-    radial-gradient(ellipse 120% 70% at 92% 5%, oklch(0.93 0.035 250 / 0.32), transparent 48%),
-    radial-gradient(ellipse 80% 55% at 50% 108%, oklch(0.94 0.025 280 / 0.22), transparent 58%),
-    linear-gradient(
-      165deg,
-      oklch(0.985 0.004 264) 0%,
-      oklch(0.972 0.01 264) 45%,
-      oklch(0.978 0.008 268) 100%
-    );
-  background-attachment: fixed;
-}
-
-.page-shell::before {
-  content: "";
-  pointer-events: none;
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  opacity: 0.45;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  background-size: 200px 200px;
-  mix-blend-mode: multiply;
 }
 
 @layer base {
@@ -88,7 +58,7 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply text-foreground antialiased;
+    @apply bg-background text-foreground antialiased;
   }
   html {
     color-scheme: light;

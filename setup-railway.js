@@ -710,6 +710,9 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
       chaosKillRaw.toLowerCase() === "yes" ||
       chaosKillRaw.toLowerCase() === "on";
     const dashboardVars = {
+      // Next.js standalone (Dockerfile EXPOSE 3000). Must match private heartbeat port for
+      // `dashboard` in service-heartbeat.ts (3000), not 8080 like Flask/NGINX services.
+      PORT: "3000",
       // Private HTTP URL: Next.js server-side fetch to the public HTTPS domain often fails
       // (edge/DNS/hairpin); same pattern as load-balancer → url-shortener via RAILWAY_PRIVATE_DOMAIN.
       DASHBOARD_BACKEND_URL:

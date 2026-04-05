@@ -22,11 +22,16 @@ function discordNotifyAllowed(): boolean {
   return (process.env.RAILWAY_WATCHDOG_WORKER || "").trim() === "1";
 }
 
-/** Service stopped / no deployment — user-facing “broken or exited”. */
+/** Discord embed colors (decimal). Red = exited/stopped, yellow = deploy/recovery in progress, green = healthy online. */
+const EMBED_RED = 15548997; // #ED4245
+const EMBED_YELLOW = 16705372; // #FEE75C
+const EMBED_GREEN = 5763719; // #57F287
+
+/** Service stopped / no deployment — exited deployment. */
 const FAILURE_KINDS = new Set<WatchdogEventKind>(["railway_stopped"]);
 
-/** Rollout, recovery, or watchdog-triggered redeploy. */
-const REDEPLOY_KINDS = new Set<WatchdogEventKind>([
+/** Deploying, redeploy, or recovery in flight (process / rollout). */
+const IN_PROGRESS_KINDS = new Set<WatchdogEventKind>([
   "recover",
   "railway_rebooting",
   "railway_deploy",
@@ -34,6 +39,9 @@ const REDEPLOY_KINDS = new Set<WatchdogEventKind>([
   "heartbeat_recover",
   "heartbeat_exit_redeploy",
 ]);
+
+/** Previously not online; now online with a healthy deployment. */
+const ONLINE_KINDS = new Set<WatchdogEventKind>(["railway_online"]);
 
 function webhookUrl(): string {
   return (
@@ -87,29 +95,41 @@ export async function notifyDiscordForWatchdogEvents(
   if (!discordNotifyAllowed() || !webhookUrl() || events.length === 0) return;
 
   const failure = events.filter((e) => FAILURE_KINDS.has(e.kind));
-  const redeploy = events.filter((e) => REDEPLOY_KINDS.has(e.kind));
-  if (failure.length === 0 && redeploy.length === 0) return;
+  const inProgress = events.filter((e) => IN_PROGRESS_KINDS.has(e.kind));
+  const onlineOk = events.filter((e) => ONLINE_KINDS.has(e.kind));
+  if (failure.length === 0 && inProgress.length === 0 && onlineOk.length === 0) return;
 
   const embeds: Record<string, unknown>[] = [];
 
   if (failure.length > 0) {
     embeds.push({
-      title: "Watchdog: service stopped / exited",
+      title: "Watchdog: deployment exited / stopped",
       description:
         failure.map((e) => `**${e.service}** — ${e.message}`).join("\n\n") ||
         "A deployment stopped or was removed.",
-      color: 15158332,
+      color: EMBED_RED,
       footer: { text: "Railway watchdog" },
     });
   }
 
-  if (redeploy.length > 0) {
+  if (inProgress.length > 0) {
     embeds.push({
-      title: "Watchdog: redeploy / recovery",
+      title: "Watchdog: deploy / recovery in progress",
       description:
-        redeploy.map((e) => `**${e.service}** (${e.kind}) — ${e.message}`).join("\n\n") ||
+        inProgress.map((e) => `**${e.service}** (${e.kind}) — ${e.message}`).join("\n\n") ||
         "A rollout or recovery is in progress.",
-      color: 3447003,
+      color: EMBED_YELLOW,
+      footer: { text: "Railway watchdog" },
+    });
+  }
+
+  if (onlineOk.length > 0) {
+    embeds.push({
+      title: "Watchdog: deployment online",
+      description:
+        onlineOk.map((e) => `**${e.service}** — ${e.message}`).join("\n\n") ||
+        "Service is online with a healthy deployment.",
+      color: EMBED_GREEN,
       footer: { text: "Railway watchdog" },
     });
   }

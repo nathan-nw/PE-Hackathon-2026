@@ -28,7 +28,7 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable}`}
       data-theme="light"
     >
-      <body className="page-shell relative z-0 font-sans">{children}</body>
+      <body className="min-h-screen font-sans">{children}</body>
     </html>
   );
 }

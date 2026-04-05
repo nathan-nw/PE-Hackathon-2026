@@ -9,8 +9,13 @@
  *
  * When `RAILWAY_PRIVATE_DOMAIN` is set (watchdog/dashboard running on Railway),
  * heartbeats default to the **private mesh**: `http://<service>.railway.internal:<port>/path`
- * unless `RAILWAY_HEARTBEAT_USE_PRIVATE_URL=0`. Port defaults to 8080 or
- * `RAILWAY_HEARTBEAT_INTERNAL_PORT`.
+ * unless `RAILWAY_HEARTBEAT_USE_PRIVATE_URL=0`.
+ *
+ * **Port:** API services (Flask, NGINX, FastAPI, watchdog) use **8080** on Railway (`setup-railway.js`).
+ * Next.js standalone services (**`dashboard`**, **`user-frontend`**) listen on **3000**. Probing :8080
+ * against a Next app fails repeatedly → false "exited" lifecycle → auto-redeploy loops. Use
+ * `heartbeatInternalPortForService()` below; override with `RAILWAY_HEARTBEAT_INTERNAL_PORT` (8080 stack)
+ * or `RAILWAY_HEARTBEAT_NEXTJS_INTERNAL_PORT` (default 3000).
  */
 
 import { runtimeEnv } from "./server-runtime-env";
@@ -47,9 +52,24 @@ export function heartbeatPathForService(serviceName: string): string | null {
   return null;
 }
 
-function heartbeatInternalPort(): number {
+/** Flask / NGINX / FastAPI / watchdog — see `setup-railway.js` explicit PORT=8080. */
+function heartbeatInternalPortDefaultStack(): number {
   const n = parseInt(runtimeEnv("RAILWAY_HEARTBEAT_INTERNAL_PORT") ?? "8080", 10);
   return Number.isFinite(n) && n > 0 && n < 65536 ? n : 8080;
+}
+
+/** Next.js standalone (`dashboard`, `user-frontend` Dockerfiles use PORT=3000; SYNC_VARIABLES sets this on UF). */
+function heartbeatInternalPortNextJs(): number {
+  const n = parseInt(runtimeEnv("RAILWAY_HEARTBEAT_NEXTJS_INTERNAL_PORT") ?? "3000", 10);
+  return Number.isFinite(n) && n > 0 && n < 65536 ? n : 3000;
+}
+
+export function heartbeatInternalPortForService(serviceName: string): number {
+  const s = serviceName.trim().toLowerCase();
+  if (s === "dashboard" || s === "user-frontend") {
+    return heartbeatInternalPortNextJs();
+  }
+  return heartbeatInternalPortDefaultStack();
 }
 
 /**
@@ -102,7 +122,7 @@ export function buildHeartbeatProbeUrl(
 
   if (shouldUsePrivateRailwayHeartbeat()) {
     const host = serviceInternalHostname(serviceName);
-    const port = heartbeatInternalPort();
+    const port = heartbeatInternalPortForService(serviceName);
     return `http://${host}.railway.internal:${port}${path}`;
   }
 
