@@ -26,6 +26,8 @@ The Docker Compose stack is for **local** development. On [Railway](https://rail
 
 `railway.toml` files under each app folder define Docker builds, health checks, and **watch paths** so changes in one folder do not rebuild unrelated services.
 
+**Load balancer NGINX** uses the resolver from `/etc/resolv.conf` and **variable `proxy_pass`** so `*.railway.internal` names are **re-resolved** periodically. A plain `upstream { server name:port }` caches DNS at start and can hit **stale IPs** after API replicas redeploy (symptom: `upstream timed out while connecting to upstream` / 504). Override the resolver with **`NGINX_RESOLVER`** if needed.
+
 ## Seed CSV data (production)
 
 Migrations create tables; **`url-shortener/seed.py`** loads **`csv_data/*.csv`** (users, urls, events). Both API replicas share the same Postgres **`DATABASE_URL`**, so you only need to seed **once** (either service’s env is fine).

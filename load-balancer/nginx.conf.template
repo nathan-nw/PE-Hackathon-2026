@@ -52,13 +52,18 @@ http {
     gzip_min_length 256;
     gzip_types application/json text/plain text/css application/javascript text/xml application/xml;
 
-    upstream url_shortener {
-        least_conn;
-        keepalive 64;
-        keepalive_requests 1000;
-        keepalive_timeout 60s;
-        server @UPSTREAM_A@ max_fails=3 fail_timeout=30s;
-        server @UPSTREAM_B@ max_fails=3 fail_timeout=30s;
+    # Static `upstream { server name:port }` resolves each hostname once at nginx start. On Railway,
+    # private service IPs change when replicas redeploy → cached upstream addresses time out (504 while
+    # connecting). `resolver` + variable `proxy_pass` re-resolves hostnames every `valid=` interval.
+    # split_clients + map approximate two-replica load spread (Compose service DNS is stable; re-resolve is harmless).
+    resolver @NGINX_RESOLVER@ valid=10s;
+    split_clients "${remote_addr}${msec}${request_uri}" $url_shortener_pool {
+        50%     a;
+        *       b;
+    }
+    map $url_shortener_pool $url_shortener_backend {
+        a       http://@UPSTREAM_A@;
+        b       http://@UPSTREAM_B@;
     }
 
     server {
@@ -107,7 +112,7 @@ http {
             add_header Referrer-Policy "strict-origin-when-cross-origin" always;
             add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
 
-            proxy_pass http://url_shortener;
+            proxy_pass $url_shortener_backend;
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;

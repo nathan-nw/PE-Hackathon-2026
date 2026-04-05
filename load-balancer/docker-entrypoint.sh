@@ -63,12 +63,21 @@ fi
 
 echo "load-balancer: resolved upstreams UPSTREAM_A=${UPSTREAM_A} UPSTREAM_B=${UPSTREAM_B}" >&2
 
+# DNS for variable proxy_pass (see nginx.conf.template). Use the platform resolver — Railway / Docker
+# inject /etc/resolv.conf; 127.0.0.11 is Docker Embedded DNS for Compose.
+NGINX_RESOLVER="${NGINX_RESOLVER:-$(awk '/^nameserver[[:space:]]/{print $2; exit}' /etc/resolv.conf 2>/dev/null)}"
+if [ -z "${NGINX_RESOLVER}" ]; then
+  NGINX_RESOLVER="127.0.0.11"
+fi
+echo "load-balancer: nginx resolver ${NGINX_RESOLVER} (re-resolve upstream hostnames; avoids stale IPs after Railway redeploys)" >&2
+
 # Railway sets PORT; Compose publishes container port 80 -> omit PORT (default 80).
 NGINX_LISTEN_PORT="${PORT:-80}"
 
 sed -e "s|@UPSTREAM_A@|${UPSTREAM_A}|g" \
     -e "s|@UPSTREAM_B@|${UPSTREAM_B}|g" \
     -e "s|@NGINX_LISTEN_PORT@|${NGINX_LISTEN_PORT}|g" \
+    -e "s|@NGINX_RESOLVER@|${NGINX_RESOLVER}|g" \
     /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
 
 # Nginx resolves upstream names at startup; wait until each replica answers /live so DNS exists
