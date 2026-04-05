@@ -16,11 +16,19 @@ Returned when a requested resource doesn't exist. This happens in two ways:
 
 ## 500 Internal Server Error
 
-Catches unhandled exceptions. The error is logged server-side for debugging, and the client receives a generic response to avoid leaking internals:
+The application provides graceful degradation and security by never leaking internals directly to the client. The errors are logged server-side for debugging.
 
-```json
-{"error": "Internal server error"}
-```
+- **Explicit 500 Errors** — return a generic response:
+  ```json
+  {"error": "Internal server error"}
+  ```
+- **Unhandled Exceptions** — any uncaught exception returns a clean, user-friendly response:
+  ```json
+  {
+    "error": "Internal server error",
+    "detail": "An unexpected error occurred. Please try again."
+  }
+  ```
 
 ## Other Error Codes
 
