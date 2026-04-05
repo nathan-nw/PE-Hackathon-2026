@@ -14,7 +14,7 @@ Monorepo layout:
 
 **Local API:** see [`url-shortener/README.md`](url-shortener/README.md).
 
-**Docker (Postgres + two API replicas + LB + static sites):**
+**Docker (full stack — Postgres, Kafka, two API replicas, LB, dashboard, monitoring):**
 
 From the repo root (folder that contains `docker-compose.yml`):
 
@@ -22,6 +22,13 @@ From the repo root (folder that contains `docker-compose.yml`):
 docker compose up -d --build
 docker compose logs -f
 ```
+
+That single command starts **everything** — no separate database or backend setup is needed. The Flask app automatically creates the database tables (`users`, `urls`, `events`) and seeds a default user on first startup.
+
+**One command (same as `docker compose up -d --build`):** from repo root:
+
+- **Windows (PowerShell or CMD):** `.\scripts\start.ps1` or `.\scripts\start.cmd` — do **not** use `./scripts/start.sh` in PowerShell; it will not run the stack.
+- **Git Bash / WSL / macOS / Linux:** `./scripts/start.sh`
 
 Use **`-d`** (detached) so Compose is not holding the stack in a foreground session (foreground `docker compose up` can be flaky on some Docker Desktop builds). Stop following logs with **Ctrl+C** — that does **not** stop the stack when you only ran `logs -f`.
 

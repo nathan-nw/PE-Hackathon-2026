@@ -237,11 +237,74 @@ services:
   dashboard:
     build:
       context: ./dashboard
+      args:
+        NEXT_PUBLIC_PROMETHEUS_URL: http://localhost:9090
+        NEXT_PUBLIC_ALERTMANAGER_PUBLIC_URL: http://localhost:9093
     restart: always
     networks:
       - app_net
+    depends_on:
+      dashboard-backend:
+        condition: service_started
     ports:
-      - "3001:80"
+      - "3001:3000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Kubernetes pod list: host kubeconfig → /kube/config (override path with KUBECONFIG_HOST in .env if needed).
+      - ${KUBECONFIG_HOST:-~/.kube/config}:/kube/config:ro
+    environment:
+      VISIBILITY_COMPOSE_PROJECT: pe-hackathon-2026
+      VISIBILITY_K8S_ENABLED: "true"
+      KUBECONFIG: /kube/config
+      VISIBILITY_K8S_NAMESPACE: pe-hackathon
+      VISIBILITY_ALERTMANAGER_URL: http://alertmanager:9093
+      VISIBILITY_PROMETHEUS_URL: http://prometheus:9090
+      # FastAPI log cache (Kafka → in-memory → dashboard /api/logs proxy)
+      DASHBOARD_BACKEND_URL: http://dashboard-backend:8000
+
+  dashboard-db:
+    image: postgres:16-alpine
+    container_name: hackathon_dashboard_db
+    restart: always
+    networks:
+      - app_net
+    environment:
+      POSTGRES_DB: dashboard_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "15433:5432"
+    volumes:
+      - dashboard_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  dashboard-backend:
+    build:
+      context: ./dashboard/backend
+    restart: unless-stopped
+    networks:
+      - app_net
+    ports:
+      - "8000:8000"
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_LOG_TOPIC: app-logs
+      CACHE_MAX_ENTRIES: "1000"
+      DB_FLUSH_INTERVAL: "30"
+      DASHBOARD_DB_NAME: dashboard_db
+      DASHBOARD_DB_HOST: dashboard-db
+      DASHBOARD_DB_PORT: "5432"
+      DASHBOARD_DB_USER: postgres
+      DASHBOARD_DB_PASSWORD: postgres
+    depends_on:
+      kafka:
+        condition: service_healthy
+      dashboard-db:
+        condition: service_healthy
 
   user-frontend:
     build:
@@ -260,3 +323,4 @@ volumes:
   pgdata:
   redisdata:
   pg_backups:
+  dashboard_pgdata:

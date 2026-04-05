@@ -9,5 +9,5 @@ data:
   DATABASE_USER: postgres
   FLASK_DEBUG: "false"
   LOG_LEVEL: INFO
-  # Point to your cluster Service or managed DB endpoint.
-  DATABASE_HOST: postgres.pe-hackathon.svc.cluster.local
+  # In-cluster Postgres Service (see postgres-service.yaml); override for managed DB.
+  DATABASE_HOST: db

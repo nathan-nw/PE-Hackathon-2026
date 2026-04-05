@@ -1,24 +1,23 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: url-shortener
+  name: url-shortener-b
   namespace: pe-hackathon
   labels:
-    app: url-shortener
+    app: url-shortener-b
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
-      app: url-shortener
+      app: url-shortener-b
   template:
     metadata:
       labels:
-        app: url-shortener
+        app: url-shortener-b
     spec:
       containers:
         - name: api
-          # Replace with your registry image (digest recommended in production).
-          image: url-shortener:latest
+          image: pe-hackathon/url-shortener:latest
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -27,13 +26,13 @@ spec:
             - configMapRef:
                 name: url-shortener-config
           env:
-            # Use a Secret in real clusters: kubectl create secret generic ...
             - name: DATABASE_PASSWORD
-              value: changeme
-            - name: INSTANCE_ID
               valueFrom:
-                fieldRef:
-                  fieldPath: metadata.name
+                secretKeyRef:
+                  name: postgres-secret
+                  key: password
+            - name: INSTANCE_ID
+              value: "2"
           readinessProbe:
             httpGet:
               path: /ready

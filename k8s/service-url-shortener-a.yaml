@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: url-shortener-a
+  namespace: pe-hackathon
+  labels:
+    app: url-shortener-a
+spec:
+  type: ClusterIP
+  selector:
+    app: url-shortener-a
+  ports:
+    - name: http
+      port: 5000
+      targetPort: http

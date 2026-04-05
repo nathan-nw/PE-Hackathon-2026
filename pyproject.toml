@@ -18,7 +18,7 @@ mlh-pe-hackathon = { path = "url-shortener", editable = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["url-shortener"]
+pythonpath = ["url-shortener", "dashboard/backend"]
 addopts = "-v --cov=app --cov-report=term-missing"
 markers = [
     "integration: HTTP tests against real URLs (set TEST_LOAD_BALANCER_URL / TEST_NGINX_STUB_STATUS_URL)",

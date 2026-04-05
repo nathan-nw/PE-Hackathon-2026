@@ -53,11 +53,16 @@ def configure_logging() -> None:
             datefmt="%Y-%m-%d %H:%M:%S",
         )
 
-    # Add Kafka log handler if configured
+    # Add Kafka log handler if configured (idempotent — safe for gunicorn post_worker_init)
     kafka_servers = os.environ.get("KAFKA_BOOTSTRAP_SERVERS")
     if kafka_servers:
         from app.kafka_logging import KafkaLogHandler
 
+        root = logging.getLogger()
+        for h in list(root.handlers):
+            if type(h).__name__ == "KafkaLogHandler":
+                root.removeHandler(h)
+
         kafka_handler = KafkaLogHandler(bootstrap_servers=kafka_servers)
         kafka_handler.setLevel(level)
-        logging.getLogger().addHandler(kafka_handler)
+        root.addHandler(kafka_handler)

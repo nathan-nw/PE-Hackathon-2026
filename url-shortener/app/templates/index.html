@@ -1,389 +1,624 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>URL Shortener</title>
+<!doctype html>
+<html class="light" lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+    <title>Brief | Elegant URL Shortening</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Inter:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
+      rel="stylesheet"
+    />
+    <script>
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              "primary-fixed": "#e5e2e1",
+              "on-error": "#fff7f7",
+              "inverse-on-surface": "#9c9d9d",
+              background: "#f9f9f9",
+              "on-tertiary-fixed": "#ffffff",
+              "inverse-primary": "#ffffff",
+              outline: "#757c7d",
+              "surface-dim": "#d4dbdd",
+              "on-tertiary": "#f9f8ff",
+              secondary: "#5f5f5f",
+              "on-background": "#2d3435",
+              "tertiary-container": "#007aff",
+              "on-surface": "#2d3435",
+              "on-surface-variant": "#5a6061",
+              "surface-variant": "#dde4e5",
+              "surface-container-highest": "#dde4e5",
+              "tertiary-fixed-dim": "#006ee6",
+              "on-primary-fixed": "#403f3f",
+              "surface-tint": "#5f5e5e",
+              error: "#9e3f4e",
+              "primary-fixed-dim": "#d6d4d3",
+              "on-secondary": "#faf8f8",
+              "on-error-container": "#782232",
+              "on-tertiary-container": "#000000",
+              "primary-container": "#e5e2e1",
+              "error-dim": "#4f0116",
+              "on-secondary-fixed": "#3f3f3f",
+              "on-primary-fixed-variant": "#5c5b5b",
+              "on-secondary-fixed-variant": "#5b5b5b",
+              "surface-bright": "#f9f9f9",
+              "surface-container-lowest": "#ffffff",
+              "on-primary-container": "#525151",
+              "primary-dim": "#535252",
+              "secondary-fixed-dim": "#d5d4d4",
+              "tertiary-dim": "#0050ab",
+              "surface-container-high": "#e4e9ea",
+              surface: "#f9f9f9",
+              "outline-variant": "#adb3b4",
+              primary: "#5f5e5e",
+              "error-container": "#ff8b9a",
+              "tertiary-fixed": "#007aff",
+              "inverse-surface": "#0c0f0f",
+              "surface-container-low": "#f2f4f4",
+              tertiary: "#005bc2",
+              "secondary-container": "#e4e2e2",
+              "surface-container": "#ebeeef",
+              "secondary-fixed": "#e4e2e2",
+              "on-secondary-container": "#515252",
+              "on-tertiary-fixed-variant": "#f8f8ff",
+              "on-primary": "#faf7f6",
+              "secondary-dim": "#535353",
+            },
+            borderRadius: {
+              DEFAULT: "0.125rem",
+              lg: "0.25rem",
+              xl: "0.5rem",
+              full: "0.75rem",
+            },
+            fontFamily: {
+              headline: ["Manrope"],
+              body: ["Inter"],
+              label: ["Inter"],
+            },
+          },
+        },
+      };
+    </script>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #0f172a;
-            color: #e2e8f0;
-            min-height: 100vh;
-        }
-        .container { max-width: 800px; margin: 0 auto; padding: 2rem 1rem; }
-        h1 {
-            text-align: center;
-            font-size: 2.5rem;
-            margin-bottom: 0.5rem;
-            background: linear-gradient(135deg, #818cf8, #c084fc);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        .subtitle {
-            text-align: center;
-            color: #94a3b8;
-            margin-bottom: 2rem;
-        }
-        .card {
-            background: #1e293b;
-            border-radius: 12px;
-            padding: 1.5rem;
-            margin-bottom: 1.5rem;
-            border: 1px solid #334155;
-        }
-        .form-group { margin-bottom: 1rem; }
-        label {
-            display: block;
-            font-size: 0.875rem;
-            color: #94a3b8;
-            margin-bottom: 0.35rem;
-        }
-        input[type="text"], input[type="url"], input[type="number"] {
-            width: 100%;
-            padding: 0.7rem 1rem;
-            border: 1px solid #334155;
-            border-radius: 8px;
-            background: #0f172a;
-            color: #e2e8f0;
-            font-size: 1rem;
-            outline: none;
-            transition: border-color 0.2s;
-        }
-        input:focus { border-color: #818cf8; }
-        .row { display: flex; gap: 1rem; }
-        .row .form-group { flex: 1; }
-        button {
-            padding: 0.7rem 1.5rem;
-            border: none;
-            border-radius: 8px;
-            font-size: 1rem;
-            cursor: pointer;
-            transition: opacity 0.2s;
-        }
-        button:hover { opacity: 0.85; }
-        .btn-primary {
-            background: linear-gradient(135deg, #818cf8, #c084fc);
-            color: #fff;
-            width: 100%;
-            font-weight: 600;
-        }
-        .result {
-            display: none;
-            margin-top: 1rem;
-            padding: 1rem;
-            background: #0f172a;
-            border-radius: 8px;
-            border: 1px solid #334155;
-        }
-        .result.show { display: block; }
-        .result.error { border-color: #f87171; }
-        .result.success { border-color: #34d399; }
-        .short-url {
-            font-size: 1.2rem;
-            color: #818cf8;
-            word-break: break-all;
-        }
-        .short-url a { color: #818cf8; text-decoration: none; }
-        .short-url a:hover { text-decoration: underline; }
-        .copy-btn {
-            background: #334155;
-            color: #e2e8f0;
-            font-size: 0.8rem;
-            padding: 0.4rem 0.8rem;
-            margin-left: 0.5rem;
-        }
-        .error-text { color: #f87171; }
-        h2 {
-            font-size: 1.25rem;
-            margin-bottom: 1rem;
-            color: #cbd5e1;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        th, td {
-            text-align: left;
-            padding: 0.6rem 0.75rem;
-            border-bottom: 1px solid #334155;
-            font-size: 0.875rem;
-        }
-        th { color: #94a3b8; font-weight: 500; }
-        td a { color: #818cf8; text-decoration: none; }
-        td a:hover { text-decoration: underline; }
-        .status-active { color: #34d399; }
-        .status-inactive { color: #f87171; }
-        .pagination {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            gap: 1rem;
-            margin-top: 1rem;
-        }
-        .pagination button {
-            background: #334155;
-            color: #e2e8f0;
-            padding: 0.5rem 1rem;
-        }
-        .pagination button:disabled { opacity: 0.4; cursor: default; }
-        .page-info { color: #94a3b8; font-size: 0.875rem; }
-        .original-url {
-            max-width: 250px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-        .loading { text-align: center; color: #94a3b8; padding: 2rem; }
-        .instance-hud {
-            position: fixed;
-            top: 0.75rem;
-            right: 0.75rem;
-            z-index: 100;
-            min-width: 220px;
-            max-width: min(320px, 92vw);
-            padding: 0.75rem 1rem;
-            border-radius: 10px;
-            background: rgba(15, 23, 42, 0.92);
-            border: 1px solid #475569;
-            font-size: 0.75rem;
-            line-height: 1.45;
-            color: #cbd5e1;
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-            backdrop-filter: blur(8px);
-        }
-        .instance-hud h3 {
-            font-size: 0.7rem;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            color: #94a3b8;
-            margin-bottom: 0.5rem;
-            font-weight: 600;
-        }
-        .instance-hud .id-badge {
-            display: inline-block;
-            font-size: 1rem;
-            font-weight: 700;
-            color: #f8fafc;
-            background: linear-gradient(135deg, #6366f1, #a855f7);
-            padding: 0.15rem 0.55rem;
-            border-radius: 6px;
-            margin-bottom: 0.5rem;
-        }
-        .instance-hud dl {
-            margin: 0;
-            display: grid;
-            grid-template-columns: auto 1fr;
-            gap: 0.15rem 0.75rem;
-        }
-        .instance-hud dt { color: #64748b; }
-        .instance-hud dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; }
-        .instance-hud .host { font-size: 0.65rem; color: #64748b; word-break: break-all; margin-top: 0.35rem; }
-        .instance-hud.error { border-color: #b91c1c; color: #fecaca; }
+      .material-symbols-outlined {
+        font-variation-settings:
+          "FILL" 0,
+          "wght" 400,
+          "GRAD" 0,
+          "opsz" 24;
+        vertical-align: middle;
+      }
+      body {
+        font-family: "Inter", sans-serif;
+        background-color: #f9f9f9;
+        color: #2d3435;
+      }
+      h1,
+      h2,
+      h3,
+      .font-headline {
+        font-family: "Manrope", sans-serif;
+      }
+      .instance-hud {
+        position: fixed;
+        top: 0.75rem;
+        right: 0.75rem;
+        z-index: 100;
+        min-width: 220px;
+        max-width: min(320px, 92vw);
+        padding: 0.75rem 1rem;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.92);
+        border: 1px solid #dde4e5;
+        font-size: 0.75rem;
+        line-height: 1.45;
+        color: #5a6061;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+        backdrop-filter: blur(8px);
+      }
+      .instance-hud h3 {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: #757c7d;
+        margin-bottom: 0.5rem;
+        font-weight: 600;
+      }
+      .instance-hud .id-badge {
+        display: inline-block;
+        font-size: 1rem;
+        font-weight: 700;
+        color: #fff;
+        background: #005bc2;
+        padding: 0.15rem 0.55rem;
+        border-radius: 6px;
+        margin-bottom: 0.5rem;
+      }
+      .instance-hud dl {
+        margin: 0;
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 0.15rem 0.75rem;
+      }
+      .instance-hud dt {
+        color: #adb3b4;
+      }
+      .instance-hud dd {
+        margin: 0;
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+        color: #2d3435;
+      }
+      .instance-hud .host {
+        font-size: 0.65rem;
+        color: #adb3b4;
+        word-break: break-all;
+        margin-top: 0.35rem;
+      }
+      .instance-hud.error {
+        border-color: #9e3f4e;
+        color: #9e3f4e;
+      }
     </style>
-</head>
-<body>
+  </head>
+  <body
+    class="bg-background text-on-background antialiased selection:bg-tertiary/10 selection:text-tertiary"
+  >
+    <!-- Instance HUD -->
     <aside id="instance-hud" class="instance-hud" aria-live="polite">
-        <h3>Server instance</h3>
-        <div class="id-badge" id="hud-id">—</div>
-        <dl>
-            <dt>CPU</dt><dd id="hud-cpu">—</dd>
-            <dt>RAM</dt><dd id="hud-ram">—</dd>
-            <dt>Avg latency</dt><dd id="hud-lat">—</dd>
-            <dt>Uptime</dt><dd id="hud-up">—</dd>
-            <dt>Requests</dt><dd id="hud-req">—</dd>
-            <dt>Threads</dt><dd id="hud-thr">—</dd>
-        </dl>
-        <div class="host" id="hud-host"></div>
+      <h3>Server instance</h3>
+      <div class="id-badge" id="hud-id">&mdash;</div>
+      <dl>
+        <dt>CPU</dt>
+        <dd id="hud-cpu">&mdash;</dd>
+        <dt>RAM</dt>
+        <dd id="hud-ram">&mdash;</dd>
+        <dt>Avg latency</dt>
+        <dd id="hud-lat">&mdash;</dd>
+        <dt>Uptime</dt>
+        <dd id="hud-up">&mdash;</dd>
+        <dt>Requests</dt>
+        <dd id="hud-req">&mdash;</dd>
+        <dt>Threads</dt>
+        <dd id="hud-thr">&mdash;</dd>
+      </dl>
+      <div class="host" id="hud-host"></div>
     </aside>
 
-    <div class="container">
-        <h1>URL Shortener</h1>
-        <p class="subtitle">Shorten your links in seconds</p>
-
-        <div class="card">
-            <form id="shorten-form">
-                <div class="form-group">
-                    <label for="original_url">URL to shorten</label>
-                    <input type="url" id="original_url" placeholder="https://example.com/very/long/url" required>
-                </div>
-                <div class="row">
-                    <div class="form-group">
-                        <label for="title">Title (optional)</label>
-                        <input type="text" id="title" placeholder="My link">
-                    </div>
-                    <div class="form-group">
-                        <label for="short_code">Custom short code (optional)</label>
-                        <input type="text" id="short_code" placeholder="my-link">
-                    </div>
-                </div>
-                <div class="form-group">
-                    <label for="user_id">User ID</label>
-                    <input type="number" id="user_id" value="1" min="1" required>
-                </div>
-                <button type="submit" class="btn-primary">Shorten URL</button>
-            </form>
-            <div id="result" class="result"></div>
+    <!-- Top Navigation Bar -->
+    <nav class="fixed top-0 w-full z-50 bg-[#f9f9f9]/80 backdrop-blur-xl">
+      <div
+        class="flex justify-between items-center px-8 py-4 max-w-screen-2xl mx-auto"
+      >
+        <div
+          class="text-xl font-bold tracking-tighter text-zinc-800 font-headline"
+        >
+          Brief
         </div>
-
-        <div class="card">
-            <h2>Recent URLs</h2>
-            <div id="urls-table">
-                <div class="loading">Loading...</div>
-            </div>
-            <div class="pagination">
-                <button id="prev-btn" onclick="changePage(-1)" disabled>Previous</button>
-                <span id="page-info" class="page-info"></span>
-                <button id="next-btn" onclick="changePage(1)" disabled>Next</button>
-            </div>
+        <div class="flex items-center gap-8">
+          <div class="hidden md:flex gap-6 items-center">
+            <a
+              class="text-zinc-900 font-semibold border-b border-zinc-900 font-headline text-sm tracking-tight transition-colors duration-300"
+              href="#"
+              >Dashboard</a
+            >
+            <a
+              class="text-zinc-500 hover:text-zinc-900 font-medium font-headline text-sm tracking-tight transition-colors duration-300"
+              href="#"
+              >Monitor</a
+            >
+          </div>
+          <div class="flex items-center gap-4">
+            <button
+              class="material-symbols-outlined text-zinc-500 hover:text-zinc-900 transition-colors"
+            >
+              settings
+            </button>
+          </div>
         </div>
-    </div>
+      </div>
+    </nav>
+
+    <main class="min-h-screen pt-32 pb-24 flex flex-col items-center px-6">
+      <!-- Hero Section -->
+      <div class="max-w-4xl w-full text-center mb-16">
+        <h1
+          class="text-5xl md:text-7xl font-extrabold tracking-tighter text-on-surface mb-6 leading-tight"
+        >
+          Simplify your links.
+        </h1>
+        <p
+          class="text-on-surface-variant text-lg md:text-xl max-w-2xl mx-auto leading-relaxed font-light"
+        >
+          Professional URL shortening for high-end digital experiences. Track
+          engagement with surgical precision.
+        </p>
+      </div>
+
+      <!-- Main Interaction Area -->
+      <div class="w-full max-w-2xl">
+        <form id="shorten-form">
+          <div class="relative group">
+            <!-- Background Glow Effect -->
+            <div
+              class="absolute -inset-4 bg-tertiary/5 rounded-2xl blur-xl group-focus-within:bg-tertiary/10 transition-all duration-500"
+            ></div>
+            <!-- Main Input Container -->
+            <div
+              class="relative flex flex-col gap-3 bg-surface-container-lowest p-4 rounded-xl shadow-[0px_12px_32px_rgba(45,52,53,0.06)] transition-all duration-300"
+            >
+              <div class="flex flex-col md:flex-row gap-2">
+                <div class="flex-grow flex items-center px-4 py-2">
+                  <span
+                    class="material-symbols-outlined text-outline-variant mr-3"
+                    >link</span
+                  >
+                  <input
+                    id="original_url"
+                    class="w-full bg-transparent border-none focus:ring-0 text-on-surface placeholder:text-outline-variant text-lg font-body"
+                    placeholder="Paste your long URL here"
+                    type="url"
+                    required
+                  />
+                </div>
+                <button
+                  type="submit"
+                  class="bg-primary hover:bg-primary-dim text-on-primary px-8 py-4 rounded-lg font-headline font-bold text-base transition-all duration-300 active:scale-95 shadow-sm"
+                >
+                  Shorten
+                </button>
+              </div>
+              <!-- Optional fields row -->
+              <div class="flex flex-col md:flex-row gap-2 px-4">
+                <div class="flex-1">
+                  <input
+                    id="title"
+                    class="w-full bg-surface-container-low border border-outline-variant/20 focus:border-tertiary focus:ring-0 rounded-lg px-3 py-2 text-sm text-on-surface placeholder:text-outline-variant font-body"
+                    placeholder="Title (optional)"
+                    type="text"
+                  />
+                </div>
+                <div class="flex-1">
+                  <input
+                    id="short_code"
+                    class="w-full bg-surface-container-low border border-outline-variant/20 focus:border-tertiary focus:ring-0 rounded-lg px-3 py-2 text-sm text-on-surface placeholder:text-outline-variant font-body"
+                    placeholder="Custom short code (optional)"
+                    type="text"
+                  />
+                </div>
+                <div class="w-24">
+                  <input
+                    id="user_id"
+                    class="w-full bg-surface-container-low border border-outline-variant/20 focus:border-tertiary focus:ring-0 rounded-lg px-3 py-2 text-sm text-on-surface placeholder:text-outline-variant font-body"
+                    placeholder="User ID"
+                    type="number"
+                    value="1"
+                    min="1"
+                    required
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </form>
+
+        <!-- Result Area -->
+        <div id="result-container" class="mt-8 hidden">
+          <div
+            id="result"
+            class="bg-surface-container-low rounded-xl p-6 border border-outline-variant/10 flex items-center justify-between group"
+          ></div>
+        </div>
+      </div>
+
+      <!-- Feature Grid -->
+      <section
+        class="mt-32 max-w-6xl w-full grid grid-cols-1 md:grid-cols-12 gap-6"
+      >
+        <div
+          class="md:col-span-7 bg-surface-container-low rounded-xl p-10 flex flex-col justify-between min-h-[320px]"
+        >
+          <div>
+            <h3 class="text-2xl font-bold font-headline mb-4 tracking-tight">
+              Editorial Analytics
+            </h3>
+            <p class="text-on-surface-variant leading-relaxed max-w-md">
+              Our dashboard feels like a high-end publication. Every click is
+              chronicled with beauty and depth.
+            </p>
+          </div>
+          <div class="flex gap-4 mt-8">
+            <span class="h-2 w-12 bg-tertiary rounded-full"></span>
+            <span class="h-2 w-8 bg-outline-variant/30 rounded-full"></span>
+            <span class="h-2 w-8 bg-outline-variant/30 rounded-full"></span>
+          </div>
+        </div>
+        <div
+          class="md:col-span-5 bg-surface-container-lowest border border-outline-variant/10 rounded-xl p-10 flex flex-col justify-center overflow-hidden relative"
+        >
+          <div class="absolute top-0 right-0 p-4">
+            <span
+              class="material-symbols-outlined text-tertiary opacity-20 text-6xl"
+              >insights</span
+            >
+          </div>
+          <h3 class="text-2xl font-bold font-headline mb-4 tracking-tight">
+            Rapid Response
+          </h3>
+          <p class="text-on-surface-variant leading-relaxed">
+            Infrastructure optimized for millisecond redirects. No waiting, just
+            precision.
+          </p>
+        </div>
+      </section>
+
+      <!-- Recent URLs Section -->
+      <section class="mt-16 max-w-6xl w-full">
+        <div
+          class="bg-surface-container-lowest border border-outline-variant/10 rounded-xl p-8 shadow-[0px_12px_32px_rgba(45,52,53,0.04)]"
+        >
+          <h2 class="text-2xl font-bold font-headline mb-6 tracking-tight">
+            Recent URLs
+          </h2>
+          <div id="urls-table">
+            <div class="text-center text-on-surface-variant py-8">
+              Loading...
+            </div>
+          </div>
+          <div class="flex justify-center items-center gap-4 mt-6">
+            <button
+              id="prev-btn"
+              onclick="changePage(-1)"
+              disabled
+              class="px-4 py-2 rounded-lg text-sm font-headline font-semibold bg-surface-container-low text-on-surface-variant hover:bg-surface-container-high disabled:opacity-40 disabled:cursor-default transition-colors"
+            >
+              Previous
+            </button>
+            <span
+              id="page-info"
+              class="text-on-surface-variant text-sm font-body"
+            ></span>
+            <button
+              id="next-btn"
+              onclick="changePage(1)"
+              disabled
+              class="px-4 py-2 rounded-lg text-sm font-headline font-semibold bg-surface-container-low text-on-surface-variant hover:bg-surface-container-high disabled:opacity-40 disabled:cursor-default transition-colors"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-[#f9f9f9] border-t border-zinc-200/10 py-12">
+      <div
+        class="flex flex-col md:flex-row justify-between items-center px-8 max-w-screen-2xl mx-auto"
+      >
+        <div class="text-zinc-500 font-body text-xs tracking-wide mb-4 md:mb-0">
+          &copy; 2024 Brief Architecture. All rights reserved.
+        </div>
+        <div class="flex gap-8">
+          <a
+            class="text-zinc-400 hover:text-blue-600 transition-colors font-body text-xs tracking-wide"
+            href="#"
+            >Privacy</a
+          >
+          <a
+            class="text-zinc-400 hover:text-blue-600 transition-colors font-body text-xs tracking-wide"
+            href="#"
+            >Terms</a
+          >
+          <a
+            class="text-zinc-400 hover:text-blue-600 transition-colors font-body text-xs tracking-wide"
+            href="#"
+            >API</a
+          >
+        </div>
+      </div>
+    </footer>
 
     <script>
-        const BASE = window.location.origin;
+      const BASE = window.location.origin;
 
-        function formatUptime(sec) {
-            const s = Math.floor(sec);
-            const h = Math.floor(s / 3600);
-            const m = Math.floor((s % 3600) / 60);
-            const r = s % 60;
-            if (h > 0) return `${h}h ${m}m`;
-            if (m > 0) return `${m}m ${r}s`;
-            return `${r}s`;
-        }
+      /* ── Instance HUD ── */
+      function formatUptime(sec) {
+        const s = Math.floor(sec);
+        const h = Math.floor(s / 3600);
+        const m = Math.floor((s % 3600) / 60);
+        const r = s % 60;
+        if (h > 0) return `${h}h ${m}m`;
+        if (m > 0) return `${m}m ${r}s`;
+        return `${r}s`;
+      }
 
-        async function refreshInstanceHud() {
-            const el = document.getElementById('instance-hud');
-            try {
-                const res = await fetch(`${BASE}/api/instance-stats`);
-                if (!res.ok) throw new Error('bad status');
-                const d = await res.json();
-                el.classList.remove('error');
-                document.getElementById('hud-id').textContent = `Instance ${d.instance_id}`;
-                document.getElementById('hud-cpu').textContent = `${d.cpu_percent_process}%`;
-                document.getElementById('hud-ram').textContent = `${d.memory_rss_mb} MB (${d.memory_percent_process}%)`;
-                document.getElementById('hud-lat').textContent = `${d.avg_request_latency_ms} ms`;
-                document.getElementById('hud-up').textContent = formatUptime(d.uptime_seconds);
-                document.getElementById('hud-req').textContent = String(d.requests_observed);
-                document.getElementById('hud-thr').textContent = String(d.threads);
-                document.getElementById('hud-host').textContent = d.hostname ? `host: ${d.hostname}` : '';
-                if (d.load_average_1m != null) {
-                    let la = document.getElementById('hud-load');
-                    if (!la) {
-                        const dl = el.querySelector('dl');
-                        const dt = document.createElement('dt');
-                        dt.textContent = 'Load 1m';
-                        la = document.createElement('dd');
-                        la.id = 'hud-load';
-                        dl.appendChild(dt);
-                        dl.appendChild(la);
-                    }
-                    la.textContent = d.load_average_1m.toFixed(2);
-                }
-            } catch {
-                el.classList.add('error');
-                document.getElementById('hud-id').textContent = 'Offline';
+      async function refreshInstanceHud() {
+        const el = document.getElementById("instance-hud");
+        try {
+          const res = await fetch(`${BASE}/api/instance-stats`);
+          if (!res.ok) throw new Error("bad status");
+          const d = await res.json();
+          el.classList.remove("error");
+          document.getElementById("hud-id").textContent =
+            `Instance ${d.instance_id}`;
+          document.getElementById("hud-cpu").textContent =
+            `${d.cpu_percent_process}%`;
+          document.getElementById("hud-ram").textContent =
+            `${d.memory_rss_mb} MB (${d.memory_percent_process}%)`;
+          document.getElementById("hud-lat").textContent =
+            `${d.avg_request_latency_ms} ms`;
+          document.getElementById("hud-up").textContent = formatUptime(
+            d.uptime_seconds,
+          );
+          document.getElementById("hud-req").textContent = String(
+            d.requests_observed,
+          );
+          document.getElementById("hud-thr").textContent = String(d.threads);
+          document.getElementById("hud-host").textContent = d.hostname
+            ? `host: ${d.hostname}`
+            : "";
+          if (d.load_average_1m != null) {
+            let la = document.getElementById("hud-load");
+            if (!la) {
+              const dl = el.querySelector("dl");
+              const dt = document.createElement("dt");
+              dt.textContent = "Load 1m";
+              la = document.createElement("dd");
+              la.id = "hud-load";
+              dl.appendChild(dt);
+              dl.appendChild(la);
             }
+            la.textContent = d.load_average_1m.toFixed(2);
+          }
+        } catch {
+          el.classList.add("error");
+          document.getElementById("hud-id").textContent = "Offline";
         }
-        refreshInstanceHud();
-        setInterval(refreshInstanceHud, 2500);
+      }
+      refreshInstanceHud();
+      setInterval(refreshInstanceHud, 2500);
 
-        let currentPage = 1;
-        let totalPages = 1;
+      /* ── Shorten Form ── */
+      document
+        .getElementById("shorten-form")
+        .addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const resultContainer = document.getElementById("result-container");
+          const resultDiv = document.getElementById("result");
 
-        document.getElementById('shorten-form').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const resultDiv = document.getElementById('result');
+          const body = {
+            original_url: document.getElementById("original_url").value,
+            user_id: parseInt(document.getElementById("user_id").value),
+          };
 
-            const body = {
-                original_url: document.getElementById('original_url').value,
-                user_id: parseInt(document.getElementById('user_id').value),
-            };
+          const title = document.getElementById("title").value.trim();
+          if (title) body.title = title;
 
-            const title = document.getElementById('title').value.trim();
-            if (title) body.title = title;
+          const shortCode = document.getElementById("short_code").value.trim();
+          if (shortCode) body.short_code = shortCode;
 
-            const shortCode = document.getElementById('short_code').value.trim();
-            if (shortCode) body.short_code = shortCode;
+          try {
+            const res = await fetch(`${BASE}/shorten`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            });
+            const data = await res.json();
 
-            try {
-                const res = await fetch(`${BASE}/shorten`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body),
-                });
-                const data = await res.json();
+            resultContainer.classList.remove("hidden");
 
-                if (!res.ok) {
-                    resultDiv.className = 'result show error';
-                    resultDiv.innerHTML = `<span class="error-text">${data.error}</span>`;
-                    return;
-                }
-
-                const shortUrl = `${BASE}/${data.short_code}`;
-                resultDiv.className = 'result show success';
-                resultDiv.innerHTML = `
-                    <span class="short-url">
-                        <a href="${shortUrl}" target="_blank">${shortUrl}</a>
-                    </span>
-                    <button class="copy-btn" onclick="navigator.clipboard.writeText('${shortUrl}')">Copy</button>
-                `;
-                loadUrls();
-            } catch (err) {
-                resultDiv.className = 'result show error';
-                resultDiv.innerHTML = `<span class="error-text">Failed to connect to server</span>`;
+            if (!res.ok) {
+              resultDiv.className =
+                "bg-error-container/20 rounded-xl p-6 border border-error/20";
+              resultDiv.innerHTML = `
+                        <div class="flex items-center gap-3">
+                            <span class="material-symbols-outlined text-error">error</span>
+                            <p class="text-error font-headline font-semibold">${data.error}</p>
+                        </div>`;
+              return;
             }
+
+            const shortUrl = `${BASE}/${data.short_code}`;
+            resultDiv.className =
+              "bg-surface-container-low rounded-xl p-6 border border-outline-variant/10 flex items-center justify-between group";
+            resultDiv.innerHTML = `
+                    <div class="flex items-center gap-4">
+                        <div class="w-10 h-10 bg-tertiary/10 rounded-lg flex items-center justify-center text-tertiary">
+                            <span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">bolt</span>
+                        </div>
+                        <div>
+                            <p class="text-xs font-bold text-tertiary uppercase tracking-widest mb-0.5">Shortened Link</p>
+                            <a href="${shortUrl}" target="_blank" class="text-on-surface font-headline font-semibold text-lg hover:underline">${shortUrl}</a>
+                        </div>
+                    </div>
+                    <button onclick="navigator.clipboard.writeText('${shortUrl}');this.querySelector('span:last-child').textContent='Copied!';setTimeout(()=>this.querySelector('span:last-child').textContent='Copy',1500)" class="flex items-center gap-2 px-4 py-2 rounded-lg text-primary font-bold hover:bg-white transition-colors">
+                        <span class="material-symbols-outlined text-[20px]">content_copy</span>
+                        <span class="text-sm font-headline">Copy</span>
+                    </button>`;
+            loadUrls();
+          } catch (err) {
+            resultContainer.classList.remove("hidden");
+            resultDiv.className =
+              "bg-error-container/20 rounded-xl p-6 border border-error/20";
+            resultDiv.innerHTML = `
+                    <div class="flex items-center gap-3">
+                        <span class="material-symbols-outlined text-error">error</span>
+                        <p class="text-error font-headline font-semibold">Failed to connect to server</p>
+                    </div>`;
+          }
         });
 
-        async function loadUrls() {
-            const container = document.getElementById('urls-table');
-            try {
-                const res = await fetch(`${BASE}/urls?page=${currentPage}&per_page=10`);
-                const data = await res.json();
-                totalPages = Math.ceil(data.total / data.per_page) || 1;
+      /* ── URL Table ── */
+      let currentPage = 1;
+      let totalPages = 1;
 
-                if (data.data.length === 0) {
-                    container.innerHTML = '<div class="loading">No URLs yet. Create one above!</div>';
-                } else {
-                    container.innerHTML = `
-                        <table>
+      async function loadUrls() {
+        const container = document.getElementById("urls-table");
+        try {
+          const res = await fetch(
+            `${BASE}/urls?page=${currentPage}&per_page=10`,
+          );
+          const data = await res.json();
+          totalPages = Math.ceil(data.total / data.per_page) || 1;
+
+          if (data.data.length === 0) {
+            container.innerHTML =
+              '<div class="text-center text-on-surface-variant py-8">No URLs yet. Create one above!</div>';
+          } else {
+            container.innerHTML = `
+                        <div class="overflow-x-auto">
+                        <table class="w-full">
                             <thead>
-                                <tr>
-                                    <th>Short Code</th>
-                                    <th>Original URL</th>
-                                    <th>Title</th>
-                                    <th>Status</th>
+                                <tr class="border-b border-outline-variant/20">
+                                    <th class="text-left py-3 px-4 text-xs font-semibold text-on-surface-variant uppercase tracking-wider font-headline">Short Code</th>
+                                    <th class="text-left py-3 px-4 text-xs font-semibold text-on-surface-variant uppercase tracking-wider font-headline">Original URL</th>
+                                    <th class="text-left py-3 px-4 text-xs font-semibold text-on-surface-variant uppercase tracking-wider font-headline">Title</th>
+                                    <th class="text-left py-3 px-4 text-xs font-semibold text-on-surface-variant uppercase tracking-wider font-headline">Status</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                ${data.data.map(u => `
-                                    <tr>
-                                        <td><a href="${BASE}/${u.short_code}" target="_blank">${u.short_code}</a></td>
-                                        <td class="original-url"><a href="${u.original_url}" target="_blank">${u.original_url}</a></td>
-                                        <td>${u.title || '-'}</td>
-                                        <td class="${u.is_active ? 'status-active' : 'status-inactive'}">${u.is_active ? 'Active' : 'Inactive'}</td>
+                                ${data.data
+                                  .map(
+                                    (u) => `
+                                    <tr class="border-b border-outline-variant/10 hover:bg-surface-container-low/50 transition-colors">
+                                        <td class="py-3 px-4"><a href="${BASE}/${u.short_code}" target="_blank" class="text-tertiary font-semibold hover:underline text-sm">${u.short_code}</a></td>
+                                        <td class="py-3 px-4 max-w-[250px] overflow-hidden text-ellipsis whitespace-nowrap"><a href="${u.original_url}" target="_blank" class="text-on-surface-variant hover:text-tertiary text-sm transition-colors">${u.original_url}</a></td>
+                                        <td class="py-3 px-4 text-sm text-on-surface-variant">${u.title || "&mdash;"}</td>
+                                        <td class="py-3 px-4"><span class="inline-flex items-center gap-1 text-xs font-semibold ${u.is_active ? "text-green-600" : "text-error"}">${u.is_active ? '<span class="w-1.5 h-1.5 bg-green-500 rounded-full"></span> Active' : '<span class="w-1.5 h-1.5 bg-error rounded-full"></span> Inactive'}</span></td>
                                     </tr>
-                                `).join('')}
+                                `,
+                                  )
+                                  .join("")}
                             </tbody>
                         </table>
-                    `;
-                }
+                        </div>`;
+          }
 
-                document.getElementById('page-info').textContent = `Page ${currentPage} of ${totalPages}`;
-                document.getElementById('prev-btn').disabled = currentPage <= 1;
-                document.getElementById('next-btn').disabled = currentPage >= totalPages;
-            } catch (err) {
-                container.innerHTML = '<div class="loading">Failed to load URLs</div>';
-            }
+          document.getElementById("page-info").textContent =
+            `Page ${currentPage} of ${totalPages}`;
+          document.getElementById("prev-btn").disabled = currentPage <= 1;
+          document.getElementById("next-btn").disabled =
+            currentPage >= totalPages;
+        } catch (err) {
+          container.innerHTML =
+            '<div class="text-center text-on-surface-variant py-8">Failed to load URLs</div>';
         }
+      }
 
-        function changePage(delta) {
-            currentPage += delta;
-            loadUrls();
-        }
-
+      function changePage(delta) {
+        currentPage += delta;
         loadUrls();
+      }
+
+      loadUrls();
     </script>
-</body>
+  </body>
 </html>

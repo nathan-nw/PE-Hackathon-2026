@@ -108,7 +108,7 @@ On **Docker Desktop for Windows** (and some **moby** builds), engine-level auto-
 |-------|-------------------|
 | **TLS + HSTS** | `docker compose -f docker-compose.yml -f docker-compose.tls.yml up --build` — HTTPS on **localhost:8443** (self-signed cert baked in `load-balancer/Dockerfile.tls`; HSTS on HTTPS). Plain HTTP remains on **8080**. |
 | **Secrets vault** | Not automated here (use your platform’s Secret store + sealed secrets in CI/CD). |
-| **Autoscaling** | `k8s/hpa-url-shortener.yaml` (CPU/memory). Cloud Run / ECS use their own autoscalers with the same signals. |
+| **Autoscaling** | `k8s/hpa-url-shortener-a.yaml` / `k8s/hpa-url-shortener-b.yaml` (CPU/memory; requires metrics-server). Cloud Run / ECS use their own autoscalers with the same signals. |
 | **JSON logs + trace IDs** | Set `LOG_FORMAT=json` (see `url-shortener/.env.example`). Middleware emits `request_id` / `trace_id` fields for correlation with `X-Request-ID` / NGINX `rid=`. |
 | **Alerting (SLO-style)** | `prometheus/rules/slo.yml` (5xx rate, 429, scrape health, p99 latency from `http_request_duration_seconds`). **Alertmanager** on **:9093** (`alertmanager/alertmanager.yml` — replace webhook for real paging). |
 | **Database backups** | `db-backup` service in `docker-compose.yml` (scheduled logical dumps to volume `pg_backups`). |
@@ -124,6 +124,6 @@ On **Docker Desktop for Windows** (and some **moby** builds), engine-level auto-
 | `alertmanager/` | `alertmanager.yml` |
 | `docker-compose.yml` | Compose stack (API replicas, LB, Prometheus, Alertmanager, `db-backup`) |
 | `docker-compose.tls.yml` / `docker-compose.ha.yml` | Optional TLS + second edge NGINX |
-| `k8s/` | Reference Deployment, Service, HPA, Ingress |
+| `k8s/` | Full stack via `kubectl apply -k k8s/` (Postgres, API `a`/`b`, LB, Prometheus w/ pod SD, Alertmanager, CronJob backup, static UIs, HPA); see `k8s/README.md`. Optional `ingress-url-shortener.yaml`. |
 | `infra/postgres/` | Replication / DR notes |
 | `url-shortener/` | Flask app, Gunicorn, Peewee, metrics, `migrations/`, `scripts/apply_migrations.py` |
