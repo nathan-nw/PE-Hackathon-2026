@@ -12,6 +12,5 @@ This endpoint is explicitly built for machine-readability. Every 15 seconds, our
 ### Endpoint Verification
 Below is visual confirmation showing our backend's `/metrics` endpoint successfully projecting live telemetry.
 
-*(To capture the perfect screenshot for this requirement, just open `http://localhost:8080/metrics` in your web browser while your Docker Compose stack is running, and take a picture of the massive raw text variables!)*
+![image (3)](https://github.com/user-attachments/assets/8cfe85ad-f640-48a9-93f9-aa38b6bf0917)
 
-*[Insert Screenshot Here]*
