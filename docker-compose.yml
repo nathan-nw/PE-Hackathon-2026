@@ -22,6 +22,22 @@ services:
       timeout: 3s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    container_name: hackathon_redis
+    restart: always
+    networks:
+      - app_net
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   zookeeper:
     image: confluentinc/cp-zookeeper:7.6.0
     container_name: hackathon_zookeeper
@@ -91,10 +107,16 @@ services:
       DATABASE_PORT: "5432"
       DATABASE_USER: postgres
       DATABASE_PASSWORD: postgres
+      DB_MAX_CONNECTIONS: "50"
+      REDIS_URL: redis://redis:6379/0
+      RATE_LIMIT_STORAGE: redis://redis:6379/1
+      RATE_LIMIT_DEFAULT: "5000 per minute"
       FLASK_DEBUG: "false"
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       kafka:
         condition: service_healthy
@@ -121,10 +143,16 @@ services:
       DATABASE_PORT: "5432"
       DATABASE_USER: postgres
       DATABASE_PASSWORD: postgres
+      DB_MAX_CONNECTIONS: "50"
+      REDIS_URL: redis://redis:6379/0
+      RATE_LIMIT_STORAGE: redis://redis:6379/1
+      RATE_LIMIT_DEFAULT: "5000 per minute"
       FLASK_DEBUG: "false"
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       kafka:
         condition: service_healthy
@@ -294,5 +322,6 @@ networks:
 
 volumes:
   pgdata:
+  redisdata:
   pg_backups:
   dashboard_pgdata:
