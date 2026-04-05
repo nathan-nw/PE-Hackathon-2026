@@ -689,6 +689,13 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
         "(Variable sync) railway-watchdog: no DASHBOARD_RAILWAY_PROJECT_TOKEN or DASHBOARD_RAILWAY_API_TOKEN — set tokens for GraphQL access."
       );
     }
+    const wdDiscord = (process.env.WATCHDOG_DISCORD_WEBHOOK_URL || "").trim();
+    const discordShared = (process.env.DISCORD_WEBHOOK_URL || "").trim();
+    if (wdDiscord) {
+      railwayWatchdogVars.WATCHDOG_DISCORD_WEBHOOK_URL = wdDiscord;
+    } else if (discordShared) {
+      railwayWatchdogVars.DISCORD_WEBHOOK_URL = discordShared;
+    }
     await upsert("railway-watchdog", railwayWatchdogVars);
   }
 

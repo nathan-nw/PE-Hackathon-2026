@@ -421,7 +421,7 @@ export function UrlShortenerApp() {
 
   if (configLoading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
+      <div className="relative z-[1] flex min-h-[100dvh] items-center justify-center">
         <Loader2 className="text-muted-foreground size-8 animate-spin" aria-hidden />
         <span className="sr-only">Loading</span>
       </div>
@@ -429,27 +429,33 @@ export function UrlShortenerApp() {
   }
 
   return (
-    <div className="from-background to-muted/30 min-h-screen bg-gradient-to-b">
-      <div className="mx-auto max-w-3xl px-4 py-10 sm:py-14">
-        <header className="mb-10 text-center">
-          <div className="mb-3 inline-flex items-center gap-2 rounded-full border bg-card px-3 py-1 text-xs font-medium text-muted-foreground shadow-sm">
+    <div className="relative z-[1] min-h-[100dvh]">
+      <div className="mx-auto max-w-3xl px-4 pb-16 pt-12 sm:px-6 sm:pb-20 sm:pt-16">
+        <header className="mb-12 text-center sm:mb-14">
+          <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-border/60 bg-card/80 px-3.5 py-1.5 text-xs font-medium tracking-wide text-muted-foreground shadow-sm backdrop-blur-sm">
             <Link2 className="size-3.5 text-primary" aria-hidden />
             URL shortener
           </div>
-          <h1 className="text-foreground text-3xl font-bold tracking-tight sm:text-4xl">
+          <h1 className="text-foreground text-3xl font-semibold tracking-tight sm:text-4xl">
             Shorten a link
           </h1>
-          <p className="text-muted-foreground mx-auto mt-2 max-w-xl text-sm leading-relaxed">
-            <code className="bg-muted rounded px-1.5 py-0.5 text-xs">POST /shorten</code>
+          <p className="text-muted-foreground mx-auto mt-3 max-w-xl text-sm leading-relaxed">
+            <code className="rounded-md border border-border/60 bg-muted/80 px-1.5 py-0.5 font-mono text-[0.8rem]">
+              POST /shorten
+            </code>
             {" · "}
-            <code className="bg-muted rounded px-1.5 py-0.5 text-xs">GET /urls</code>
+            <code className="rounded-md border border-border/60 bg-muted/80 px-1.5 py-0.5 font-mono text-[0.8rem]">
+              GET /urls
+            </code>
             {" · "}
-            <code className="bg-muted rounded px-1.5 py-0.5 text-xs">GET /users/&lt;id&gt;/urls</code>
-            <span className="mt-1 block">Uses a valid user ID for new links.</span>
+            <code className="rounded-md border border-border/60 bg-muted/80 px-1.5 py-0.5 font-mono text-[0.8rem]">
+              GET /users/&lt;id&gt;/urls
+            </code>
+            <span className="mt-2 block text-[0.8125rem]">Uses a valid user ID for new links.</span>
           </p>
         </header>
 
-        <Card className="mb-6">
+        <Card className="mb-8">
           <CardHeader>
             <CardTitle>Create</CardTitle>
             <CardDescription>
@@ -575,7 +581,7 @@ export function UrlShortenerApp() {
         </Card>
 
         {recent.length > 0 ? (
-          <Card className="mb-6">
+          <Card className="mb-8">
             <CardHeader>
               <CardTitle className="text-base">Recent (this browser)</CardTitle>
             </CardHeader>
@@ -857,10 +863,14 @@ export function UrlShortenerApp() {
           </CardContent>
         </Card>
 
-        <p className="text-muted-foreground mt-10 text-center text-xs">
-          Backend:{" "}
-          <code className="bg-muted rounded px-1 py-0.5">{backendBase || "—"}</code>
-        </p>
+        <div className="border-border/50 mt-14 border-t pt-8">
+          <p className="text-muted-foreground text-center text-xs">
+            Backend:{" "}
+            <code className="rounded-md border border-border/50 bg-muted/60 px-1.5 py-0.5 font-mono text-[0.7rem]">
+              {backendBase || "—"}
+            </code>
+          </p>
+        </div>
       </div>
     </div>
   );

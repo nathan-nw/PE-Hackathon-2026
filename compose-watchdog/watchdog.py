@@ -15,6 +15,12 @@ from typing import Any
 
 import docker
 
+from discord_notify import (
+    notify_exited,
+    notify_started_after_exit,
+    notify_unhealthy_restart,
+)
+
 
 def _env(name: str, default: str) -> str:
     v = os.environ.get(name)
@@ -139,6 +145,8 @@ def main() -> None:
     )
 
     unhealthy_streak: dict[str, int] = {}
+    exit_notified: set[str] = set()
+    unhealthy_discord_at: dict[str, float] = {}
 
     while True:
         try:
@@ -150,6 +158,8 @@ def main() -> None:
                 unhealthy_streak=unhealthy_streak,
                 unhealthy_polls=unhealthy_polls,
                 interval=interval,
+                exit_notified=exit_notified,
+                unhealthy_discord_at=unhealthy_discord_at,
             )
         except Exception as e:
             _log(f"watchdog: tick error: {e}")
@@ -165,6 +175,8 @@ def _tick(
     unhealthy_streak: dict[str, int],
     unhealthy_polls: int,
     interval: float,
+    exit_notified: set[str],
+    unhealthy_discord_at: dict[str, float],
 ) -> None:
     containers = client.containers.list(
         all=True,
@@ -194,13 +206,19 @@ def _tick(
             (attrs.get("HostConfig") or {}).get("RestartPolicy", {}).get("Name")
         )
 
-        if status == "exited" and _should_recover_exited(policy_name):
-            _log(f"watchdog: starting exited service={svc} id={c.short_id}")
-            try:
-                c.start()
-                _append_event(svc, "start", "exited")
-            except Exception as e:
-                _log(f"watchdog: start failed service={svc}: {e}")
+        if status == "exited":
+            if c.id not in exit_notified:
+                notify_exited(svc, c.short_id)
+                exit_notified.add(c.id)
+            if _should_recover_exited(policy_name):
+                _log(f"watchdog: starting exited service={svc} id={c.short_id}")
+                try:
+                    c.start()
+                    _append_event(svc, "start", "exited")
+                    notify_started_after_exit(svc, c.short_id)
+                    exit_notified.discard(c.id)
+                except Exception as e:
+                    _log(f"watchdog: start failed service={svc}: {e}")
             continue
 
         if status == "running" and _should_restart_unhealthy(policy_name):
@@ -212,6 +230,10 @@ def _tick(
                     _log(
                         f"watchdog: restarting unhealthy service={svc} id={c.short_id}"
                     )
+                    now_ts = time.time()
+                    if now_ts - unhealthy_discord_at.get(c.id, 0) > 45.0:
+                        notify_unhealthy_restart(svc, c.short_id)
+                        unhealthy_discord_at[c.id] = now_ts
                     try:
                         c.restart(timeout=10)
                         _append_event(svc, "restart", "unhealthy")
@@ -224,6 +246,13 @@ def _tick(
     for cid in list(unhealthy_streak):
         if cid not in seen:
             del unhealthy_streak[cid]
+
+    for cid in list(exit_notified):
+        if cid not in seen:
+            exit_notified.discard(cid)
+    for cid in list(unhealthy_discord_at):
+        if cid not in seen:
+            del unhealthy_discord_at[cid]
 
     with STATE["lock"]:
         STATE["last_tick_at"] = time.time()

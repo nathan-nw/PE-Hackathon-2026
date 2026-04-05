@@ -22,6 +22,7 @@ import type {
   WatchdogEvent,
   WatchdogPayload,
 } from "./watchdog-types";
+import { notifyDiscordForWatchdogEvents } from "./watchdog-discord";
 import {
   clearExitLifecycleForService,
   clearExitLifecycleRedeemFlag,
@@ -628,6 +629,8 @@ export async function runRailwayWatchdogTick(
   }
 
   const logTail = state.logTail.length > 0 ? [...state.logTail] : undefined;
+
+  await notifyDiscordForWatchdogEvents(eventsOut);
 
   return {
     source: "railway",

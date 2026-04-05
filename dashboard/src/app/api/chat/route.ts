@@ -1,19 +1,26 @@
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
 
+import { HAPPY_TOOLS } from "@/lib/happy-tools/definitions";
+import { executeHappyTool } from "@/lib/happy-tools/execute";
+import { dashboardSelfOrigin } from "@/lib/happy-tools/self-origin";
 import { runtimeEnv } from "@/lib/server-runtime-env";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const HAPPY_SYSTEM = `You are Happy, a friendly and expert operations assistant embedded in the PE Hackathon visibility dashboard. You help engineers understand application logs, HTTP errors, golden signals, load tests (k6), Docker/Railway visibility, PostgreSQL introspection, and pytest failures.
+const HAPPY_SYSTEM = `You are Happy, a friendly and expert operations assistant embedded in the PE Hackathon visibility dashboard.
+
+You have **tools** that call the same live APIs as the Ops UI: application logs (Kafka-backed cache), error analytics, log insights, golden-signal telemetry, Docker/Railway visibility, Postgres introspection, Alertmanager alerts, incident timeline, k6 load tests, and (when enabled on the host) pytest.
 
 Guidelines:
-- Use Markdown in your replies: headings when helpful, bullet lists, **bold** for emphasis, fenced code blocks for commands, logs, JSON, or stack traces.
-- Use LaTeX math only when it genuinely clarifies (e.g. explaining percentiles or rates): inline $...$ or block $$...$$.
-- You cannot run commands or access live infrastructure yourself. Suggest concrete commands (e.g. \`uv run pytest -k foo -v\`, \`docker compose logs url-shortener-a\`) and help interpret pasted output.
-- Be concise but thorough; prefer actionable steps when debugging.
-- If the user asks about data you cannot see, ask them to paste relevant log lines or metrics from the dashboard.`;
+- **Prefer calling tools** when the user asks about current logs, errors, metrics, containers, load tests, or database layout. Do not claim you cannot access data if a tool can fetch it.
+- Summarize tool output clearly: pull out counts, anomalies, and representative lines — avoid dumping huge JSON.
+- Use Markdown: **bold**, lists, fenced code blocks for commands, logs, or snippets.
+- Use LaTeX only when it clarifies math (rates, percentiles): $...$ or $$...$$.
+- For k6: use k6_get_status before/after; explain presets and duration when starting tests.
+- For pytest: use run_pytest only when enabled; otherwise suggest \`uv run pytest ...\` for the user to run locally.
+- Be concise, actionable, and kind.`;
 
 type IncomingMessage = { role: "user" | "assistant"; content: string };
 
@@ -52,45 +59,81 @@ export async function POST(request: Request) {
     convo.push({ role: m.role, content: m.content });
   }
 
-  const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [{ role: "system", content: HAPPY_SYSTEM }, ...convo];
-
   const model = runtimeEnv("OPENAI_MODEL") ?? "gpt-4o-mini";
-
   const openai = new OpenAI({ apiKey });
+  const selfOrigin = dashboardSelfOrigin();
+
+  const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+    { role: "system", content: HAPPY_SYSTEM },
+    ...convo,
+  ];
+
+  const maxRounds = 12;
 
   try {
-    const stream = await openai.chat.completions.create({
-      model,
-      messages,
-      stream: true,
-      temperature: 0.4,
-    });
+    for (let round = 0; round < maxRounds; round++) {
+      const completion = await openai.chat.completions.create({
+        model,
+        messages,
+        tools: HAPPY_TOOLS,
+        tool_choice: "auto",
+        temperature: 0.35,
+        max_tokens: 4096,
+      });
 
-    const encoder = new TextEncoder();
-    const readable = new ReadableStream({
-      async start(controller) {
-        try {
-          for await (const chunk of stream) {
-            const text = chunk.choices[0]?.delta?.content ?? "";
-            if (text) controller.enqueue(encoder.encode(text));
+      const msg = completion.choices[0]?.message;
+      if (!msg) {
+        return NextResponse.json({ error: "Empty model response" }, { status: 502 });
+      }
+
+      if (msg.tool_calls?.length) {
+        messages.push(msg);
+        for (const tc of msg.tool_calls) {
+          if (tc.type !== "function") continue;
+          const fn = tc.function;
+          let args: Record<string, unknown> = {};
+          try {
+            args = JSON.parse(fn.arguments || "{}") as Record<string, unknown>;
+          } catch {
+            args = {};
           }
-        } catch (e) {
-          console.error("[chat] stream error", e);
-          controller.error(e);
-          return;
+          const result = await executeHappyTool(fn.name, args, { selfOrigin });
+          messages.push({
+            role: "tool",
+            tool_call_id: tc.id,
+            content: result,
+          });
         }
-        controller.close();
-      },
-    });
+        continue;
+      }
 
-    return new Response(readable, {
-      headers: {
-        "Content-Type": "text/plain; charset=utf-8",
-        "Cache-Control": "no-store",
-      },
-    });
+      const text = msg.content ?? "";
+      if (!text.trim()) {
+        return NextResponse.json({ error: "Model returned no text after tools" }, { status: 502 });
+      }
+
+      const encoder = new TextEncoder();
+      const readable = new ReadableStream({
+        start(controller) {
+          const chunkSize = 48;
+          for (let i = 0; i < text.length; i += chunkSize) {
+            controller.enqueue(encoder.encode(text.slice(i, i + chunkSize)));
+          }
+          controller.close();
+        },
+      });
+
+      return new Response(readable, {
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+
+    return NextResponse.json({ error: "Too many tool rounds — try a narrower question." }, { status: 500 });
   } catch (e) {
-    console.error("[chat] OpenAI error", e);
+    console.error("[chat] OpenAI / tools error", e);
     const msg = e instanceof Error ? e.message : "OpenAI request failed";
     return NextResponse.json({ error: msg }, { status: 502 });
   }

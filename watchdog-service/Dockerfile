@@ -14,6 +14,8 @@ FROM node:20-alpine
 WORKDIR /app
 COPY --from=build /build/watchdog-service/dist/server.js ./
 ENV PORT=8080
+# Lets watchdog-discord.ts send notifications (not the dashboard in-process tick).
+ENV RAILWAY_WATCHDOG_WORKER=1
 EXPOSE 8080
 USER node
 CMD ["node", "server.js"]

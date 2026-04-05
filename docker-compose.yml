@@ -240,6 +240,9 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       # Optional override (default gpt-4o-mini in API route)
       OPENAI_MODEL: ${OPENAI_MODEL:-}
+      # Happy chat: run pytest on host (optional; mount repo + set cwd for local dev)
+      HAPPY_PYTEST_ENABLED: ${HAPPY_PYTEST_ENABLED:-}
+      HAPPY_PYTEST_CWD: ${HAPPY_PYTEST_CWD:-}
 
   dashboard-db:
     image: postgres:16-alpine
@@ -330,6 +333,9 @@ services:
       WATCHDOG_SELF_SERVICE: compose-watchdog
       # Optional: comma-separated compose service names to ignore.
       WATCHDOG_EXCLUDE_SERVICES: ${WATCHDOG_EXCLUDE_SERVICES:-}
+      # Optional: Discord notifications (exited / started / unhealthy restart). Same as dashboard-backend if unset.
+      WATCHDOG_DISCORD_WEBHOOK_URL: ${WATCHDOG_DISCORD_WEBHOOK_URL:-}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
 
 networks:
   app_net:
