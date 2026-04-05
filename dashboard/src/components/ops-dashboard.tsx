@@ -23,6 +23,8 @@ import {
   instanceIdFromComposeService,
   labelForInstanceId,
 } from "@/lib/compose-instance";
+import { ErrorMonitor } from "@/components/error-monitor";
+import { LoadTest } from "@/components/load-test";
 import { cn } from "@/lib/utils";
 import { ExternalLink, Loader2, RefreshCw } from "lucide-react";
 
@@ -382,6 +384,8 @@ export function OpsDashboard() {
           <TabsTrigger value="pods">Pods</TabsTrigger>
           <TabsTrigger value="alerts">Alerts</TabsTrigger>
           <TabsTrigger value="logs">Logs</TabsTrigger>
+          <TabsTrigger value="errors">Errors</TabsTrigger>
+          <TabsTrigger value="loadtest">Load Test</TabsTrigger>
           <TabsTrigger value="telemetry">Telemetry</TabsTrigger>
         </TabsList>
 
@@ -881,6 +885,14 @@ export function OpsDashboard() {
               </div>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="errors" keepMounted>
+          <ErrorMonitor />
+        </TabsContent>
+
+        <TabsContent value="loadtest" keepMounted>
+          <LoadTest />
         </TabsContent>
 
         <TabsContent value="telemetry">
