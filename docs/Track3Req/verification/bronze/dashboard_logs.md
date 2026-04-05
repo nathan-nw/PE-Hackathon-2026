@@ -13,6 +13,5 @@ The Next.js web dashboard consumes this exact JSON stream via Kafka in real-time
 ### Visual Verification
 Below is clear visual verification indicating that our Live Dashboard successfully streams and actively displays the backend's structured JSON log outputs directly in the browser.
 
-*(To capture the perfect screenshot for this requirement, ensure your stack is running, open `http://localhost:3001` in your browser, navigate to the Logs/Events section, and take a bold screenshot of the parsed JSON log tables streaming in!)*
+![image (4)](https://github.com/user-attachments/assets/77922149-8a4b-4566-beca-1ded94e94676)
 
-*[Insert Dashboard Log Screenshot Here]*
