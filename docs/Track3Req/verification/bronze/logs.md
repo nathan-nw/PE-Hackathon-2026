@@ -15,6 +15,5 @@ Because the entire infrastructure is deployed using strict containerization logi
 ### Log Verification
 Below is a clear visual verification indicating that our backend containers strictly output structured JSON logic securely.
 
-*(To capture the best screenshot for this requirement, let the app run and execute a few test calls in another tab, then run `docker compose logs url-shortener-a` to see a massive block of beautiful JSON!)*
+<img width="895" height="506" alt="Screenshot 2026-04-05 at 10 28 17 AM" src="https://github.com/user-attachments/assets/74515abb-5ec8-4746-bcdc-2d1bc83077d2" />
 
-*[Insert Screenshot Here]*
