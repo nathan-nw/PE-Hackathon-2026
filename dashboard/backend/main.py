@@ -22,9 +22,11 @@ from db import (
     count_kafka_logs,
     fetch_incident_events,
     fetch_logs_from_db,
+    fetch_watchdog_alerts,
     get_connection,
     init_db,
     insert_incident_event,
+    insert_watchdog_alerts_batch,
     introspect_postgres_server,
     query_log_insights,
 )
@@ -65,6 +67,13 @@ alerter = DiscordAlerter(webhook_url=DISCORD_WEBHOOK_URL)
 def _log_ingest_token() -> str:
     """Read at call time so Railway/runtime env updates are visible (avoid stale import-time snapshot)."""
     return (os.environ.get("LOG_INGEST_TOKEN") or "").strip()
+
+
+def _watchdog_alerts_ingest_token() -> str:
+    return (
+        os.environ.get("WATCHDOG_ALERTS_INGEST_TOKEN", "").strip()
+        or _log_ingest_token()
+    )
 
 
 def _log_entry_key(entry: dict[str, Any]) -> tuple:
@@ -564,6 +573,59 @@ async def alertmanager_webhook(request: Request):
 
 
 # ── Incident Timeline ─────────────────────────────────────────────────────────
+
+
+@app.post("/api/watchdog-alerts/ingest")
+async def watchdog_alerts_ingest(request: Request):
+    """Persist watchdog events from railway-watchdog worker or compose-watchdog (same auth as log ingest)."""
+    expected = _watchdog_alerts_ingest_token()
+    if expected:
+        got = request.headers.get("x-watchdog-alerts-token") or ""
+        if not got:
+            auth = request.headers.get("authorization") or ""
+            if auth.lower().startswith("bearer "):
+                got = auth[7:].strip()
+        if got != expected:
+            raise HTTPException(status_code=401, detail="Invalid watchdog alerts ingest token")
+    elif not ALLOW_INSECURE_LOG_INGEST:
+        raise HTTPException(
+            status_code=503,
+            detail="Set WATCHDOG_ALERTS_INGEST_TOKEN or LOG_INGEST_TOKEN on dashboard-backend",
+        )
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON body required") from None
+
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Expected JSON object")
+
+    source = str(body.get("source") or "railway").strip()[:32] or "railway"
+    raw_events = body.get("events")
+    if not isinstance(raw_events, list):
+        raise HTTPException(status_code=400, detail="events must be a list")
+
+    events: list[dict[str, Any]] = [e for e in raw_events if isinstance(e, dict)]
+    n = insert_watchdog_alerts_batch(source, events)
+    return {"inserted": n, "received": len(events), "status": "ok"}
+
+
+@app.get("/api/watchdog-alerts")
+def get_watchdog_alerts(
+    limit: int = Query(200, ge=1, le=2000),
+    source: str | None = Query(None),
+    kind: str | None = Query(None),
+    window_hours: int = Query(168, ge=1, le=720),
+):
+    """Return persisted watchdog alerts (Ops UI history)."""
+    alerts = fetch_watchdog_alerts(
+        limit=limit,
+        source=source,
+        kind=kind,
+        window_hours=window_hours,
+    )
+    return {"alerts": alerts, "count": len(alerts)}
 
 
 @app.get("/api/incidents")

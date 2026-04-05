@@ -23,7 +23,10 @@ import type {
   WatchdogEvent,
   WatchdogPayload,
 } from "./watchdog-types";
-import { notifyDiscordForWatchdogEvents } from "./watchdog-discord";
+import {
+  notifyDiscordForWatchdogEvents,
+  persistWatchdogAlertsToBackend,
+} from "./watchdog-discord";
 import {
   clearExitLifecycleForService,
   clearExitLifecycleRedeemFlag,
@@ -245,6 +248,13 @@ function isDeploymentDownOrFailed(
   const u = cur.toUpperCase();
   if (u === "CRASHED" || u === "FAILED") return true;
   return isNowStoppedOrNoDeployment(depId, cur, row);
+}
+
+/** Railway UI says the service is not running (kill/stop/crash), even if raw status string is odd. */
+function isOfflineRailwayUi(online: RailwayOnlineStatus): boolean {
+  return (
+    online === "completed" || online === "failed" || online === "exited"
+  );
 }
 
 export function railwayWatchdogIntervalSec(): number {
@@ -561,12 +571,27 @@ export async function runRailwayWatchdogTick(
       const c = cur.toUpperCase();
       const prevOnline = before.onlineStatus;
 
-      if (wasActivelyDeployed(before) && isDeploymentDownOrFailed(depId, cur, row)) {
+      const wasUp = wasActivelyDeployed(before);
+      const downByDeployment = isDeploymentDownOrFailed(depId, cur, row);
+      /** Kills often show as **completed** in GraphQL UI before raw status catches up — catch that transition. */
+      const downByUi =
+        wasUp &&
+        prevOnline === "online" &&
+        isOfflineRailwayUi(onlineNow) &&
+        !isDeploying(cur);
+
+      if (wasUp && (downByDeployment || downByUi)) {
         const curU = cur.toUpperCase();
-        const downMsg =
-          curU === "CRASHED" || curU === "FAILED"
-            ? `Deployment **${curU.toLowerCase()}** for ${name} (was ${before.deploymentStatus}, now ${cur}).`
-            : `Deployment stopped or removed; no active deployment for ${name} (was ${before.deploymentStatus}, now ${cur || "none"}).`;
+        let downMsg: string;
+        if (curU === "CRASHED" || curU === "FAILED") {
+          downMsg = `Deployment **${curU.toLowerCase()}** for ${name} (was ${before.deploymentStatus}, now ${cur}).`;
+        } else if (onlineNow === "failed" || onlineNow === "exited") {
+          downMsg = `**${name}** is **${onlineNow}** (deployment status: ${cur || "n/a"}).`;
+        } else if (onlineNow === "completed") {
+          downMsg = `**${name}** stopped or has **no active deployment** (was ${before.deploymentStatus}, now ${cur || "n/a"} — lifecycle: **${onlineNow}**).`;
+        } else {
+          downMsg = `Deployment stopped or removed; no active deployment for ${name} (was ${before.deploymentStatus}, now ${cur || "none"}).`;
+        }
         events.push({
           id: `${sid}-stopped-${Date.now()}`,
           at: now,
@@ -577,23 +602,6 @@ export async function runRailwayWatchdogTick(
         pushLogLine(
           state,
           `watchdog: ${name} railway_stopped (${before.deploymentStatus} → ${cur || "no deployment"})`
-        );
-      } else if (
-        before &&
-        wasActivelyDeployed(before) &&
-        before.onlineStatus === "online" &&
-        onlineNow === "failed"
-      ) {
-        events.push({
-          id: `${sid}-failed-${Date.now()}`,
-          at: now,
-          service: name,
-          kind: "railway_stopped",
-          message: `Deployment unhealthy (**failed**) for ${name} (lifecycle: ${before.deploymentStatus} → ${cur || "unknown"}).`,
-        });
-        pushLogLine(
-          state,
-          `watchdog: ${name} railway_stopped (online → failed, status=${cur})`
         );
       }
 
@@ -660,6 +668,22 @@ export async function runRailwayWatchdogTick(
         });
         pushLogLine(state, `watchdog: ${name} railway_online (${before.onlineStatus} → online, ${cur})`);
       }
+    } else {
+      /** Worker cold start / new service: still notify if the service is already down (no prior tick). */
+      if (!isDeploying(cur)) {
+        const observedDown =
+          isDeploymentDownOrFailed(depId, cur, row) || isOfflineRailwayUi(onlineNow);
+        if (observedDown) {
+          events.push({
+            id: `${sid}-down-init-${Date.now()}`,
+            at: now,
+            service: name,
+            kind: "railway_stopped",
+            message: `**${name}** is down (lifecycle **${onlineNow}**, deployment **${cur || "n/a"}**) — first observation in this watchdog process.`,
+          });
+          pushLogLine(state, `watchdog: ${name} observed down (no prior state)`);
+        }
+      }
     }
 
     prev.set(sid, {
@@ -703,6 +727,7 @@ export async function runRailwayWatchdogTick(
 
   const logTail = state.logTail.length > 0 ? [...state.logTail] : undefined;
 
+  await persistWatchdogAlertsToBackend(eventsOut, "railway");
   await notifyDiscordForWatchdogEvents(eventsOut);
 
   return {

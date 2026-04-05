@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time
+import uuid
 import urllib.error
 import urllib.request
 
@@ -53,6 +54,62 @@ def _webhook_url() -> str:
     )
 
 
+def _compose_event(kind: str, service: str, message: str, **extra: object) -> dict:
+    eid = f"compose-{kind}-{service}-{uuid.uuid4().hex}"
+    ev: dict = {
+        "id": eid,
+        "kind": kind,
+        "service": service,
+        "message": message,
+        **{k: v for k, v in extra.items() if v is not None},
+    }
+    return ev
+
+
+def _persist_watchdog_alerts_to_backend(events: list[dict]) -> None:
+    """POST to dashboard-backend ``/api/watchdog-alerts/ingest`` when ``DASHBOARD_BACKEND_URL`` is set."""
+    if not events:
+        return
+    base = os.environ.get("DASHBOARD_BACKEND_URL", "").strip().rstrip("/")
+    if not base:
+        return
+    token = (
+        os.environ.get("WATCHDOG_ALERTS_INGEST_TOKEN", "").strip()
+        or os.environ.get("LOG_INGEST_TOKEN", "").strip()
+    )
+    insecure = os.environ.get("ALLOW_INSECURE_LOG_INGEST", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if not token and not insecure:
+        return
+    body = json.dumps({"source": "compose", "events": events}).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": _UA,
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+        headers["X-Watchdog-Alerts-Token"] = token
+    req = urllib.request.Request(
+        f"{base}/api/watchdog-alerts/ingest",
+        data=body,
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            if resp.status >= 400:
+                logger.warning("watchdog alerts ingest HTTP %s", resp.status)
+    except urllib.error.HTTPError as e:
+        logger.warning(
+            "watchdog alerts ingest failed: %s %s", e.code, e.read().decode()[:200]
+        )
+    except Exception as e:
+        logger.warning("watchdog alerts ingest failed: %s", e)
+
+
 def _post_embeds(embeds: list[dict]) -> None:
     global _last_post_m
     url = _webhook_url()
@@ -92,6 +149,16 @@ def _post_embeds(embeds: list[dict]) -> None:
 
 def notify_exited(service: str, container_short: str) -> None:
     """Container is stopped/exited — matches 'broken and exited'."""
+    _persist_watchdog_alerts_to_backend(
+        [
+            _compose_event(
+                "compose_exited",
+                service,
+                f"Container `{container_short}` is exited.",
+                container_short=container_short,
+            )
+        ]
+    )
     if not _webhook_url():
         return
     _post_embeds(
@@ -111,6 +178,16 @@ def notify_exited(service: str, container_short: str) -> None:
 
 def notify_started_after_exit(service: str, container_short: str) -> None:
     """Recovery after exit — 'redeploying' equivalent locally."""
+    _persist_watchdog_alerts_to_backend(
+        [
+            _compose_event(
+                "compose_recovered",
+                service,
+                f"Running again after exit (`{container_short}`).",
+                container_short=container_short,
+            )
+        ]
+    )
     if not _webhook_url():
         return
     _post_embeds(
@@ -129,6 +206,16 @@ def notify_started_after_exit(service: str, container_short: str) -> None:
 
 def notify_unhealthy_restart(service: str, container_short: str) -> None:
     """Unhealthy container restart."""
+    _persist_watchdog_alerts_to_backend(
+        [
+            _compose_event(
+                "compose_unhealthy_restart",
+                service,
+                f"Restarting unhealthy container `{container_short}`.",
+                container_short=container_short,
+            )
+        ]
+    )
     if not _webhook_url():
         return
     _post_embeds(

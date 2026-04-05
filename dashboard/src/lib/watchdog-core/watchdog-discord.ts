@@ -164,3 +164,49 @@ export async function notifyDiscordForWatchdogEvents(
     console.warn(`[watchdog-discord] send failed: ${msg}`);
   }
 }
+
+/**
+ * Persist all watchdog events to dashboard-backend Postgres (`watchdog_alerts`).
+ * Set `DASHBOARD_BACKEND_URL` on the worker; auth uses `WATCHDOG_ALERTS_INGEST_TOKEN` or `LOG_INGEST_TOKEN`
+ * (or `ALLOW_INSECURE_LOG_INGEST=1` locally).
+ */
+export async function persistWatchdogAlertsToBackend(
+  events: WatchdogEvent[],
+  source: "railway" | "compose" = "railway"
+): Promise<void> {
+  if (!events.length) return;
+  const base = (process.env.DASHBOARD_BACKEND_URL || "").trim().replace(/\/$/, "");
+  if (!base) return;
+  const token =
+    (process.env.WATCHDOG_ALERTS_INGEST_TOKEN || "").trim() ||
+    (process.env.LOG_INGEST_TOKEN || "").trim();
+  const allowInsecure =
+    (process.env.ALLOW_INSECURE_LOG_INGEST || "").trim() === "1";
+  if (!token && !allowInsecure) return;
+
+  try {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "User-Agent": UA,
+    };
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+      headers["X-Watchdog-Alerts-Token"] = token;
+    }
+    const res = await fetch(`${base}/api/watchdog-alerts/ingest`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ source, events }),
+    });
+    if (!res.ok) {
+      const t = await res.text().catch(() => "");
+      console.warn(
+        `[watchdog-discord] persist alerts HTTP ${res.status}${t ? `: ${t.slice(0, 200)}` : ""}`
+      );
+    }
+  } catch (e) {
+    console.warn(
+      `[watchdog-discord] persist alerts failed: ${e instanceof Error ? e.message : String(e)}`
+    );
+  }
+}

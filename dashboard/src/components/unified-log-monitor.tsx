@@ -346,10 +346,19 @@ function GraphTooltip({ data }: { data: TooltipData }) {
   );
 }
 
-function rowKey(row: LogEntry, idx: number) {
-  const ts = String(row.timestamp ?? "");
-  const rid = String(row.request_id ?? "");
-  return `${ts}-${rid}-${idx}`;
+/** Stable across poll refreshes (do not use list index — it shifts when new logs arrive). */
+function stableLogRowKey(row: LogEntry): string {
+  const rawId = row.id ?? row.kafka_log_id;
+  if (rawId != null && String(rawId) !== "") {
+    return `id:${String(rawId)}`;
+  }
+  let h = 2166136261;
+  const s = JSON.stringify(row);
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return `fp:${(h >>> 0).toString(36)}`;
 }
 
 type UnifiedLogMonitorProps = {
@@ -381,7 +390,7 @@ export function UnifiedLogMonitor({
   const [showErrors, setShowErrors] = useState(true);
   const [showErrorRate, setShowErrorRate] = useState(false);
 
-  const [expanded, setExpanded] = useState<string | null>(null);
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     if (!instanceJump?.instanceId) return;
@@ -461,7 +470,7 @@ export function UnifiedLogMonitor({
     try {
       await fetch("/api/errors/clear", { method: "POST" });
       await fetchAll();
-      setExpanded(null);
+      setExpandedKeys(new Set());
     } catch {
       // ignore
     } finally {
@@ -779,8 +788,9 @@ export function UnifiedLogMonitor({
           <div>
             <h3 className="mb-2 text-sm font-medium">Log entries</h3>
             <p className="text-muted-foreground mb-3 text-xs">
-              Click a row to expand the full structured record (JSON). Request bodies are only
-              present if the API logs them.
+              Click rows to expand or collapse the full structured record (JSON). Multiple rows can
+              stay open while the list refreshes. Request bodies are only present if the API logs
+              them.
             </p>
             <div className="max-h-[min(55vh,520px)] overflow-auto rounded-md border">
               <Table>
@@ -805,9 +815,9 @@ export function UnifiedLogMonitor({
                       </TableCell>
                     </TableRow>
                   )}
-                  {(insights?.logs ?? []).map((row, idx) => {
-                    const k = rowKey(row, idx);
-                    const isOpen = expanded === k;
+                  {(insights?.logs ?? []).map((row) => {
+                    const k = stableLogRowKey(row);
+                    const isOpen = expandedKeys.has(k);
                     const sc = row.status_code;
                     const code =
                       typeof sc === "number"
@@ -819,7 +829,14 @@ export function UnifiedLogMonitor({
                       <Fragment key={k}>
                         <TableRow
                           className="cursor-pointer hover:bg-muted/40"
-                          onClick={() => setExpanded(isOpen ? null : k)}
+                          onClick={() => {
+                            setExpandedKeys((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(k)) next.delete(k);
+                              else next.add(k);
+                              return next;
+                            });
+                          }}
                         >
                           <TableCell className="align-top">
                             {isOpen ? (

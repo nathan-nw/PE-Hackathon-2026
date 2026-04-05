@@ -291,6 +291,10 @@ services:
       # Ops tab: expand Compose ``db`` row → profile=main (same DB as url-shortener)
       INTROSPECT_DB_URL: postgresql://postgres:postgres@db:5432/hackathon_db
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      # Watchdog alert ingest (compose-watchdog / railway-watchdog POST). Optional: set in .env or use ALLOW_INSECURE_LOG_INGEST=1 for local only.
+      LOG_INGEST_TOKEN: ${LOG_INGEST_TOKEN:-}
+      WATCHDOG_ALERTS_INGEST_TOKEN: ${WATCHDOG_ALERTS_INGEST_TOKEN:-}
+      ALLOW_INSECURE_LOG_INGEST: ${ALLOW_INSECURE_LOG_INGEST:-}
       # Ops Telemetry tab: golden signals from HTTP logs + instance-stats via load balancer (see telemetry_agg.py).
       TELEMETRY_LOAD_BALANCER_URL: http://load-balancer:80
     depends_on:
@@ -336,6 +340,10 @@ services:
       # Optional: Discord notifications (exited / started / unhealthy restart). Same as dashboard-backend if unset.
       WATCHDOG_DISCORD_WEBHOOK_URL: ${WATCHDOG_DISCORD_WEBHOOK_URL:-}
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      # Persist compose watchdog events to dashboard_db (same auth as dashboard-backend ingest).
+      DASHBOARD_BACKEND_URL: http://dashboard-backend:8000
+      LOG_INGEST_TOKEN: ${LOG_INGEST_TOKEN:-}
+      WATCHDOG_ALERTS_INGEST_TOKEN: ${WATCHDOG_ALERTS_INGEST_TOKEN:-}
 
 networks:
   app_net:

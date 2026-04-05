@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -115,6 +122,25 @@ type AlertsResponse = {
   error?: string;
 };
 
+type WatchdogAlertRow = {
+  id: number;
+  event_id: string;
+  source: string;
+  kind: string;
+  service: string;
+  message: string;
+  severity: string;
+  raw_json?: Record<string, unknown>;
+  created_at?: string | null;
+};
+
+type WatchdogAlertsResponse = {
+  alerts: WatchdogAlertRow[];
+  count?: number;
+  error?: string;
+  hint?: string;
+};
+
 function formatBytes(n: number | undefined) {
   if (n == null || Number.isNaN(n)) return "—";
   const units = ["B", "KB", "MB", "GB"];
@@ -164,6 +190,11 @@ function stateBadge(state: string, health?: string) {
 export function OpsDashboard() {
   const [docker, setDocker] = useState<DockerResponse | null>(null);
   const [alerts, setAlerts] = useState<AlertsResponse | null>(null);
+  const [watchdogAlerts, setWatchdogAlerts] =
+    useState<WatchdogAlertsResponse | null>(null);
+  const [watchdogExpandedIds, setWatchdogExpandedIds] = useState<Set<number>>(
+    () => new Set()
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastFetch, setLastFetch] = useState<Date | null>(null);
@@ -174,27 +205,38 @@ export function OpsDashboard() {
     nonce: number;
   } | null>(null);
 
-  const [pgDetailKey, setPgDetailKey] = useState<string | null>(null);
-  const [pgData, setPgData] = useState<PostgresIntrospectResponse | null>(null);
-  const [pgLoadedForId, setPgLoadedForId] = useState<string | null>(null);
-  const [pgLoading, setPgLoading] = useState(false);
-  const [pgError, setPgError] = useState<string | null>(null);
-  const pgReqGen = useRef(0);
+  const [pgExpandedIds, setPgExpandedIds] = useState<Set<string>>(() => new Set());
+  const [pgSlots, setPgSlots] = useState<
+    Record<
+      string,
+      {
+        data: PostgresIntrospectResponse | null;
+        error: string | null;
+        loading: boolean;
+      }
+    >
+  >({});
+  /** Per-container fetch generation so stale responses are ignored when re-fetching the same row. */
+  const pgFetchSeq = useRef<Record<string, number>>({});
 
   const fetchAll = useCallback(async () => {
     setError(null);
     const qs = "?heartbeats=1&stats=1";
     try {
-      const [d, a] = await Promise.all([
+      const [d, a, w] = await Promise.all([
         fetch(`/api/visibility/docker${qs}`, { cache: "no-store" }).then((r) =>
           r.json()
         ),
         fetch("/api/visibility/alerts", { cache: "no-store" }).then((r) =>
           r.json()
         ),
+        fetch("/api/watchdog-alerts?limit=200&window_hours=720", {
+          cache: "no-store",
+        }).then((r) => r.json()),
       ]);
       setDocker(d as DockerResponse);
       setAlerts(a as AlertsResponse);
+      setWatchdogAlerts(w as WatchdogAlertsResponse);
       setLastFetch(new Date());
     } catch (e) {
       setError(
@@ -220,11 +262,18 @@ export function OpsDashboard() {
 
   const loadPostgresIntrospect = useCallback(
     async (c: DockerContainer, source: string | undefined) => {
-      const gen = ++pgReqGen.current;
+      const id = c.id;
+      pgFetchSeq.current[id] = (pgFetchSeq.current[id] ?? 0) + 1;
+      const mySeq = pgFetchSeq.current[id];
       const profile = introspectProfileForRow(source, c.service, c.image);
-      setPgLoading(true);
-      setPgError(null);
-      setPgLoadedForId(null);
+      setPgSlots((prev) => ({
+        ...prev,
+        [id]: {
+          data: prev[id]?.data ?? null,
+          error: null,
+          loading: true,
+        },
+      }));
       try {
         const params = new URLSearchParams();
         params.set("profile", profile);
@@ -233,20 +282,36 @@ export function OpsDashboard() {
           error?: string;
           hint?: string;
         };
-        if (gen !== pgReqGen.current) return;
+        if (pgFetchSeq.current[id] !== mySeq) return;
         if (!res.ok) {
-          setPgError(j.error ?? `HTTP ${res.status}`);
-          setPgData(null);
+          setPgSlots((prev) => ({
+            ...prev,
+            [id]: {
+              data: null,
+              error: j.error ?? `HTTP ${res.status}`,
+              loading: false,
+            },
+          }));
           return;
         }
-        setPgData(j);
-        setPgLoadedForId(c.id);
+        setPgSlots((prev) => ({
+          ...prev,
+          [id]: {
+            data: j,
+            error: null,
+            loading: false,
+          },
+        }));
       } catch (e) {
-        if (gen !== pgReqGen.current) return;
-        setPgError(e instanceof Error ? e.message : "Request failed");
-        setPgData(null);
-      } finally {
-        if (gen === pgReqGen.current) setPgLoading(false);
+        if (pgFetchSeq.current[id] !== mySeq) return;
+        setPgSlots((prev) => ({
+          ...prev,
+          [id]: {
+            data: null,
+            error: e instanceof Error ? e.message : "Request failed",
+            loading: false,
+          },
+        }));
       }
     },
     []
@@ -404,7 +469,11 @@ export function OpsDashboard() {
                       c.service,
                       c.image
                     );
-                    const pgOpen = showPg && pgDetailKey === c.id;
+                    const pgOpen = showPg && pgExpandedIds.has(c.id);
+                    const pgSlot = pgSlots[c.id];
+                    const pgLoading = pgSlot?.loading ?? false;
+                    const pgError = pgSlot?.error ?? null;
+                    const pgData = pgSlot?.data ?? null;
                     const mainRow = (
                       <TableRow key={c.id}>
                         <TableCell className="font-medium">
@@ -423,11 +492,18 @@ export function OpsDashboard() {
                                 }
                                 onClick={() => {
                                   if (pgOpen) {
-                                    setPgDetailKey(null);
+                                    setPgExpandedIds((prev) => {
+                                      const next = new Set(prev);
+                                      next.delete(c.id);
+                                      return next;
+                                    });
                                     return;
                                   }
-                                  setPgDetailKey(c.id);
-                                  void loadPostgresIntrospect(c, docker?.source);
+                                  setPgExpandedIds((prev) => new Set(prev).add(c.id));
+                                  const slot = pgSlots[c.id];
+                                  if (!slot?.data && !slot?.loading) {
+                                    void loadPostgresIntrospect(c, docker?.source);
+                                  }
                                 }}
                               >
                                 {pgOpen ? (
@@ -542,10 +618,7 @@ export function OpsDashboard() {
                                 {pgError}
                               </p>
                             )}
-                            {!pgLoading &&
-                              !pgError &&
-                              pgData &&
-                              pgLoadedForId === c.id && (
+                            {!pgLoading && !pgError && pgData && (
                               <>
                                 <div>
                                   <div className="mb-1 text-sm font-medium">
@@ -644,7 +717,7 @@ export function OpsDashboard() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="alerts">
+        <TabsContent value="alerts" className="space-y-4">
           <Card>
             <CardHeader>
               <CardTitle>Active alerts</CardTitle>
@@ -703,6 +776,127 @@ export function OpsDashboard() {
                       </TableCell>
                     </TableRow>
                   ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Watchdog alert history</CardTitle>
+              <CardDescription>
+                Events persisted from the Railway and compose watchdogs (full
+                payload available per row).
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {watchdogAlerts?.error && (
+                <p className="text-destructive mb-1 text-sm">
+                  {watchdogAlerts.error}
+                </p>
+              )}
+              {watchdogAlerts?.hint && (
+                <p className="text-muted-foreground mb-2 text-xs">
+                  {watchdogAlerts.hint}
+                </p>
+              )}
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-8" />
+                    <TableHead>Time</TableHead>
+                    <TableHead>Severity</TableHead>
+                    <TableHead>Source</TableHead>
+                    <TableHead>Kind</TableHead>
+                    <TableHead>Service</TableHead>
+                    <TableHead>Message</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {(watchdogAlerts?.alerts ?? []).length === 0 && (
+                    <TableRow>
+                      <TableCell
+                        colSpan={7}
+                        className="text-muted-foreground"
+                      >
+                        No watchdog alerts recorded yet (or backend unreachable).
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {(watchdogAlerts?.alerts ?? []).map((row) => {
+                    const open = watchdogExpandedIds.has(row.id);
+                    return (
+                      <Fragment key={row.id}>
+                        <TableRow
+                          className="cursor-pointer hover:bg-muted/50"
+                          onClick={() => {
+                            setWatchdogExpandedIds((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(row.id)) next.delete(row.id);
+                              else next.add(row.id);
+                              return next;
+                            });
+                          }}
+                        >
+                          <TableCell className="align-middle">
+                            {open ? (
+                              <ChevronDown className="size-4" />
+                            ) : (
+                              <ChevronRight className="size-4" />
+                            )}
+                          </TableCell>
+                          <TableCell className="whitespace-nowrap text-xs">
+                            {row.created_at
+                              ? new Date(row.created_at).toLocaleString()
+                              : "—"}
+                          </TableCell>
+                          <TableCell>
+                            <Badge
+                              variant={
+                                row.severity === "critical"
+                                  ? "destructive"
+                                  : row.severity === "info"
+                                    ? "secondary"
+                                    : "outline"
+                              }
+                              className="capitalize"
+                            >
+                              {row.severity ?? "—"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="font-mono text-xs">
+                            {row.source}
+                          </TableCell>
+                          <TableCell className="max-w-[140px] font-mono text-xs">
+                            {row.kind}
+                          </TableCell>
+                          <TableCell className="max-w-[160px]">
+                            {row.service}
+                          </TableCell>
+                          <TableCell className="max-w-md text-sm">
+                            {row.message}
+                          </TableCell>
+                        </TableRow>
+                        {open && (
+                          <TableRow>
+                            <TableCell colSpan={7} className="bg-muted/30">
+                              <div className="text-muted-foreground mb-1 text-xs">
+                                event_id:{" "}
+                                <span className="font-mono">{row.event_id}</span>
+                              </div>
+                              <pre className="max-h-64 overflow-auto rounded border bg-background p-3 text-xs">
+                                {JSON.stringify(
+                                  row.raw_json ?? {},
+                                  null,
+                                  2
+                                )}
+                              </pre>
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </Fragment>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </CardContent>

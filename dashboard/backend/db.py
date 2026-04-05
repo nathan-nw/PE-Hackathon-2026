@@ -278,6 +278,22 @@ CREATE TABLE IF NOT EXISTS incident_events (
 CREATE INDEX IF NOT EXISTS idx_incident_events_created ON incident_events (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_incident_events_type ON incident_events (event_type);
 CREATE INDEX IF NOT EXISTS idx_incident_events_status ON incident_events (status);
+
+CREATE TABLE IF NOT EXISTS watchdog_alerts (
+    id BIGSERIAL PRIMARY KEY,
+    event_id VARCHAR(256) NOT NULL UNIQUE,
+    source VARCHAR(32) NOT NULL DEFAULT 'railway',
+    kind VARCHAR(64) NOT NULL,
+    service VARCHAR(256) NOT NULL DEFAULT '',
+    message TEXT NOT NULL,
+    severity VARCHAR(16) NOT NULL DEFAULT 'info',
+    raw_json JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_watchdog_alerts_created ON watchdog_alerts (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_watchdog_alerts_kind ON watchdog_alerts (kind);
+CREATE INDEX IF NOT EXISTS idx_watchdog_alerts_service ON watchdog_alerts (service);
 """
 
 
@@ -714,6 +730,114 @@ def fetch_logs_from_db(
         return out
     except Exception as exc:
         logger.error("fetch_logs_from_db failed: %s", exc)
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+
+# ── Watchdog alerts (Railway / Compose) ───────────────────────────────────────
+
+
+def _watchdog_severity_for_kind(kind: str) -> str:
+    k = (kind or "").strip().lower()
+    if k == "railway_stopped":
+        return "critical"
+    if k in ("railway_online", "compose_recovered"):
+        return "info"
+    return "warning"
+
+
+def insert_watchdog_alerts_batch(
+    source: str,
+    events: list[dict[str, Any]],
+) -> int:
+    """Persist watchdog events from the worker or compose. Skips duplicates by ``event_id``."""
+    if not events:
+        return 0
+    conn = None
+    inserted = 0
+    src = (source or "railway").strip()[:32] or "railway"
+    try:
+        conn = get_connection()
+        with conn:
+            with conn.cursor() as cur:
+                for ev in events:
+                    if not isinstance(ev, dict):
+                        continue
+                    eid = str(ev.get("id") or "").strip()[:256]
+                    if not eid:
+                        continue
+                    kind = str(ev.get("kind") or "unknown").strip()[:64]
+                    svc = str(ev.get("service") or "").strip()[:256]
+                    msg = str(ev.get("message") or "")
+                    sev = _watchdog_severity_for_kind(kind)
+                    raw = json.dumps(ev, ensure_ascii=False)
+                    cur.execute(
+                        """
+                        INSERT INTO watchdog_alerts
+                            (event_id, source, kind, service, message, severity, raw_json)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+                        ON CONFLICT (event_id) DO NOTHING
+                        RETURNING id
+                        """,
+                        (eid, src, kind, svc, msg, sev, raw),
+                    )
+                    if cur.fetchone() is not None:
+                        inserted += 1
+        logger.info("Inserted %d new watchdog alert(s) (source=%s)", inserted, src)
+        return inserted
+    except Exception as exc:
+        logger.error("insert_watchdog_alerts_batch failed: %s", exc)
+        return 0
+    finally:
+        if conn:
+            conn.close()
+
+
+def fetch_watchdog_alerts(
+    limit: int = 200,
+    source: str | None = None,
+    kind: str | None = None,
+    window_hours: int = 168,
+) -> list[dict[str, Any]]:
+    """Return persisted watchdog alerts, newest first."""
+    conn = None
+    try:
+        conn = get_connection()
+        with conn:
+            with conn.cursor() as cur:
+                conditions = ["created_at >= NOW() - (%s || ' hours')::interval"]
+                params: list[Any] = [str(window_hours)]
+                if source:
+                    conditions.append("source = %s")
+                    params.append(source)
+                if kind:
+                    conditions.append("kind = %s")
+                    params.append(kind)
+                where = " WHERE " + " AND ".join(conditions)
+                cur.execute(
+                    f"""SELECT id, event_id, source, kind, service, message, severity,
+                               raw_json, created_at
+                        FROM watchdog_alerts
+                        {where}
+                        ORDER BY created_at DESC
+                        LIMIT %s""",
+                    (*params, limit),
+                )
+                cols = [d[0] for d in cur.description]
+                rows: list[dict[str, Any]] = []
+                for row in cur.fetchall():
+                    d = dict(zip(cols, row))
+                    d["created_at"] = (
+                        d["created_at"].isoformat() if d["created_at"] else None
+                    )
+                    if isinstance(d["raw_json"], str):
+                        d["raw_json"] = json.loads(d["raw_json"])
+                    rows.append(d)
+        return rows
+    except Exception as exc:
+        logger.error("fetch_watchdog_alerts failed: %s", exc)
         return []
     finally:
         if conn:
