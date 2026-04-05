@@ -42,7 +42,7 @@ export async function GET(request: NextRequest) {
         projectId: pid,
         containers: [],
         error:
-          "Add RAILWAY_PROJECT_TOKEN (project token) or RAILWAY_API_TOKEN to the dashboard service variables so the Ops tab can call the Railway API (no Docker socket on Railway).",
+          "Set RAILWAY_PROJECT_TOKEN or RAILWAY_API_TOKEN on the dashboard service (exact names), redeploy, and refresh.",
       });
     }
     const r = await fetchRailwayVisibilityRows();

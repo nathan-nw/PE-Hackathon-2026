@@ -6,6 +6,12 @@
  * @see https://docs.railway.com/reference/public-api
  */
 
+import {
+  getRailwayGraphqlAuthHeaders,
+  hasRailwayGraphqlCredential,
+  runtimeEnv,
+} from "@/lib/server-runtime-env";
+
 const ENDPOINT = "https://backboard.railway.com/graphql/v2";
 
 export type RailwayVisibilityRow = {
@@ -24,26 +30,12 @@ export type RailwayVisibilityRow = {
 
 type GqlResponse<T> = { data?: T; errors?: { message: string }[] };
 
-function getAuthHeaders(): Record<string, string> {
-  const account = process.env.RAILWAY_API_TOKEN || process.env.RAILWAY_TOKEN;
-  const project = process.env.RAILWAY_PROJECT_TOKEN;
-  if (project) {
-    return { "Project-Access-Token": project };
-  }
-  if (account) {
-    return { Authorization: `Bearer ${account}` };
-  }
-  throw new Error(
-    "Set RAILWAY_PROJECT_TOKEN or RAILWAY_API_TOKEN for Railway visibility"
-  );
-}
-
 async function gql<T>(query: string, variables?: Record<string, string>): Promise<T> {
   const res = await fetch(ENDPOINT, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...getAuthHeaders(),
+      ...getRailwayGraphqlAuthHeaders(),
     },
     body: JSON.stringify({ query, variables }),
     next: { revalidate: 0 },
@@ -160,17 +152,12 @@ function buildBatchDeploymentsQuery(
 
 export function railwayIdsConfigured(): boolean {
   return Boolean(
-    process.env.RAILWAY_PROJECT_ID && process.env.RAILWAY_ENVIRONMENT_ID
+    runtimeEnv("RAILWAY_PROJECT_ID") && runtimeEnv("RAILWAY_ENVIRONMENT_ID")
   );
 }
 
 export function railwayVisibilityConfigured(): boolean {
-  return Boolean(
-    railwayIdsConfigured() &&
-      (process.env.RAILWAY_API_TOKEN ||
-        process.env.RAILWAY_TOKEN ||
-        process.env.RAILWAY_PROJECT_TOKEN)
-  );
+  return railwayIdsConfigured() && hasRailwayGraphqlCredential();
 }
 
 export async function fetchRailwayVisibilityRows(): Promise<{
@@ -179,8 +166,8 @@ export async function fetchRailwayVisibilityRows(): Promise<{
   containers: RailwayVisibilityRow[];
   error?: string;
 }> {
-  const projectId = process.env.RAILWAY_PROJECT_ID!;
-  const environmentId = process.env.RAILWAY_ENVIRONMENT_ID!;
+  const projectId = runtimeEnv("RAILWAY_PROJECT_ID")!;
+  const environmentId = runtimeEnv("RAILWAY_ENVIRONMENT_ID")!;
 
   let projectName = projectId;
   let services: { id: string; name: string }[] = [];
