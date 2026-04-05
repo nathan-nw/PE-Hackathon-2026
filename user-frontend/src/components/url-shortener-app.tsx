@@ -283,7 +283,7 @@ export function UrlShortenerApp() {
       let per = parseInt(listPerPage, 10) || 20;
       per = Math.min(100, Math.max(1, per));
       setListPerPage(String(per));
-      let p = page ?? parseInt(listPage, 10) || 1;
+      let p = page ?? (parseInt(listPage, 10) || 1);
       p = Math.max(1, p);
       setListPage(String(p));
       setLoadAllPending(true);
