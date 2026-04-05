@@ -11,8 +11,9 @@ Tuned for reliability under load:
 import multiprocessing
 import os
 
-# Server socket
-bind = f"0.0.0.0:{os.environ.get('PORT', '5000')}"
+# Server socket (Railway sets PORT at runtime; must not be empty)
+_port = (os.environ.get("PORT") or "5000").strip() or "5000"
+bind = f"0.0.0.0:{_port}"
 
 # Worker processes
 # Rule of thumb: 2-4 workers per CPU core. On Railway, default to a small pool so the

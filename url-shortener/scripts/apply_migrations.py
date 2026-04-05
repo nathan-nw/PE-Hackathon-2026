@@ -13,21 +13,41 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import psycopg2
 from psycopg2.extensions import connection as PGConnection
 
+# Avoid hanging the whole container before Gunicorn binds (Railway health checks /live on PORT).
+_DEFAULT_CONNECT_TIMEOUT_SEC = 15
+
+
+def _with_connect_timeout(url: str, seconds: int) -> str:
+    """Ensure libpq connect_timeout is set so unreachable DB fails fast."""
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://") :]
+    parsed = urlparse(url)
+    q = parse_qs(parsed.query, keep_blank_values=True)
+    if "connect_timeout" not in q:
+        q["connect_timeout"] = [str(seconds)]
+    new_query = urlencode(q, doseq=True)
+    return urlunparse(parsed._replace(query=new_query))
+
 
 def _connect() -> PGConnection:
+    timeout = int(
+        os.environ.get("DATABASE_CONNECT_TIMEOUT_SEC", str(_DEFAULT_CONNECT_TIMEOUT_SEC))
+    )
     url = os.environ.get("DATABASE_URL", "").strip()
     if url:
-        return psycopg2.connect(url)
+        return psycopg2.connect(_with_connect_timeout(url, timeout))
     return psycopg2.connect(
         host=os.environ.get("DATABASE_HOST", "127.0.0.1"),
         port=int(os.environ.get("DATABASE_PORT", "5432")),
         dbname=os.environ.get("DATABASE_NAME", "hackathon_db"),
         user=os.environ.get("DATABASE_USER", "postgres"),
         password=os.environ.get("DATABASE_PASSWORD", "postgres"),
+        connect_timeout=timeout,
     )
 
 

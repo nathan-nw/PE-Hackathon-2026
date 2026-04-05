@@ -10,7 +10,8 @@ watchPatterns = ["/url-shortener/**"]
 
 [deploy]
 healthcheckPath = "/live"
-healthcheckTimeout = 45
+# Migrations run before Gunicorn; allow enough time for DB connect + apply + worker boot.
+healthcheckTimeout = 120
 # Migrations run in docker-entrypoint.sh (not preDeployCommand) so Railway never parses a
 # pre-deploy field. If you still see preDeploy errors, clear "Pre-deploy command" in the
 # Railway service Settings → Deploy for this service, then redeploy.

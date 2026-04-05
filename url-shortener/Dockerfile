@@ -33,12 +33,14 @@ ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
 # Avoid uv mutating the environment at runtime (no sync → no dev installs into site-packages).
 ENV UV_NO_SYNC=1
+ENV GUNICORN_WORKERS=2
 
 EXPOSE 5000
+ENV PORT=5000
 
 # Liveness only — do not use /ready here (DB can be briefly unavailable without killing the container).
-HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:5000/live || exit 1
+HEALTHCHECK --interval=15s --timeout=3s --start-period=90s --retries=3 \
+    CMD sh -c 'curl -fsS "http://127.0.0.1:${PORT:-5000}/live" || exit 1'
 
 # Run gunicorn from the synced venv directly (no `uv run` → no implicit sync in prod).
 CMD ["/app/.venv/bin/gunicorn", "--config", "gunicorn.conf.py", "run:app"]
