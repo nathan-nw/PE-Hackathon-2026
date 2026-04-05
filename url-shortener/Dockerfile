@@ -29,7 +29,8 @@ RUN useradd --create-home appuser \
 
 USER appuser
 
-ENTRYPOINT ["/app/docker-entrypoint.sh"]
+# Invoke via `sh` so CRLF in the script (Windows checkouts) does not break the shebang path.
+ENTRYPOINT ["/bin/sh", "/app/docker-entrypoint.sh"]
 
 # Avoid uv mutating the environment at runtime (no sync → no dev installs into site-packages).
 ENV UV_NO_SYNC=1

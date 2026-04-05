@@ -15,8 +15,21 @@ Set-Location $RepoRoot
 if ($Target -eq "compose") {
     Write-Host "Starting Docker Compose stack (detached)..." -ForegroundColor Cyan
     docker compose up -d --build
-    Write-Host "Done. API via LB: http://localhost:8080  |  logs: docker compose logs -f" -ForegroundColor Green
-    exit $LASTEXITCODE
+    $composeExit = $LASTEXITCODE
+    $portLine = docker compose port load-balancer 80 2>$null
+    $lbPort = $null
+    if ($LASTEXITCODE -eq 0 -and $portLine -match ':(\d+)\s*$') {
+        $lbPort = $Matches[1]
+    }
+    if (-not $lbPort) {
+        $lbPort = $env:LB_HTTP_PORT
+        if (-not $lbPort) { $lbPort = "8080" }
+    }
+    Write-Host "Done. API via LB: http://localhost:${lbPort}  |  logs: docker compose logs -f" -ForegroundColor Green
+    if ($composeExit -ne 0 -or ($portLine -notmatch ':\d+')) {
+        Write-Host "If the load balancer failed (e.g. port 8080 already in use), copy `.env.example` to `.env` and run again, or set LB_HTTP_PORT / LB_STUB_STATUS_PORT there. Check: docker compose logs load-balancer" -ForegroundColor DarkYellow
+    }
+    exit $composeExit
 }
 
 Write-Host "Building images..." -ForegroundColor Cyan

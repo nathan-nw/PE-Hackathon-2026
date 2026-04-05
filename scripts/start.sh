@@ -15,7 +15,17 @@ TARGET="${1:-compose}"
 if [[ "$TARGET" == "compose" ]]; then
   echo "Starting Docker Compose stack (detached)..."
   docker compose up -d --build
-  echo "Done. API via LB: http://localhost:8080  |  logs: docker compose logs -f"
+  LB_PORT=""
+  if pl="$(docker compose port load-balancer 80 2>/dev/null)"; then
+    LB_PORT="${pl##*:}"
+  fi
+  if [[ -z "$LB_PORT" ]]; then
+    LB_PORT="${LB_HTTP_PORT:-8080}"
+  fi
+  echo "Done. API via LB: http://localhost:${LB_PORT}  |  logs: docker compose logs -f"
+  if ! docker compose port load-balancer 80 >/dev/null 2>&1; then
+    echo "Load balancer did not publish port 80. If port 8080 was in use, copy .env.example to .env and run again." >&2
+  fi
   exit 0
 fi
 

@@ -67,6 +67,10 @@ def register_middleware(app):
         response.headers["X-Request-ID"] = g.get("request_id", "")
         response.headers["X-Response-Time"] = f"{duration_ms}ms"
 
+        # Chrome Private Network Access: e.g. page on http://localhost:5500 calling http://127.0.0.1:8080
+        if request.headers.get("Access-Control-Request-Private-Network") == "true":
+            response.headers["Access-Control-Allow-Private-Network"] = "true"
+
         return response
 
     @app.errorhandler(PeeweeOperationalError)
