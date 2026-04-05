@@ -12,6 +12,12 @@ const VUS = parseInt(__ENV.K6_VUS || "50", 10);
 const DURATION = __ENV.K6_DURATION || "30s";
 const PRESET = __ENV.K6_PRESET || "";
 
+// NGINX edge limit bypass (must match load-balancer LOAD_TEST_BYPASS_TOKEN).
+const BYPASS = __ENV.LOAD_TEST_BYPASS_TOKEN || "";
+const edgeHeaders = (extra = {}) =>
+  BYPASS ? { ...extra, "X-Load-Test-Bypass": BYPASS } : extra;
+const jsonPostHeaders = edgeHeaders({ "Content-Type": "application/json" });
+
 // Preset stage configs
 const PRESETS = {
   bronze: {
@@ -86,13 +92,13 @@ export default function () {
   const isChaos = PRESET === "chaos";
 
   // 1. Health check
-  const healthRes = http.get(`${BASE_URL}/health`);
+  const healthRes = http.get(`${BASE_URL}/health`, { headers: edgeHeaders() });
   check(healthRes, { "health ok": (r) => r.status === 200 });
   errorRate.add(healthRes.status !== 200);
 
   // Chaos: hit non-existent endpoints (~40% of iterations)
   if (isChaos && Math.random() < 0.4) {
-    const badRes = http.get(`${BASE_URL}/nonexistent-${__VU}-${__ITER}`);
+    const badRes = http.get(`${BASE_URL}/nonexistent-${__VU}-${__ITER}`, { headers: edgeHeaders() });
     errorRate.add(badRes.status >= 400);
     sleep(0.3);
     return;
@@ -100,9 +106,7 @@ export default function () {
 
   // Chaos: send malformed JSON (~20% of iterations)
   if (isChaos && Math.random() < 0.3) {
-    const badPost = http.post(`${BASE_URL}/shorten`, "not json", {
-      headers: { "Content-Type": "application/json" },
-    });
+    const badPost = http.post(`${BASE_URL}/shorten`, "not json", jsonPostHeaders);
     shortenDuration.add(badPost.timings.duration);
     errorRate.add(badPost.status >= 400);
     sleep(0.3);
@@ -116,15 +120,13 @@ export default function () {
     title: `Load test ${__VU}-${__ITER}`,
   });
 
-  const shortenRes = http.post(`${BASE_URL}/shorten`, payload, {
-    headers: { "Content-Type": "application/json" },
-  });
+  const shortenRes = http.post(`${BASE_URL}/shorten`, payload, { headers: jsonPostHeaders });
   shortenDuration.add(shortenRes.timings.duration);
   check(shortenRes, { "shorten ok": (r) => r.status === 201 });
   errorRate.add(shortenRes.status !== 201);
 
   // 3. List URLs
-  const listRes = http.get(`${BASE_URL}/urls?page=1&per_page=10`);
+  const listRes = http.get(`${BASE_URL}/urls?page=1&per_page=10`, { headers: edgeHeaders() });
   listDuration.add(listRes.timings.duration);
   check(listRes, { "list ok": (r) => r.status === 200 });
   errorRate.add(listRes.status !== 200);
@@ -134,6 +136,7 @@ export default function () {
     const body = JSON.parse(shortenRes.body);
     const redirectRes = http.get(`${BASE_URL}/${body.short_code}`, {
       redirects: 0,
+      headers: edgeHeaders(),
     });
     redirectDuration.add(redirectRes.timings.duration);
     check(redirectRes, { "redirect ok": (r) => r.status === 302 });

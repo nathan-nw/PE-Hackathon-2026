@@ -177,6 +177,9 @@ services:
     ports:
       - "${LB_HTTP_PORT:-8080}:80"
       - "${LB_STUB_STATUS_PORT:-8081}:8081"
+    environment:
+      # Same value must be on dashboard-backend so k6 sends X-Load-Test-Bypass (skips NGINX limit_req).
+      LOAD_TEST_BYPASS_TOKEN: ${LOAD_TEST_BYPASS_TOKEN:-pe-hackathon-k6-edge-bypass}
     depends_on:
       url-shortener-a:
         condition: service_healthy
@@ -261,6 +264,10 @@ services:
       # Kubernetes pod list: host kubeconfig → /kube/config (override path with KUBECONFIG_HOST in .env if needed).
       - ${KUBECONFIG_HOST:-~/.kube/config}:/kube/config:ro
     environment:
+      # Ops → Chaos tab: compose-watchdog status (HTTP). Override for local `next dev` → http://127.0.0.1:8099
+      WATCHDOG_STATUS_URL: ${WATCHDOG_STATUS_URL:-http://compose-watchdog:8099}
+      # Ops → Chaos tab: docker kill (dashboard mounts docker.sock). Set CHAOS_KILL_ENABLED=0 to disable.
+      CHAOS_KILL_ENABLED: ${CHAOS_KILL_ENABLED:-1}
       VISIBILITY_COMPOSE_PROJECT: pe-hackathon-2026
       VISIBILITY_K8S_ENABLED: "true"
       KUBECONFIG: /kube/config
@@ -299,6 +306,8 @@ services:
     ports:
       - "8000:8000"
     environment:
+      # k6 load-test.js sends this as X-Load-Test-Bypass — must match load-balancer (edge limit off for k6 only).
+      LOAD_TEST_BYPASS_TOKEN: ${LOAD_TEST_BYPASS_TOKEN:-pe-hackathon-k6-edge-bypass}
       # Override image default (8080) so published port 8000 matches the process (local dev).
       PORT: "8000"
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
@@ -332,6 +341,27 @@ services:
       - app_net
     ports:
       - "3002:80"
+
+  # Polls the Docker API for this Compose project: starts exited containers (honors restart policy
+  # unless WATCHDOG_ONLY_ALWAYS=1) and restarts persistently unhealthy ones. Skips itself.
+  # See compose-watchdog/watchdog.py for env vars.
+  compose-watchdog:
+    build:
+      context: ./compose-watchdog
+    restart: always
+    networks:
+      - app_net
+    ports:
+      - "${WATCHDOG_HTTP_PUBLISH:-8099}:8099"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      COMPOSE_PROJECT: pe-hackathon-2026
+      WATCHDOG_INTERVAL_SEC: ${WATCHDOG_INTERVAL_SEC:-15}
+      WATCHDOG_HTTP_PORT: "8099"
+      WATCHDOG_SELF_SERVICE: compose-watchdog
+      # Optional: comma-separated compose service names to ignore (e.g. "prometheus,alertmanager").
+      WATCHDOG_EXCLUDE_SERVICES: ${WATCHDOG_EXCLUDE_SERVICES:-}
 
 networks:
   app_net:

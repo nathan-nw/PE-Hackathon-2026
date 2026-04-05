@@ -23,6 +23,7 @@ from db import (
     get_connection,
     init_db,
     introspect_postgres_server,
+    query_log_insights,
 )
 from discord_alerter import DiscordAlerter
 from k6_runner import K6Runner
@@ -220,6 +221,10 @@ def get_logs(
     level: str | None = Query(None),
     instance_id: str | None = Query(None),
     search: str | None = Query(None, description="Case-insensitive substring in message/logger/path"),
+    status_code: str | None = Query(
+        None,
+        description="HTTP status filter: single code, comma list, or 2xx/3xx/4xx/5xx",
+    ),
     source: str = Query(
         "merged",
         description="memory | db | merged — merged combines ring buffer + Postgres kafka_logs",
@@ -236,6 +241,7 @@ def get_logs(
                 level=level,
                 instance_id=instance_id,
                 search=search,
+                status_code=status_code,
             ),
             "source": src,
         }
@@ -246,6 +252,7 @@ def get_logs(
                 level=level,
                 instance_id=instance_id,
                 search=search,
+                status_code=status_code,
             ),
             "source": src,
         }
@@ -254,14 +261,103 @@ def get_logs(
         level=level,
         instance_id=instance_id,
         search=search,
+        status_code=status_code,
     )
     db_rows = fetch_logs_from_db(
         limit=min(2000, max(limit * 3, 100)),
         level=level,
         instance_id=instance_id,
         search=search,
+        status_code=status_code,
     )
     return {"logs": _merge_logs(mem, db_rows, limit), "source": "merged"}
+
+
+@app.get("/api/logs/insights")
+def get_logs_insights(
+    window_minutes: int = Query(60, ge=1, le=1440),
+    log_limit: int = Query(200, ge=1, le=10000),
+    level: str | None = Query(None),
+    instance_id: str | None = Query(None),
+    search: str | None = Query(None),
+    status_code: str | None = Query(
+        None,
+        description="HTTP status filter: e.g. 200, 404,500, 2xx",
+    ),
+):
+    """Per-minute request/error buckets and log rows using the same filters (chart + table)."""
+    from datetime import datetime, timezone
+
+    db_result = query_log_insights(
+        window_minutes=window_minutes,
+        level=level,
+        instance_id=instance_id,
+        search=search,
+        status_code=status_code,
+    )
+
+    if db_result is not None:
+        buckets_map = db_result["buckets_map"]
+        now = __import__("time").time()
+        window_start = now - window_minutes * 60
+        for i in range(window_minutes + 1):
+            t = datetime.fromtimestamp(window_start + i * 60, tz=timezone.utc)
+            key = t.strftime("%H:%M")
+            if key not in buckets_map:
+                buckets_map[key] = {
+                    "minute": key,
+                    "timestamp": (window_start + i * 60) * 1000,
+                    "total": 0,
+                    "errors": 0,
+                    "error_rate": 0.0,
+                    "status_breakdown": {},
+                }
+
+        sorted_buckets = sorted(buckets_map.values(), key=lambda x: x["timestamp"])
+
+        mem = cache.get_logs(
+            limit=min(2000, CACHE_MAX_ENTRIES),
+            level=level,
+            instance_id=instance_id,
+            search=search,
+            status_code=status_code,
+        )
+        db_logs = fetch_logs_from_db(
+            limit=min(2000, max(log_limit * 3, 100)),
+            level=level,
+            instance_id=instance_id,
+            search=search,
+            status_code=status_code,
+        )
+        merged_logs = _merge_logs(mem, db_logs, log_limit)
+
+        total_errors = sum(b["errors"] for b in sorted_buckets)
+        total_requests = sum(b["total"] for b in sorted_buckets)
+        peak_errors = max((b["errors"] for b in sorted_buckets), default=0)
+        recent_buckets = sorted_buckets[-5:]
+        recent_total = sum(b["total"] for b in recent_buckets)
+        recent_errors = sum(b["errors"] for b in recent_buckets)
+        current_rate = round((recent_errors / recent_total) * 100, 2) if recent_total > 0 else 0.0
+
+        return {
+            "buckets": sorted_buckets,
+            "logs": merged_logs,
+            "summary": {
+                "total_errors": total_errors,
+                "total_requests": total_requests,
+                "peak_errors": peak_errors,
+                "current_rate": current_rate,
+            },
+        }
+
+    return cache.get_log_insights(
+        window_minutes=window_minutes,
+        log_limit=log_limit,
+        level=level,
+        instance_id=instance_id,
+        search=search,
+        status_code=status_code,
+    )
 
 
 @app.get("/api/stats")

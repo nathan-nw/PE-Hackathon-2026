@@ -20,6 +20,8 @@ export type RailwayVisibilityRow = {
   image: string;
   state: string;
   status: string;
+  /** Raw Railway deployment status (e.g. SUCCESS, CRASHED, DEPLOYING). */
+  deploymentStatus?: string;
   service: string;
   health?: string;
   created: number;
@@ -381,6 +383,7 @@ export async function fetchRailwayVisibilityRows(options?: {
       status: dep
         ? `${status}${publicUrl ? ` · ${publicUrl}` : ""}`
         : "No deployment yet",
+      deploymentStatus: dep ? status : undefined,
       service: byId.get(sid) || "",
       health,
       created: createdSec,

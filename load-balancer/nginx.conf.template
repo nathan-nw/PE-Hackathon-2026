@@ -43,8 +43,13 @@ http {
         default $http_origin;
     }
 
-    # Soft edge protection (per-IP). Tune rate/burst vs your API SLO.
-    limit_req_zone $binary_remote_addr zone=api_limit:16m rate=100r/s;
+    # Soft edge protection (per-IP). When X-Load-Test-Bypass matches LOAD_TEST_BYPASS_TOKEN (set at
+    # container start), the limit key is empty so limit_req does not apply — used by dashboard k6 only.
+    map $http_x_load_test_bypass $limit_req_key {
+        default $binary_remote_addr;
+        @LOAD_TEST_BYPASS_TOKEN@ "";
+    }
+    limit_req_zone $limit_req_key zone=api_limit:16m rate=100r/s;
     limit_req_status 429;
 
     gzip on;

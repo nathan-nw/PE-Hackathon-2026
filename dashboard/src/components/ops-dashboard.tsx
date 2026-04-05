@@ -19,11 +19,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  instanceIdFromComposeService,
-  labelForInstanceId,
-} from "@/lib/compose-instance";
-import { ErrorMonitor } from "@/components/error-monitor";
+import { instanceIdFromComposeService } from "@/lib/compose-instance";
+import { ChaosPanel } from "@/components/chaos-panel";
+import { UnifiedLogMonitor } from "@/components/unified-log-monitor";
 import { LoadTest } from "@/components/load-test";
 import { cn } from "@/lib/utils";
 import {
@@ -133,49 +131,6 @@ type AlertsResponse = {
   error?: string;
 };
 
-type LogEntry = {
-  timestamp?: string;
-  level?: string;
-  logger?: string;
-  message?: string;
-  instance_id?: string;
-  request_id?: string;
-  method?: string;
-  path?: string;
-  status_code?: number;
-  duration_ms?: number;
-};
-
-type LogsApiResponse = {
-  logs: LogEntry[];
-  error?: string;
-  hint?: string;
-};
-
-type LogStatsResponse = {
-  total_ingested?: number;
-  buffered_logs?: number;
-  pending_flush?: number;
-  instances?: Record<
-    string,
-    {
-      request_count: number;
-      error_count: number;
-      avg_duration_ms: number;
-      error_rate: number;
-      status_codes: Record<string, number>;
-      levels: Record<string, number>;
-    }
-  >;
-  global?: {
-    total_requests: number;
-    total_errors: number;
-    error_rate: number;
-  };
-  error?: string;
-  hint?: string;
-};
-
 function formatBytes(n: number | undefined) {
   if (n == null || Number.isNaN(n)) return "—";
   const units = ["B", "KB", "MB", "GB"];
@@ -222,27 +177,6 @@ function stateBadge(state: string, health?: string) {
   );
 }
 
-function logLevelBadge(level: string | undefined) {
-  const l = (level ?? "INFO").toUpperCase();
-  if (l === "ERROR" || l === "CRITICAL")
-    return (
-      <Badge variant="destructive" className="font-mono text-xs">
-        {l}
-      </Badge>
-    );
-  if (l === "WARNING")
-    return (
-      <Badge variant="secondary" className="font-mono text-xs">
-        {l}
-      </Badge>
-    );
-  return (
-    <Badge variant="outline" className="font-mono text-xs">
-      {l}
-    </Badge>
-  );
-}
-
 export function OpsDashboard() {
   const [docker, setDocker] = useState<DockerResponse | null>(null);
   const [pods, setPods] = useState<PodsResponse | null>(null);
@@ -254,15 +188,10 @@ export function OpsDashboard() {
   const [k8sAllNamespaces, setK8sAllNamespaces] = useState(false);
 
   const [mainTab, setMainTab] = useState("containers");
-  const [logData, setLogData] = useState<LogsApiResponse | null>(null);
-  const [logStats, setLogStats] = useState<LogStatsResponse | null>(null);
-  const [logLoading, setLogLoading] = useState(false);
-  const [logInstance, setLogInstance] = useState<string>("");
-  const [logLevel, setLogLevel] = useState<string>("");
-  const [logSearch, setLogSearch] = useState("");
-  const [logSearchDebounced, setLogSearchDebounced] = useState("");
-  const [logLimit, setLogLimit] = useState(200);
-  const [pauseLive, setPauseLive] = useState(false);
+  const [logInstanceJump, setLogInstanceJump] = useState<{
+    instanceId: string;
+    nonce: number;
+  } | null>(null);
 
   const [pgDetailKey, setPgDetailKey] = useState<string | null>(null);
   const [pgData, setPgData] = useState<PostgresIntrospectResponse | null>(null);
@@ -270,11 +199,6 @@ export function OpsDashboard() {
   const [pgLoading, setPgLoading] = useState(false);
   const [pgError, setPgError] = useState<string | null>(null);
   const pgReqGen = useRef(0);
-
-  useEffect(() => {
-    const t = window.setTimeout(() => setLogSearchDebounced(logSearch), 400);
-    return () => window.clearTimeout(t);
-  }, [logSearch]);
 
   const promUrl =
     process.env.NEXT_PUBLIC_PROMETHEUS_URL ?? "http://localhost:9090";
@@ -319,45 +243,6 @@ export function OpsDashboard() {
     const id = window.setInterval(() => fetchAll(), POLL_MS);
     return () => window.clearInterval(id);
   }, [fetchAll]);
-
-  const fetchLogs = useCallback(async () => {
-    setLogLoading(true);
-    try {
-      const params = new URLSearchParams();
-      params.set("limit", String(Math.min(1000, Math.max(1, logLimit))));
-      if (logInstance) params.set("instance_id", logInstance);
-      if (logLevel) params.set("level", logLevel);
-      if (logSearchDebounced.trim()) params.set("search", logSearchDebounced.trim());
-      const qs = params.toString();
-      const [l, s] = await Promise.all([
-        fetch(`/api/logs?${qs}`).then((r) => r.json()),
-        fetch("/api/logs/stats").then((r) => r.json()),
-      ]);
-      setLogData(l as LogsApiResponse);
-      setLogStats(s as LogStatsResponse);
-    } catch (e) {
-      setLogData({
-        logs: [],
-        error:
-          e instanceof Error && e.message.includes("fetch")
-            ? "Can't reach the log service right now — the dashboard-backend might still be starting up. Hang tight!"
-            : "Oops! We had trouble loading logs. Please try refreshing in a moment.",
-      });
-    } finally {
-      setLogLoading(false);
-    }
-  }, [logLimit, logInstance, logLevel, logSearchDebounced]);
-
-  useEffect(() => {
-    if (mainTab !== "logs") return;
-    void fetchLogs();
-  }, [mainTab, fetchLogs]);
-
-  useEffect(() => {
-    if (mainTab !== "logs" || pauseLive) return;
-    const id = window.setInterval(() => void fetchLogs(), LOG_POLL_MS);
-    return () => window.clearInterval(id);
-  }, [mainTab, pauseLive, fetchLogs]);
 
   const loadPostgresIntrospect = useCallback(
     async (c: DockerContainer, source: string | undefined) => {
@@ -479,8 +364,8 @@ export function OpsDashboard() {
           <TabsTrigger value="pods">Pods</TabsTrigger>
           <TabsTrigger value="alerts">Alerts</TabsTrigger>
           <TabsTrigger value="logs">Logs</TabsTrigger>
-          <TabsTrigger value="errors">Errors</TabsTrigger>
           <TabsTrigger value="loadtest">Load Test</TabsTrigger>
+          <TabsTrigger value="chaos">Chaos</TabsTrigger>
           <TabsTrigger value="telemetry">Telemetry</TabsTrigger>
         </TabsList>
 
@@ -620,7 +505,10 @@ export function OpsDashboard() {
                                 size="sm"
                                 className="text-xs"
                                 onClick={() => {
-                                  setLogInstance(iid);
+                                  setLogInstanceJump({
+                                    instanceId: iid,
+                                    nonce: Date.now(),
+                                  });
                                   setMainTab("logs");
                                 }}
                               >
@@ -953,253 +841,18 @@ export function OpsDashboard() {
         </TabsContent>
 
         <TabsContent value="logs" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Kafka log cache</CardTitle>
-              <CardDescription>
-                Flask replicas publish structured logs to Kafka; the dashboard
-                backend keeps a ring buffer and aggregates per{" "}
-                <span className="font-mono">instance_id</span> (same as API
-                replicas 1 and 2).
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {logStats?.error && (
-                <p className="text-destructive mb-3 text-sm">
-                  {logStats.error}
-                  {logStats.hint ? ` — ${logStats.hint}` : ""}
-                </p>
-              )}
-              <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <div className="bg-muted/40 rounded-lg border p-3">
-                  <div className="text-muted-foreground text-xs">Buffered</div>
-                  <div className="text-lg font-semibold tabular-nums">
-                    {logStats?.buffered_logs ?? "—"}
-                  </div>
-                </div>
-                <div className="bg-muted/40 rounded-lg border p-3">
-                  <div className="text-muted-foreground text-xs">Total ingested</div>
-                  <div className="text-lg font-semibold tabular-nums">
-                    {logStats?.total_ingested ?? "—"}
-                  </div>
-                </div>
-                <div className="bg-muted/40 rounded-lg border p-3">
-                  <div className="text-muted-foreground text-xs">HTTP requests (tracked)</div>
-                  <div className="text-lg font-semibold tabular-nums">
-                    {logStats?.global?.total_requests ?? "—"}
-                  </div>
-                </div>
-                <div className="bg-muted/40 rounded-lg border p-3">
-                  <div className="text-muted-foreground text-xs">Global error rate</div>
-                  <div className="text-lg font-semibold tabular-nums">
-                    {logStats?.global != null
-                      ? `${(logStats.global.error_rate * 100).toFixed(2)}%`
-                      : "—"}
-                  </div>
-                </div>
-              </div>
-              {logStats?.instances &&
-                Object.keys(logStats.instances).length > 0 && (
-                  <div className="flex flex-wrap gap-2">
-                    {Object.entries(logStats.instances).map(([id, st]) => (
-                      <button
-                        key={id}
-                        type="button"
-                        onClick={() => setLogInstance(logInstance === id ? "" : id)}
-                        className={cn(
-                          "rounded-md border px-3 py-2 text-left text-sm transition-colors",
-                          logInstance === id
-                            ? "border-primary bg-primary/10"
-                            : "bg-background hover:bg-muted/60"
-                        )}
-                      >
-                        <div className="text-muted-foreground text-xs">
-                          {labelForInstanceId(id)}
-                        </div>
-                        <div className="font-mono text-xs">
-                          req {st.request_count} · err {st.error_count} · p(err){" "}
-                          {(st.error_rate * 100).toFixed(1)}%
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-              <div>
-                <CardTitle>Live stream</CardTitle>
-                <CardDescription>
-                  Filter by replica, level, or text. Pause stops auto-refresh;
-                  Refresh runs once.
-                </CardDescription>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <label className="text-muted-foreground flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={pauseLive}
-                    onChange={(e) => setPauseLive(e.target.checked)}
-                    className="accent-primary rounded border"
-                  />
-                  Pause
-                </label>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={logLoading}
-                  onClick={() => void fetchLogs()}
-                >
-                  {logLoading ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <RefreshCw className="size-4" />
-                  )}
-                  Refresh
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex flex-wrap gap-3">
-                <div className="flex flex-col gap-1">
-                  <label className="text-muted-foreground text-xs">Instance</label>
-                  <select
-                    className="border-input bg-background h-9 rounded-md border px-2 text-sm"
-                    value={logInstance}
-                    onChange={(e) => setLogInstance(e.target.value)}
-                  >
-                    <option value="">All instances</option>
-                    <option value="1">Instance 1 (replica A)</option>
-                    <option value="2">Instance 2 (replica B)</option>
-                  </select>
-                </div>
-                <div className="flex flex-col gap-1">
-                  <label className="text-muted-foreground text-xs">Level</label>
-                  <select
-                    className="border-input bg-background h-9 rounded-md border px-2 text-sm"
-                    value={logLevel}
-                    onChange={(e) => setLogLevel(e.target.value)}
-                  >
-                    <option value="">Any</option>
-                    <option value="DEBUG">DEBUG</option>
-                    <option value="INFO">INFO</option>
-                    <option value="WARNING">WARNING</option>
-                    <option value="ERROR">ERROR</option>
-                  </select>
-                </div>
-                <div className="flex min-w-[120px] flex-col gap-1">
-                  <label className="text-muted-foreground text-xs">Limit</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={1000}
-                    className="border-input bg-background h-9 rounded-md border px-2 text-sm"
-                    value={logLimit}
-                    onChange={(e) =>
-                      setLogLimit(Number.parseInt(e.target.value, 10) || 100)
-                    }
-                  />
-                </div>
-                <div className="flex min-w-[200px] flex-1 flex-col gap-1">
-                  <label className="text-muted-foreground text-xs">
-                    Search (message / logger / path)
-                  </label>
-                  <input
-                    type="search"
-                    placeholder="Filter…"
-                    className="border-input bg-background h-9 rounded-md border px-2 text-sm"
-                    value={logSearch}
-                    onChange={(e) => setLogSearch(e.target.value)}
-                  />
-                </div>
-              </div>
-
-              {logData?.error && (
-                <p className="text-destructive text-sm" role="alert">
-                  {logData.error}
-                  {logData.hint ? ` — ${logData.hint}` : ""}
-                </p>
-              )}
-
-              <div className="max-h-[min(60vh,520px)] overflow-auto rounded-md border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-[180px]">Time</TableHead>
-                      <TableHead className="w-[72px]">Level</TableHead>
-                      <TableHead className="w-[88px]">Instance</TableHead>
-                      <TableHead className="w-[140px]">Logger</TableHead>
-                      <TableHead>Message</TableHead>
-                      <TableHead className="w-[200px]">Request</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {(logData?.logs ?? []).length === 0 && !logData?.error && (
-                      <TableRow>
-                        <TableCell colSpan={6} className="text-muted-foreground">
-                          No log lines in cache. Generate traffic against the API
-                          (via load balancer) and ensure{" "}
-                          <span className="font-mono">dashboard-backend</span> is
-                          running.
-                        </TableCell>
-                      </TableRow>
-                    )}
-                    {(logData?.logs ?? []).map((row, idx) => (
-                      <TableRow key={`${row.timestamp}-${idx}`}>
-                        <TableCell className="font-mono text-xs whitespace-nowrap">
-                          {row.timestamp
-                            ? new Date(row.timestamp).toLocaleString()
-                            : "—"}
-                        </TableCell>
-                        <TableCell>{logLevelBadge(row.level)}</TableCell>
-                        <TableCell className="font-mono text-xs">
-                          {row.instance_id ?? "—"}
-                        </TableCell>
-                        <TableCell className="max-w-[140px] truncate text-xs">
-                          {row.logger ?? "—"}
-                        </TableCell>
-                        <TableCell className="max-w-[360px] text-xs break-words whitespace-pre-wrap">
-                          {row.message ?? ""}
-                        </TableCell>
-                        <TableCell className="font-mono text-xs">
-                          {row.method && row.path ? (
-                            <span>
-                              {row.method} {row.path}
-                              {row.status_code != null ? (
-                                <span className="text-muted-foreground">
-                                  {" "}
-                                  → {row.status_code}
-                                </span>
-                              ) : null}
-                              {row.duration_ms != null ? (
-                                <span className="text-muted-foreground">
-                                  {" "}
-                                  ({row.duration_ms}ms)
-                                </span>
-                              ) : null}
-                            </span>
-                          ) : (
-                            "—"
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="errors" keepMounted>
-          <ErrorMonitor />
+          <UnifiedLogMonitor
+            instanceJump={logInstanceJump}
+            onInstanceJumpApplied={() => setLogInstanceJump(null)}
+          />
         </TabsContent>
 
         <TabsContent value="loadtest" keepMounted>
           <LoadTest />
+        </TabsContent>
+
+        <TabsContent value="chaos" className="space-y-4">
+          <ChaosPanel />
         </TabsContent>
 
         <TabsContent value="telemetry">
