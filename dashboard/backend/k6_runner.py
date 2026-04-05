@@ -93,6 +93,9 @@ class K6Runner:
         self._lock = threading.Lock()
         self._reader_thread: threading.Thread | None = None
         self._durations: list[float] = []
+        # Time series for dashboard chart: elapsed_s, active VUs, avg latency (ms)
+        self._series: list[dict[str, float | int]] = []
+        self._last_series_sample_at: float = 0.0
 
     def start(
         self,
@@ -139,6 +142,8 @@ class K6Runner:
         with self._lock:
             self._proc = proc
             self._durations = []
+            self._series = []
+            self._last_series_sample_at = 0.0
             self._stats = K6Stats(
                 running=True,
                 preset=preset,
@@ -176,14 +181,40 @@ class K6Runner:
                 return {"error": str(e)}
         return {"status": "stopping"}
 
+    def _append_series_sample(self, *, force: bool = False) -> None:
+        """Record one chart sample (caller must hold lock)."""
+        if self._stats.started_at <= 0:
+            return
+        if not force and not self._stats.running:
+            return
+        now = time.time()
+        if not force and now - self._last_series_sample_at < 0.75:
+            return
+        self._last_series_sample_at = now
+        elapsed = round(now - self._stats.started_at, 1)
+        self._series.append(
+            {
+                "t": elapsed,
+                "vus": int(self._stats.current_vus),
+                "avg_ms": round(self._stats.avg_duration_ms, 2),
+            }
+        )
+        if len(self._series) > 2500:
+            self._series = self._series[-2500:]
+
     def get_status(self) -> dict:
         with self._lock:
             # Check if process ended
             if self._proc and self._proc.poll() is not None and self._stats.running:
+                self._stats.elapsed_s = round(time.time() - self._stats.started_at, 1)
+                self._append_series_sample(force=True)
                 self._stats.running = False
                 self._stats.finished = True
-                self._stats.elapsed_s = round(time.time() - self._stats.started_at, 1)
-            return self._stats.to_dict()
+            elif self._stats.running:
+                self._append_series_sample()
+            out = self._stats.to_dict()
+            out["series"] = list(self._series)
+            return out
 
     def _read_output(self):
         """Parse k6 JSON output lines from stderr to update live stats."""
@@ -240,9 +271,12 @@ class K6Runner:
                     self._stats.summary["stdout"] = stdout.strip()
 
         with self._lock:
-            self._stats.running = False
-            self._stats.finished = True
-            self._stats.elapsed_s = round(time.time() - self._stats.started_at, 1)
+            # Avoid duplicating the final sample if get_status() already observed proc exit.
+            if self._stats.running:
+                self._stats.elapsed_s = round(time.time() - self._stats.started_at, 1)
+                self._append_series_sample(force=True)
+                self._stats.running = False
+                self._stats.finished = True
 
         logger.info(
             "k6 finished: requests=%d errors=%d",
