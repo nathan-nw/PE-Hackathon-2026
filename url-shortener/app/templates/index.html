@@ -514,6 +514,105 @@
         } catch { /* storage full — ignore */ }
       }
 
+      /* ── Graceful error handling ── */
+      function escapeHtml(str) {
+        const d = document.createElement("div");
+        d.textContent = str;
+        return d.innerHTML;
+      }
+
+      function getContextualError(status, data, action) {
+        const errorMsg = data?.error || "";
+        const detail = data?.detail || "";
+        const message = data?.message || "";
+
+        /* Tier 1 — match on specific backend error string */
+        const SPECIFIC = {
+          "original_url and user_id are required":
+            "Please make sure you\u2019ve entered a URL and have a valid User ID.",
+          "original_url must be a non-empty string":
+            "It looks like the URL field is empty. Please paste a URL to shorten.",
+          "original_url must start with http:// or https://":
+            "Your URL needs to start with http:// or https:// — try adding that prefix!",
+          "original_url must include a valid domain":
+            "That URL doesn\u2019t seem to have a valid domain. Please double-check it (e.g., https://example.com).",
+          "user_id must be an integer":
+            "The User ID should be a whole number. Please correct it and try again.",
+          "User not found":
+            "We couldn\u2019t find that User ID. Please check the number and try again.",
+          "Short code already exists":
+            "That custom short code is already taken! Try a different one or leave it blank for a random code.",
+          "short_code must be a string":
+            "The custom short code isn\u2019t valid. Please use letters and numbers only.",
+          "title must be a string":
+            "The title field needs to be plain text. Please fix it and try again.",
+          "No data provided":
+            "Nothing to update — please change at least one field.",
+          "Database not reachable":
+            "Our database is temporarily unavailable. Please try again in a few seconds!",
+          "Rate limit exceeded.":
+            "You\u2019re making requests a bit too fast. Please wait a moment and try again.",
+          "Content-Type must be application/json":
+            "Something went wrong sending your data. Please refresh the page and try again.",
+          "Malformed JSON body":
+            "Something went wrong sending your data. Please refresh the page and try again.",
+          "Request body must be a JSON object":
+            "Something went wrong sending your data. Please refresh the page and try again.",
+        };
+
+        if (SPECIFIC[errorMsg]) {
+          return { friendly: SPECIFIC[errorMsg], detail: "" };
+        }
+
+        /* Tier 1b — ban messages */
+        if (status === 403 && errorMsg.includes("banned")) {
+          return {
+            friendly: "Your access has been restricted.",
+            detail: message || "Please try again later or contact an administrator.",
+          };
+        }
+
+        /* Tier 1c — rate-limit escalation */
+        if (status === 429) {
+          const base = "You\u2019re making requests a bit too fast. Please wait a moment and try again.";
+          if (data?.warning) return { friendly: base, detail: data.warning };
+          if (data?.ban_type === "temporary")
+            return { friendly: "You\u2019ve been temporarily rate-limited.", detail: message };
+          if (data?.ban_type === "permanent")
+            return { friendly: "Your access has been permanently restricted.", detail: message };
+          return { friendly: base, detail: "" };
+        }
+
+        /* Tier 2 — action-aware fallback by status code */
+        const ACTION_ERRORS = {
+          shorten: {
+            400: "Hmm, that doesn\u2019t look quite right. Please double-check your inputs and try again!",
+            404: "We couldn\u2019t find the user account. Please verify your User ID.",
+            410: "That short link has been deactivated and can no longer be used.",
+            500: "Oh no! Your link wasn\u2019t shortened because of an internal issue on our end. Please try again!",
+            503: "Our service is temporarily unavailable — your link wasn\u2019t shortened. Please try again shortly!",
+          },
+          loadUrls: {
+            500: "We couldn\u2019t load your recent URLs due to a server issue. Please try again.",
+            503: "We couldn\u2019t reach our service to load your URLs. Please try again in a few seconds!",
+          },
+        };
+
+        const actionMap = ACTION_ERRORS[action] || {};
+        const GENERIC = {
+          400: "Something about that request wasn\u2019t right. Please check your inputs and try again!",
+          404: "We couldn\u2019t find what you were looking for. Please make sure everything is correct.",
+          409: "There was a conflict with your request. Please try a different value.",
+          410: "This resource is no longer available.",
+          500: "Oh no! Something went wrong on our end — nothing on your side. Please try again!",
+          503: "Our service is temporarily taking a breather. Please try again in a few seconds!",
+        };
+
+        const friendly = actionMap[status] || GENERIC[status] || "Something unexpected happened. Please try again!";
+        const fallbackDetail = detail || (errorMsg && errorMsg !== friendly ? errorMsg : "");
+        return { friendly, detail: fallbackDetail };
+      }
+
       /* ── Shorten Form ── */
       document
         .getElementById("shorten-form")
@@ -561,16 +660,6 @@
 
           if (shortCode) body.short_code = shortCode;
 
-          /* Friendly messages — never show raw stack traces to users */
-          const FRIENDLY_ERRORS = {
-            400: "Hmm, that doesn't look quite right. Please double-check your URL and try again!",
-            404: "We couldn't find what you were looking for. Please make sure everything is correct.",
-            409: "That custom short code is already taken! Try a different one or leave it blank for a random code.",
-            429: "Whoa, slow down! You're making requests a bit too fast. Please wait a moment and try again.",
-            500: "Oh no! Something went wrong on our end \u2014 nothing on your side. Please refresh and try again :)",
-            503: "Our service is temporarily taking a breather. Please try again in a few seconds!",
-          };
-
           try {
             const res = await fetch(`${BASE}/shorten`, {
               method: "POST",
@@ -582,16 +671,15 @@
             resultContainer.classList.remove("hidden");
 
             if (!res.ok) {
-              const friendly = FRIENDLY_ERRORS[res.status] || "Something unexpected happened. Please try again!";
-              const detail = data.error || "";
+              const { friendly, detail } = getContextualError(res.status, data, "shorten");
               resultDiv.className =
                 "bg-error-container/20 rounded-xl p-6 border border-error/20";
               resultDiv.innerHTML = `
                         <div class="flex items-start gap-3">
                             <span class="material-symbols-outlined text-error mt-0.5">sentiment_sad</span>
                             <div>
-                                <p class="text-error font-headline font-semibold">${friendly}</p>
-                                ${detail ? `<p class="text-error/60 text-sm mt-1">Details: ${detail}</p>` : ""}
+                                <p class="text-error font-headline font-semibold">${escapeHtml(friendly)}</p>
+                                ${detail ? `<p class="text-error/60 text-sm mt-1">${escapeHtml(detail)}</p>` : ""}
                             </div>
                         </div>`;
               return;
@@ -620,14 +708,23 @@
             loadUrls();
           } catch (err) {
             resultContainer.classList.remove("hidden");
+            let networkMsg = "Looks like we can\u2019t reach the server right now.";
+            let networkDetail = "Please check your connection and try again in a moment!";
+            if (err.name === "TypeError" && err.message?.includes("Failed to fetch")) {
+              networkMsg = "We can\u2019t connect to the server right now.";
+              networkDetail = "This could be a network issue on your end, or our server may be restarting. Please try again shortly!";
+            } else if (err.name === "AbortError") {
+              networkMsg = "The request took too long and was cancelled.";
+              networkDetail = "The server might be under heavy load. Please try again in a moment!";
+            }
             resultDiv.className =
               "bg-error-container/20 rounded-xl p-6 border border-error/20";
             resultDiv.innerHTML = `
                     <div class="flex items-start gap-3">
                         <span class="material-symbols-outlined text-error mt-0.5">cloud_off</span>
                         <div>
-                            <p class="text-error font-headline font-semibold">Looks like we can't reach the server right now.</p>
-                            <p class="text-error/60 text-sm mt-1">Please check your connection and try again in a moment!</p>
+                            <p class="text-error font-headline font-semibold">${escapeHtml(networkMsg)}</p>
+                            <p class="text-error/60 text-sm mt-1">${escapeHtml(networkDetail)}</p>
                         </div>
                     </div>`;
           }
@@ -644,6 +741,20 @@
             `${BASE}/urls?page=${currentPage}&per_page=10`,
           );
           const data = await res.json();
+
+          if (!res.ok) {
+            const { friendly } = getContextualError(res.status, data, "loadUrls");
+            container.innerHTML = `
+              <div class="text-center py-8">
+                <span class="material-symbols-outlined text-error text-3xl mb-2">error_outline</span>
+                <p class="text-error font-headline font-semibold">${escapeHtml(friendly)}</p>
+                <button onclick="loadUrls()" class="mt-4 px-4 py-2 rounded-lg text-sm font-headline font-semibold bg-surface-container-low text-on-surface-variant hover:bg-surface-container-highest transition-colors">
+                  Try Again
+                </button>
+              </div>`;
+            return;
+          }
+
           totalPages = Math.ceil(data.total / data.per_page) || 1;
 
           if (data.data.length === 0) {
@@ -685,8 +796,15 @@
           document.getElementById("next-btn").disabled =
             currentPage >= totalPages;
         } catch (err) {
-          container.innerHTML =
-            '<div class="text-center text-on-surface-variant py-8">Oops! We had trouble loading your URLs. Please refresh to try again.</div>';
+          container.innerHTML = `
+            <div class="text-center py-8">
+              <span class="material-symbols-outlined text-error text-3xl mb-2">cloud_off</span>
+              <p class="text-error font-headline font-semibold">We couldn\u2019t load your URLs right now.</p>
+              <p class="text-on-surface-variant text-sm mt-1">The server may be restarting or temporarily unavailable.</p>
+              <button onclick="loadUrls()" class="mt-4 px-4 py-2 rounded-lg text-sm font-headline font-semibold bg-surface-container-low text-on-surface-variant hover:bg-surface-container-highest transition-colors">
+                Try Again
+              </button>
+            </div>`;
         }
       }
 
