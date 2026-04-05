@@ -132,7 +132,7 @@ def bulk_load_users():
         for row in rows:
             username = row.get("username", "").strip()
             email = row.get("email", "").strip()
-            if not username or not email:
+            if not username or not email or "@" not in email:
                 continue
             created_at = row.get("created_at", "").strip()
             row_id = row.get("id", "").strip()

@@ -25,10 +25,11 @@ def _validate_url(url_string):
     """Return an error message if the URL is invalid, else None."""
     if not isinstance(url_string, str) or not url_string.strip():
         return "original_url must be a non-empty string"
+    url_string = url_string.strip()
     parsed = urlparse(url_string)
     if parsed.scheme not in ("http", "https"):
         return "original_url must start with http:// or https://"
-    if not parsed.netloc:
+    if not parsed.netloc or "." not in parsed.netloc:
         return "original_url must include a valid domain"
     return None
 
