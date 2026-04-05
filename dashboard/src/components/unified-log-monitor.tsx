@@ -361,6 +361,36 @@ function stableLogRowKey(row: LogEntry): string {
   return `fp:${(h >>> 0).toString(36)}`;
 }
 
+/** Parsed HTTP status, or null when this row is not an HTTP status line (matches chart bucket rules). */
+function parseHttpStatusCode(row: LogEntry): number | null {
+  const sc = row.status_code;
+  if (typeof sc === "number" && !Number.isNaN(sc)) return sc;
+  if (typeof sc === "string") {
+    const n = Number.parseInt(sc, 10);
+    return Number.isNaN(n) ? null : n;
+  }
+  return null;
+}
+
+/**
+ * Chart: Errors = status &gt;= 400. Requests (for the list) = non-error HTTP lines plus non-HTTP log lines.
+ * When both series checkboxes are off, the caller skips filtering and shows all rows.
+ */
+function logRowMatchesSeries(
+  row: LogEntry,
+  showRequests: boolean,
+  showErrors: boolean
+): boolean {
+  const code = parseHttpStatusCode(row);
+  if (code == null) {
+    return showRequests;
+  }
+  if (code >= 400) {
+    return showErrors;
+  }
+  return showRequests;
+}
+
 type UnifiedLogMonitorProps = {
   /** When set (e.g. from Containers row), apply once to the instance filter. */
   instanceJump?: { instanceId: string; nonce: number } | null;
@@ -464,6 +494,17 @@ export function UnifiedLogMonitor({
     const te = summary?.total_errors ?? 0;
     return tr > 0 ? (te / tr) * 100 : 0;
   }, [summary]);
+
+  const rawLogs = insights?.logs ?? [];
+  const displayLogs = useMemo(() => {
+    const logs = insights?.logs ?? [];
+    if (!showRequests && !showErrors) {
+      return logs;
+    }
+    return logs.filter((row) => logRowMatchesSeries(row, showRequests, showErrors));
+  }, [insights?.logs, showRequests, showErrors]);
+
+  const seriesFilterActive = showRequests || showErrors;
 
   const clearData = async () => {
     setClearing(true);
@@ -712,6 +753,10 @@ export function UnifiedLogMonitor({
               </span>
             </label>
           </div>
+          <p className="text-muted-foreground text-xs">
+            Requests and Errors also filter the log table: Requests = non-error HTTP (status &lt; 400) and
+            non-HTTP lines; Errors = HTTP 4xx/5xx. Uncheck both to show every line (no series filter).
+          </p>
 
           {summary && (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -808,14 +853,25 @@ export function UnifiedLogMonitor({
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {(insights?.logs ?? []).length === 0 && !insights?.error && (
+                  {rawLogs.length === 0 && !insights?.error && (
                     <TableRow>
                       <TableCell colSpan={9} className="text-muted-foreground text-center py-8">
                         No matching log lines.
                       </TableCell>
                     </TableRow>
                   )}
-                  {(insights?.logs ?? []).map((row) => {
+                  {rawLogs.length > 0 &&
+                    seriesFilterActive &&
+                    displayLogs.length === 0 &&
+                    !insights?.error && (
+                      <TableRow>
+                        <TableCell colSpan={9} className="text-muted-foreground text-center py-8">
+                          No log lines match the selected series (Requests / Errors). Adjust the
+                          checkboxes above or widen other filters.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  {displayLogs.map((row) => {
                     const k = stableLogRowKey(row);
                     const isOpen = expandedKeys.has(k);
                     const sc = row.status_code;

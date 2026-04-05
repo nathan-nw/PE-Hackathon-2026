@@ -236,6 +236,12 @@ services:
       VISIBILITY_ALERTMANAGER_DISABLED: "1"
       # FastAPI log cache (Kafka → in-memory → dashboard /api/logs proxy)
       DASHBOARD_BACKEND_URL: http://dashboard-backend:8000
+      # Chaos kill → POST /api/watchdog-alerts/ingest (same token as dashboard-backend; or ALLOW_INSECURE_LOG_INGEST on backend)
+      LOG_INGEST_TOKEN: ${LOG_INGEST_TOKEN:-}
+      WATCHDOG_ALERTS_INGEST_TOKEN: ${WATCHDOG_ALERTS_INGEST_TOKEN:-}
+      # Red Discord embed on chaos kill (same webhook as backend / watchdog)
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      WATCHDOG_DISCORD_WEBHOOK_URL: ${WATCHDOG_DISCORD_WEBHOOK_URL:-}
       # Happy AI chat (OpenAI). Set in repo root .env or compose env.
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       # Optional override (default gpt-4o-mini in API route)

@@ -13,6 +13,10 @@ export type WatchdogEventKind =
   | "heartbeat_exit_redeploy"
   /** Transition to no active deployment, STOPPED, or user stop — was running, now not. */
   | "railway_stopped"
+  /** Ops Chaos tab: SIGKILL / docker kill against a Compose container (immediate alert; watchdog may miss fast restarts). */
+  | "compose_chaos_kill"
+  /** Ops Chaos tab: Railway deployment halted from the dashboard. */
+  | "railway_chaos_kill"
   /** Was not online (e.g. deploying, exited, completed); now online with a healthy deployment. */
   | "railway_online";
 

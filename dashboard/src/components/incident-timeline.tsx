@@ -30,11 +30,11 @@ type IncidentEvent = {
 type IncidentsResponse = {
   events: IncidentEvent[];
   count: number;
+  error?: string;
+  hint?: string;
 };
 
-const BACKEND =
-  process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
-
+/** Same-origin proxy (`/api/incidents`) → FastAPI so local + Railway use `DASHBOARD_BACKEND_URL` on the server. */
 function severityBadge(severity: string) {
   switch (severity) {
     case "critical":
@@ -106,12 +106,24 @@ export function IncidentTimeline() {
         limit: "200",
       });
       if (filterSeverity) params.set("severity", filterSeverity);
-      const res = await fetch(`${BACKEND}/api/incidents?${params}`);
+      const res = await fetch(`/api/incidents?${params}`, { cache: "no-store" });
+      const j = (await res.json()) as IncidentsResponse;
       if (res.ok) {
-        setData(await res.json());
+        setData(j);
+      } else {
+        setData({
+          events: [],
+          count: 0,
+          error: j.error,
+          hint: j.hint,
+        });
       }
-    } catch {
-      // silently retry next poll
+    } catch (e) {
+      setData({
+        events: [],
+        count: 0,
+        error: e instanceof Error ? e.message : "Could not load incidents",
+      });
     } finally {
       setLoading(false);
     }
@@ -124,7 +136,7 @@ export function IncidentTimeline() {
   }, [fetchEvents]);
 
   const handleClear = useCallback(async () => {
-    await fetch(`${BACKEND}/api/incidents/clear`, { method: "POST" });
+    await fetch("/api/incidents/clear", { method: "POST", cache: "no-store" });
     fetchEvents();
   }, [fetchEvents]);
 
@@ -208,17 +220,25 @@ export function IncidentTimeline() {
       </CardHeader>
 
       <CardContent>
+        {data?.error && (
+          <div className="mb-4 space-y-1">
+            <p className="text-destructive text-sm">{data.error}</p>
+            {data.hint && (
+              <p className="text-muted-foreground text-xs">{data.hint}</p>
+            )}
+          </div>
+        )}
         {loading && events.length === 0 ? (
           <p className="text-muted-foreground py-8 text-center text-sm">
             Loading timeline...
           </p>
-        ) : events.length === 0 ? (
+        ) : !loading && events.length === 0 && !data?.error ? (
           <div className="py-12 text-center">
             <p className="text-muted-foreground text-sm">
               No incidents in the last {windowHours}h. All clear.
             </p>
           </div>
-        ) : (
+        ) : events.length === 0 ? null : (
           <div className="space-y-6">
             {Array.from(grouped.entries()).map(([dateStr, dayEvents]) => (
               <div key={dateStr}>

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { recordChaosKillAlert } from "@/lib/chaos-watchdog-notify";
 import {
   chaosKillEnabled,
   isServiceKillAllowed,
@@ -146,6 +147,12 @@ export async function POST(request: NextRequest) {
 
       const halt = await railwayChaosHaltDeployment(depId);
 
+      recordChaosKillAlert({
+        kind: "railway_chaos_kill",
+        service: row.service,
+        message: `Deployment halted via ${halt.method} from Ops Chaos (SIGKILL / stop).`,
+      });
+
       return NextResponse.json({
         ok: true,
         service: row.service,
@@ -212,6 +219,13 @@ export async function POST(request: NextRequest) {
     }
 
     await container.kill();
+
+    recordChaosKillAlert({
+      kind: "compose_chaos_kill",
+      service: svc,
+      message:
+        "SIGKILL from Ops Chaos — container was killed (restart policy may recover before the compose-watchdog poll sees `exited`).",
+    });
 
     return NextResponse.json({
       ok: true,

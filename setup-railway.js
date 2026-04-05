@@ -679,6 +679,22 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
       // Heartbeats use private mesh (http://<service>.railway.internal:8080/...) when unset; see service-heartbeat.ts
       RAILWAY_HEARTBEAT_INTERNAL_PORT: "8080",
       ...(watchdogPoll ? { RAILWAY_WATCHDOG_POLL_SEC: watchdogPoll } : {}),
+      // Persist watchdog events to dashboard_db via dashboard-backend (same as compose-watchdog).
+      ...(byName.has("dashboard-backend")
+        ? {
+            DASHBOARD_BACKEND_URL:
+              "http://" +
+              varRef("dashboard-backend", "RAILWAY_PRIVATE_DOMAIN") +
+              ":" +
+              varRef("dashboard-backend", "PORT"),
+            ...(logIngestToken
+              ? {
+                  LOG_INGEST_TOKEN: logIngestToken,
+                  WATCHDOG_ALERTS_INGEST_TOKEN: logIngestToken,
+                }
+              : {}),
+          }
+        : {}),
     };
     if (dashboardPt) {
       railwayWatchdogVars.RAILWAY_PROJECT_TOKEN = dashboardPt;

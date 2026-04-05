@@ -3,7 +3,8 @@
 FROM node:20-alpine AS build
 WORKDIR /build
 COPY dashboard/src/lib/watchdog-core ./dashboard/src/lib/watchdog-core
-# watchdog-discord.ts imports ../happy-branding (esbuild resolves from watchdog-core/)
+# watchdog-discord.ts imports ../server-runtime-env (re-export) + ../happy-branding
+COPY dashboard/src/lib/server-runtime-env.ts ./dashboard/src/lib/server-runtime-env.ts
 COPY dashboard/src/lib/happy-branding.ts ./dashboard/src/lib/happy-branding.ts
 COPY watchdog-service/package.json ./watchdog-service/
 WORKDIR /build/watchdog-service

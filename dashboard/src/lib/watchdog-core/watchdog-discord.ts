@@ -12,32 +12,33 @@
  */
 
 import { HAPPY_AGENT_AVATAR_URL, HAPPY_AGENT_NAME } from "../happy-branding";
+import { runtimeEnv } from "../server-runtime-env";
 import type { WatchdogEvent, WatchdogEventKind } from "./watchdog-types";
 
 const UA = "PE-Hackathon-Watchdog/1.0";
 
 function happyWebhookIdentity(): { username: string; avatar_url: string } {
   const username = (
-    process.env.WATCHDOG_DISCORD_USERNAME ||
-    process.env.HAPPY_AGENT_DISCORD_USERNAME ||
+    runtimeEnv("WATCHDOG_DISCORD_USERNAME") ||
+    runtimeEnv("HAPPY_AGENT_DISCORD_USERNAME") ||
     HAPPY_AGENT_NAME
   ).trim();
   const avatar_url = (
-    process.env.WATCHDOG_DISCORD_AVATAR_URL ||
-    process.env.HAPPY_AGENT_AVATAR_URL ||
+    runtimeEnv("WATCHDOG_DISCORD_AVATAR_URL") ||
+    runtimeEnv("HAPPY_AGENT_AVATAR_URL") ||
     HAPPY_AGENT_AVATAR_URL
   ).trim();
   return { username, avatar_url };
 }
 
 function discordNotifyAllowed(): boolean {
-  if ((process.env.WATCHDOG_DISCORD_NOTIFY || "").trim() === "0") {
+  if ((runtimeEnv("WATCHDOG_DISCORD_NOTIFY") || "").trim() === "0") {
     return false;
   }
-  if ((process.env.WATCHDOG_DISCORD_ALWAYS || "").trim() === "1") {
+  if ((runtimeEnv("WATCHDOG_DISCORD_ALWAYS") || "").trim() === "1") {
     return true;
   }
-  return (process.env.RAILWAY_WATCHDOG_WORKER || "").trim() === "1";
+  return (runtimeEnv("RAILWAY_WATCHDOG_WORKER") || "").trim() === "1";
 }
 
 /** Discord embed colors (decimal). Red = exited/stopped, yellow = deploy/recovery in progress, green = healthy online. */
@@ -46,7 +47,11 @@ const EMBED_YELLOW = 16705372; // #FEE75C
 const EMBED_GREEN = 5763719; // #57F287
 
 /** Stopped, removed, CRASHED/FAILED, or no active deployment (see `isDeploymentDownOrFailed` in railway-watchdog-tick). */
-const FAILURE_KINDS = new Set<WatchdogEventKind>(["railway_stopped"]);
+const FAILURE_KINDS = new Set<WatchdogEventKind>([
+  "railway_stopped",
+  "compose_chaos_kill",
+  "railway_chaos_kill",
+]);
 
 /** Deploying, redeploy, or recovery in flight (process / rollout). */
 const IN_PROGRESS_KINDS = new Set<WatchdogEventKind>([
@@ -63,8 +68,8 @@ const ONLINE_KINDS = new Set<WatchdogEventKind>(["railway_online"]);
 
 function webhookUrl(): string {
   return (
-    (process.env.WATCHDOG_DISCORD_WEBHOOK_URL || "").trim() ||
-    (process.env.DISCORD_WEBHOOK_URL || "").trim()
+    (runtimeEnv("WATCHDOG_DISCORD_WEBHOOK_URL") || "").trim() ||
+    (runtimeEnv("DISCORD_WEBHOOK_URL") || "").trim()
   );
 }
 
@@ -166,6 +171,34 @@ export async function notifyDiscordForWatchdogEvents(
 }
 
 /**
+ * Red “down” embed for Chaos kills — callable from the dashboard API route.
+ * Does not require `RAILWAY_WATCHDOG_WORKER` / `WATCHDOG_DISCORD_ALWAYS` (compose-watchdog may never see `exited` if restart policy recovers instantly).
+ */
+export async function notifyDiscordChaosKillEmbeds(
+  events: WatchdogEvent[]
+): Promise<void> {
+  if (!webhookUrl() || events.length === 0) return;
+
+  const embeds: Record<string, unknown>[] = [
+    {
+      title: "Heads up — deployment down (stopped, crashed, or removed)",
+      description:
+        events.map((e) => `**${e.service}** — ${e.message}`).join("\n\n") ||
+        "Chaos kill recorded.",
+      color: EMBED_RED,
+      footer: { text: "Happy · Chaos kill" },
+    },
+  ];
+
+  try {
+    await postDiscord(embeds);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn(`[watchdog-discord] chaos kill send failed: ${msg}`);
+  }
+}
+
+/**
  * Persist all watchdog events to dashboard-backend Postgres (`watchdog_alerts`).
  * Set `DASHBOARD_BACKEND_URL` on the worker; auth uses `WATCHDOG_ALERTS_INGEST_TOKEN` or `LOG_INGEST_TOKEN`
  * (or `ALLOW_INSECURE_LOG_INGEST=1` locally).
@@ -175,13 +208,13 @@ export async function persistWatchdogAlertsToBackend(
   source: "railway" | "compose" = "railway"
 ): Promise<void> {
   if (!events.length) return;
-  const base = (process.env.DASHBOARD_BACKEND_URL || "").trim().replace(/\/$/, "");
+  const base = (runtimeEnv("DASHBOARD_BACKEND_URL") || "").trim().replace(/\/$/, "");
   if (!base) return;
   const token =
-    (process.env.WATCHDOG_ALERTS_INGEST_TOKEN || "").trim() ||
-    (process.env.LOG_INGEST_TOKEN || "").trim();
+    (runtimeEnv("WATCHDOG_ALERTS_INGEST_TOKEN") || "").trim() ||
+    (runtimeEnv("LOG_INGEST_TOKEN") || "").trim();
   const allowInsecure =
-    (process.env.ALLOW_INSECURE_LOG_INGEST || "").trim() === "1";
+    (runtimeEnv("ALLOW_INSECURE_LOG_INGEST") || "").trim() === "1";
   if (!token && !allowInsecure) return;
 
   try {

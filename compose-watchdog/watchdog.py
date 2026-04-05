@@ -31,6 +31,16 @@ def _parse_policy(name: str | None) -> str:
     return (name or "").strip().lower()
 
 
+def _container_state_exited(state: dict[str, Any]) -> bool:
+    """Docker ``State.Status`` is usually ``exited`` / ``dead``; some APIs add exit codes in the string."""
+    st = (state.get("Status") or "").strip().lower()
+    if not st:
+        return False
+    if st in ("exited", "dead"):
+        return True
+    return st.startswith("exited") or st.startswith("dead")
+
+
 def _should_recover_exited(policy_name: str) -> bool:
     only_always = _env("WATCHDOG_ONLY_ALWAYS", "0").lower() in (
         "1",
@@ -206,7 +216,7 @@ def _tick(
             (attrs.get("HostConfig") or {}).get("RestartPolicy", {}).get("Name")
         )
 
-        if status == "exited":
+        if _container_state_exited(state):
             if c.id not in exit_notified:
                 notify_exited(svc, c.short_id)
                 exit_notified.add(c.id)

@@ -741,7 +741,7 @@ def fetch_logs_from_db(
 
 def _watchdog_severity_for_kind(kind: str) -> str:
     k = (kind or "").strip().lower()
-    if k == "railway_stopped":
+    if k in ("railway_stopped", "compose_chaos_kill", "railway_chaos_kill"):
         return "critical"
     if k in ("railway_online", "compose_recovered"):
         return "info"
