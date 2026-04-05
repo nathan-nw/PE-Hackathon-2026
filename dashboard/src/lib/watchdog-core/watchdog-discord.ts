@@ -45,7 +45,7 @@ const EMBED_RED = 15548997; // #ED4245
 const EMBED_YELLOW = 16705372; // #FEE75C
 const EMBED_GREEN = 5763719; // #57F287
 
-/** Service stopped / no deployment — exited deployment. */
+/** Stopped, removed, CRASHED/FAILED, or no active deployment (see `isDeploymentDownOrFailed` in railway-watchdog-tick). */
 const FAILURE_KINDS = new Set<WatchdogEventKind>(["railway_stopped"]);
 
 /** Deploying, redeploy, or recovery in flight (process / rollout). */
@@ -126,10 +126,10 @@ export async function notifyDiscordForWatchdogEvents(
 
   if (failure.length > 0) {
     embeds.push({
-      title: "Heads up — a deployment stopped",
+      title: "Heads up — deployment down (stopped, crashed, or removed)",
       description:
         failure.map((e) => `**${e.service}** — ${e.message}`).join("\n\n") ||
-        "A deployment stopped or was removed.",
+        "A deployment stopped, crashed, or was removed.",
       color: EMBED_RED,
       footer: { text: "Happy · Railway watchdog" },
     });

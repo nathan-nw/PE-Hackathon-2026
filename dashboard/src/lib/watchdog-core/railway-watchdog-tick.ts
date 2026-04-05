@@ -233,6 +233,20 @@ function isNowStoppedOrNoDeployment(
   return false;
 }
 
+/**
+ * Deployment is no longer running successfully: user stop, removed deployment, or process crash.
+ * CRASHED/FAILED were missing from stopped-only checks — Discord never got a red "down" embed for kills/crashes.
+ */
+function isDeploymentDownOrFailed(
+  depId: string,
+  cur: string,
+  row: RailwayVisibilityRow
+): boolean {
+  const u = cur.toUpperCase();
+  if (u === "CRASHED" || u === "FAILED") return true;
+  return isNowStoppedOrNoDeployment(depId, cur, row);
+}
+
 export function railwayWatchdogIntervalSec(): number {
   return Math.max(
     5,
@@ -547,17 +561,39 @@ export async function runRailwayWatchdogTick(
       const c = cur.toUpperCase();
       const prevOnline = before.onlineStatus;
 
-      if (wasActivelyDeployed(before) && isNowStoppedOrNoDeployment(depId, cur, row)) {
+      if (wasActivelyDeployed(before) && isDeploymentDownOrFailed(depId, cur, row)) {
+        const curU = cur.toUpperCase();
+        const downMsg =
+          curU === "CRASHED" || curU === "FAILED"
+            ? `Deployment **${curU.toLowerCase()}** for ${name} (was ${before.deploymentStatus}, now ${cur}).`
+            : `Deployment stopped or removed; no active deployment for ${name} (was ${before.deploymentStatus}, now ${cur || "none"}).`;
         events.push({
           id: `${sid}-stopped-${Date.now()}`,
           at: now,
           service: name,
           kind: "railway_stopped",
-          message: `Deployment stopped or removed; no active deployment for ${name} (was ${before.deploymentStatus}, now ${cur || "none"}).`,
+          message: downMsg,
         });
         pushLogLine(
           state,
           `watchdog: ${name} railway_stopped (${before.deploymentStatus} → ${cur || "no deployment"})`
+        );
+      } else if (
+        before &&
+        wasActivelyDeployed(before) &&
+        before.onlineStatus === "online" &&
+        onlineNow === "failed"
+      ) {
+        events.push({
+          id: `${sid}-failed-${Date.now()}`,
+          at: now,
+          service: name,
+          kind: "railway_stopped",
+          message: `Deployment unhealthy (**failed**) for ${name} (lifecycle: ${before.deploymentStatus} → ${cur || "unknown"}).`,
+        });
+        pushLogLine(
+          state,
+          `watchdog: ${name} railway_stopped (online → failed, status=${cur})`
         );
       }
 
