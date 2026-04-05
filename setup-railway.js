@@ -30,6 +30,9 @@
  *   RAILWAY_DASHBOARD_POSTGRES_SERVICE_NAME=…  — optional second Postgres plugin for dashboard_db only (mirrors compose service dashboard-db)
  *   RAILWAY_KAFKA_SERVICE_NAME=Kafka  — optional Kafka/Redpanda plugin; sets KAFKA_BOOTSTRAP_SERVERS on API + dashboard-backend
  *   RAILWAY_KAFKA_BOOTSTRAP_VAR=KAFKA_URL  — variable name on the Kafka service for the broker URL (template differs by provider)
+ *   DASHBOARD_RAILWAY_PROJECT_TOKEN=…  — optional; with SYNC_VARIABLES=1, upserts RAILWAY_PROJECT_TOKEN on the dashboard service (Ops tab GraphQL)
+ *   DASHBOARD_RAILWAY_API_TOKEN=…  — optional; same but RAILWAY_API_TOKEN (account token); used only if project token is unset
+ *   USER_FRONTEND_BACKEND_URL=…  — optional; with SYNC_VARIABLES=1, sets user-frontend BACKEND_URL to this literal (e.g. https://load-balancer-….up.railway.app) instead of the load-balancer service reference
  */
 
 const fs = require("fs");
@@ -441,7 +444,9 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
   await upsert("dashboard-backend", dashboardBackendVars);
 
   if (byName.has("dashboard")) {
-    await upsert("dashboard", {
+    const dashboardPt = (process.env.DASHBOARD_RAILWAY_PROJECT_TOKEN || "").trim();
+    const dashboardAt = (process.env.DASHBOARD_RAILWAY_API_TOKEN || "").trim();
+    const dashboardVars = {
       DASHBOARD_BACKEND_URL: "https://" + varRef("dashboard-backend", "RAILWAY_PUBLIC_DOMAIN"),
       VISIBILITY_K8S_ENABLED: "false",
       VISIBILITY_COMPOSE_PROJECT: "pe-hackathon-2026",
@@ -449,16 +454,28 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
       RAILWAY_PROJECT_ID: projectId,
       RAILWAY_ENVIRONMENT_ID: environmentId,
       VISIBILITY_ALERTMANAGER_DISABLED: "1",
-      // Add RAILWAY_PROJECT_TOKEN or RAILWAY_API_TOKEN in the dashboard service manually (secret).
-    });
+    };
+    if (dashboardPt) {
+      dashboardVars.RAILWAY_PROJECT_TOKEN = dashboardPt;
+    } else if (dashboardAt) {
+      dashboardVars.RAILWAY_API_TOKEN = dashboardAt;
+    } else {
+      console.warn(
+        "(Variable sync) No DASHBOARD_RAILWAY_PROJECT_TOKEN or DASHBOARD_RAILWAY_API_TOKEN — add RAILWAY_PROJECT_TOKEN or RAILWAY_API_TOKEN on the dashboard service in Railway, or set one of those env vars in .env.railway.setup and re-run."
+      );
+    }
+    await upsert("dashboard", dashboardVars);
   }
 
   if (byName.has("user-frontend")) {
-    const apiPublic = byName.has("load-balancer")
-      ? "https://" + varRef("load-balancer", "RAILWAY_PUBLIC_DOMAIN")
-      : "https://" + varRef("url-shortener-a", "RAILWAY_PUBLIC_DOMAIN");
+    const explicitUf = (process.env.USER_FRONTEND_BACKEND_URL || "").trim().replace(/\/+$/, "");
+    const apiPublic = explicitUf
+      ? explicitUf
+      : byName.has("load-balancer")
+        ? "https://" + varRef("load-balancer", "RAILWAY_PUBLIC_DOMAIN")
+        : "https://" + varRef("url-shortener-a", "RAILWAY_PUBLIC_DOMAIN");
     await upsert("user-frontend", {
-      NEXT_PUBLIC_API_URL: apiPublic,
+      BACKEND_URL: apiPublic,
     });
   }
 }

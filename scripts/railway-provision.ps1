@@ -99,7 +99,7 @@ Recommended shared variables (automated: `$env:SYNC_VARIABLES = '1'; node setup-
     DASHBOARD_BACKEND_URL = https://${{ dashboard-backend.RAILWAY_PUBLIC_DOMAIN }}
 
   user-frontend (optional):
-    NEXT_PUBLIC_API_URL = https://${{ load-balancer.RAILWAY_PUBLIC_DOMAIN }}
+    BACKEND_URL = https://${{ load-balancer.RAILWAY_PUBLIC_DOMAIN }}
 
 Accept the Railway GitHub app for the repo if prompted (Settings -> Deploy -> GitHub).
 

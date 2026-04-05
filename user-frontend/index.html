@@ -156,7 +156,7 @@
       <div class="field">
         <label for="apiBase">API base URL</label>
         <input type="url" id="apiBase" placeholder="http://localhost:18080" autocomplete="off" />
-        <p class="hint">Local Docker: use the <strong>load balancer</strong> (NGINX), not the API container port. From the repo root run <code style="color:#cbd5e1;">docker compose port load-balancer 80</code> to see the host port (often <code>:8080</code> or <code>:18080</code> if <code>LB_HTTP_PORT</code> is set in <code>.env</code>). A CORS error usually means the URL is not NGINX (wrong port or another process bound there). Not <code>:5000</code> / not <code>:3000</code> (dashboard). On Railway, use the <strong>load-balancer</strong> service public HTTPS URL (same entrypoint as local NGINX).</p>
+        <p class="hint">Default comes from <code style="color:#cbd5e1;">/api-config.js</code> (built from <code style="color:#cbd5e1;">BACKEND_URL</code> in Docker / Railway). Local Compose: set <code style="color:#cbd5e1;">USER_FRONTEND_BACKEND_URL</code> in the repo root <code style="color:#cbd5e1;">.env</code> (see <code style="color:#cbd5e1;">user-frontend/.env.example</code>). Use the <strong>load balancer</strong> (NGINX), not the API container port — run <code style="color:#cbd5e1;">docker compose port load-balancer 80</code> if unsure. A CORS error usually means the wrong host/port. On Railway, <code style="color:#cbd5e1;">setup-railway.js</code> with <code style="color:#cbd5e1;">SYNC_VARIABLES=1</code> sets <code style="color:#cbd5e1;">BACKEND_URL</code> to the load-balancer URL.</p>
       </div>
       <div class="field">
         <label for="longUrl">Long URL</label>
@@ -242,6 +242,7 @@
     </div>
   </div>
 
+  <script src="/api-config.js"></script>
   <script>
     (function () {
       var STORAGE_API = "pe_shortener_api_base";
@@ -250,6 +251,14 @@
 
       function normalizeBase(url) {
         return (url || "").replace(/\/+$/, "");
+      }
+
+      function getInjectedBackend() {
+        if (typeof window.__PE_BACKEND_URL__ === "string") {
+          var s = window.__PE_BACKEND_URL__.trim();
+          if (s) return normalizeBase(s);
+        }
+        return "";
       }
 
       /**
@@ -273,7 +282,9 @@
       function loadApiBase() {
         var saved = localStorage.getItem(STORAGE_API);
         var input = document.getElementById("apiBase");
-        input.value = saved || "http://localhost:18080";
+        var injected = getInjectedBackend();
+        var fallback = "http://localhost:18080";
+        input.value = saved || injected || fallback;
       }
 
       function saveApiBase() {

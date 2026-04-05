@@ -288,6 +288,9 @@ services:
   user-frontend:
     build:
       context: ./user-frontend
+    environment:
+      # URL the *browser* uses to reach the NGINX load balancer (host port from LB_HTTP_PORT / compose).
+      BACKEND_URL: ${USER_FRONTEND_BACKEND_URL:-http://localhost:18080}
     restart: always
     networks:
       - app_net

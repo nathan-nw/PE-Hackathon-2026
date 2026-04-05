@@ -1,0 +1,2 @@
+/* Generated at container start from BACKEND_URL (see docker-entrypoint.d/25-api-config.sh). */
+window.__PE_BACKEND_URL__="${BACKEND_URL}";
