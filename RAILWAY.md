@@ -109,7 +109,9 @@ There is no Docker socket on Railway, so the Next.js dashboard cannot use **`doc
 
 ### Where the “watchdog” runs (hosted)
 
-The **Railway deployment watchdog** is **not** a separate service and **not** part of **`dashboard-backend`** (FastAPI). It runs **inside the Next.js `dashboard` service**: server-side API routes poll the Railway GraphQL API on a timer driven by the browser, and in-memory state lives in the **Node** process. **`compose-watchdog`** in **`docker-compose.yml`** is the separate container used **only for local Docker** (starts exited Compose tasks, etc.).
+Production uses a dedicated Git-linked service **`railway-watchdog`** (see **`watchdog-service/`**, root directory **`.`**, Dockerfile **`/watchdog-service/Dockerfile`**). It polls Railway GraphQL and public HTTP heartbeats on an interval and exposes **`GET /v1/status`** and **`GET /v1/stream`** (SSE). **`SYNC_VARIABLES=1`** sets **`WATCHDOG_SERVICE_URL`** on **`dashboard`** to the worker’s private URL so the Next.js app **proxies** the Chaos watchdog card instead of running the loop in-process (avoids duplicate work when several users open the dashboard). Run **`node setup-railway.js`** after adding the service so **watch patterns** and variables stay aligned; **`watchdog-service/railway.toml`** uses a broad **`/**`** watch pattern so deployments are not **SKIPPED** with “No changes to watched files” when your commit only touched paths outside the old narrow list. Keep **one replica** for **`railway-watchdog`**. If a deploy was skipped or the service is offline, use **Redeploy** in Railway or push any commit after pulling this config.
+
+If **`WATCHDOG_SERVICE_URL`** is unset (e.g. local dev), the dashboard falls back to **in-process** polling via API routes. **`compose-watchdog`** in **`docker-compose.yml`** is the separate container for **local Docker** only (Compose container restarts, etc.); it is not the hosted Railway worker.
 
 To apply variable sync from your machine (after **`DASHBOARD_RAILWAY_PROJECT_TOKEN`** is in **`.env.railway.setup`**):
 

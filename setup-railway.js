@@ -212,7 +212,8 @@ const SERVICE_SPECS = [
     name: "railway-watchdog",
     rootDirectory: ".",
     railwayConfigFile: "/watchdog-service/railway.toml",
-    watchPatterns: ["/watchdog-service/**", "/dashboard/src/lib/watchdog-core/**"],
+    // Match any repo path so pushes are not SKIPPED when only unrelated paths changed (see railway.toml).
+    watchPatterns: ["/**", "/*", "/.*"],
   },
 ];
 
