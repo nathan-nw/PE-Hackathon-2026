@@ -3,6 +3,8 @@ export type WatchdogEventKind =
   | "scan"
   | "railway_deploy"
   | "railway_stalled"
+  /** Completed / stopped → deploy pipeline (reboot, new deployment after kill). */
+  | "railway_rebooting"
   /** Watchdog called serviceInstanceDeploy(latest) after CRASHED/FAILED/REMOVED. */
   | "railway_auto_recover";
 

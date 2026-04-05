@@ -23,7 +23,9 @@ import { instanceIdFromComposeService } from "@/lib/compose-instance";
 import { ChaosPanel } from "@/components/chaos-panel";
 import { UnifiedLogMonitor } from "@/components/unified-log-monitor";
 import { LoadTest } from "@/components/load-test";
+import { RailwayOnlineStatusBadge } from "@/components/railway-online-status-badge";
 import { cn } from "@/lib/utils";
+import type { RailwayOnlineStatus } from "@/lib/railway-visibility";
 import {
   ChevronDown,
   ChevronRight,
@@ -48,6 +50,8 @@ type DockerContainer = {
   memUsage?: number;
   memLimit?: number;
   railwayServiceId?: string;
+  /** Hosted (Railway): Online / Completed / Deploying — from deployment lifecycle. */
+  railwayOnlineStatus?: RailwayOnlineStatus;
 };
 
 /** Response from dashboard-backend GET /api/introspect/postgres (proxied). */
@@ -423,7 +427,9 @@ export function OpsDashboard() {
                       {docker?.source === "railway" ? "Deployment" : "Container"}
                     </TableHead>
                     <TableHead>Image</TableHead>
-                    <TableHead>State</TableHead>
+                    <TableHead>
+                      {docker?.source === "railway" ? "Lifecycle" : "State"}
+                    </TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="w-[120px]">App logs</TableHead>
                     {showResourceStats && (
@@ -493,7 +499,16 @@ export function OpsDashboard() {
                         <TableCell className="max-w-[200px] truncate text-xs">
                           {c.image}
                         </TableCell>
-                        <TableCell>{stateBadge(c.state, c.health)}</TableCell>
+                        <TableCell>
+                          {docker?.source === "railway" &&
+                          c.railwayOnlineStatus != null ? (
+                            <RailwayOnlineStatusBadge
+                              status={c.railwayOnlineStatus}
+                            />
+                          ) : (
+                            stateBadge(c.state, c.health)
+                          )}
+                        </TableCell>
                         <TableCell className="max-w-[240px] truncate text-xs">
                           {c.status}
                         </TableCell>

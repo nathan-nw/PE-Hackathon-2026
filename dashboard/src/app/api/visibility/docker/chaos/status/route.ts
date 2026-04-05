@@ -92,6 +92,7 @@ export async function GET(request: NextRequest) {
         railwayServiceId: row.railwayServiceId,
         railwayDeploymentId: row.railwayDeploymentId,
         statusLine: row.status,
+        railwayOnlineStatus: row.railwayOnlineStatus,
       });
     } catch (e) {
       const message = e instanceof Error ? e.message : "Unknown error";

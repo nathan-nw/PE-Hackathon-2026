@@ -7,6 +7,7 @@
 import {
   fetchRailwayVisibilityRows,
   railwayServiceInstanceDeployLatest,
+  type RailwayOnlineStatus,
 } from "@/lib/railway-visibility";
 import { runtimeEnv } from "@/lib/server-runtime-env";
 
@@ -21,7 +22,11 @@ const RECOVER_COOLDOWN_MS = 50_000;
 const G = globalThis as typeof globalThis & {
   __railwayWatchdogPrev?: Map<
     string,
-    { deploymentStatus: string; deploymentId: string }
+    {
+      deploymentStatus: string;
+      deploymentId: string;
+      onlineStatus: RailwayOnlineStatus;
+    }
   >;
   __railwayWatchdogLogTail?: string[];
   __railwayRecoverCooldown?: Map<string, number>;
@@ -40,7 +45,11 @@ function pushRailwayLogLine(line: string) {
 
 function prevMap(): Map<
   string,
-  { deploymentStatus: string; deploymentId: string }
+  {
+    deploymentStatus: string;
+    deploymentId: string;
+    onlineStatus: RailwayOnlineStatus;
+  }
 > {
   if (!G.__railwayWatchdogPrev) {
     G.__railwayWatchdogPrev = new Map();
@@ -67,6 +76,15 @@ function isDeploying(s: string): boolean {
 function isHealthy(s: string): boolean {
   const u = s.toUpperCase();
   return u === "SUCCESS" || u === "SLEEPING";
+}
+
+function wasCompletedLike(online: RailwayOnlineStatus): boolean {
+  return (
+    online === "completed" ||
+    online === "failed" ||
+    online === "unknown" ||
+    online === "skipped"
+  );
 }
 
 /**
@@ -128,6 +146,7 @@ export async function fetchRailwayWatchdogPayload(): Promise<WatchdogPayload> {
     const name = row.service || row.name;
     const depId = row.railwayDeploymentId ?? "";
     const cur = (row.deploymentStatus ?? "UNKNOWN").trim();
+    const onlineNow = row.railwayOnlineStatus;
     const before = prev.get(sid);
 
     if (isHealthy(cur)) {
@@ -169,6 +188,31 @@ export async function fetchRailwayWatchdogPayload(): Promise<WatchdogPayload> {
     if (before) {
       const b = before.deploymentStatus.toUpperCase();
       const c = cur.toUpperCase();
+      const prevOnline = before.onlineStatus;
+
+      let emittedLifecycle = false;
+      if (wasCompletedLike(prevOnline) && onlineNow === "deploying") {
+        events.push({
+          id: `${sid}-rebooting-${now}`,
+          at: now,
+          service: name,
+          kind: "railway_rebooting",
+          message: `Watchdog: ${name} left Completed/stopped and is Deploying (reboot / new deployment). Status: ${cur}.`,
+        });
+        pushRailwayLogLine(
+          `watchdog: ${name} ${prevOnline} → deploying (${cur})`
+        );
+        emittedLifecycle = true;
+      } else if (prevOnline === "online" && onlineNow === "deploying") {
+        events.push({
+          id: `${sid}-redeploy-${now}`,
+          at: now,
+          service: name,
+          kind: "railway_deploy",
+          message: `Watchdog: ${name} is Deploying while previously Online (${cur}) — rolling out a new revision.`,
+        });
+        emittedLifecycle = true;
+      }
 
       if (isBad(b) && (isDeploying(c) || isHealthy(c))) {
         events.push({
@@ -178,16 +222,9 @@ export async function fetchRailwayWatchdogPayload(): Promise<WatchdogPayload> {
           kind: "recover",
           message: `Watchdog identified a stalled or crashed deployment (${before.deploymentStatus}) and Railway is recovering ${name} (now ${cur}).`,
         });
-      } else if (isHealthy(b) && isDeploying(c)) {
-        events.push({
-          id: `${sid}-redeploy-${now}`,
-          at: now,
-          service: name,
-          kind: "railway_deploy",
-          message: `Watchdog detected a redeploy on ${name} (${cur}); Railway is updating the instance.`,
-        });
       } else if (
-        before.deploymentId !== depId
+        !emittedLifecycle
+        && before.deploymentId !== depId
         && depId
         && !isBad(b)
         && (isDeploying(c) || isHealthy(c))
@@ -202,7 +239,11 @@ export async function fetchRailwayWatchdogPayload(): Promise<WatchdogPayload> {
       }
     }
 
-    prev.set(sid, { deploymentStatus: cur, deploymentId: depId });
+    prev.set(sid, {
+      deploymentStatus: cur,
+      deploymentId: depId,
+      onlineStatus: onlineNow,
+    });
   }
 
   // Drop services that disappeared from project (rare)

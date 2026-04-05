@@ -14,6 +14,18 @@ import {
 
 const ENDPOINT = "https://backboard.railway.com/graphql/v2";
 
+/**
+ * Railway dashboard–style lifecycle (deployment active vs stopped vs in flight).
+ * Maps from `DeploymentStatus` + whether a deployment row exists.
+ */
+export type RailwayOnlineStatus =
+  | "online"
+  | "completed"
+  | "deploying"
+  | "failed"
+  | "skipped"
+  | "unknown";
+
 export type RailwayVisibilityRow = {
   id: string;
   name: string;
@@ -22,6 +34,8 @@ export type RailwayVisibilityRow = {
   status: string;
   /** Raw Railway deployment status (e.g. SUCCESS, CRASHED, DEPLOYING). */
   deploymentStatus?: string;
+  /** Hosted UI: Online ≈ running deployment, Completed ≈ stopped/no deployment, Deploying ≈ build/rollout. */
+  railwayOnlineStatus: RailwayOnlineStatus;
   service: string;
   health?: string;
   created: number;
@@ -109,6 +123,46 @@ export function deploymentStatusToState(status: string): {
   }
 
   return { state: "unknown", health: undefined };
+}
+
+/** Railway UI labels: Online / Completed / Deploying — aligned with dashboard deployment lifecycle. */
+export function deploymentStatusToRailwayUi(
+  deploymentStatus: string | undefined,
+  hasActiveDeployment: boolean
+): RailwayOnlineStatus {
+  if (!hasActiveDeployment) {
+    return "completed";
+  }
+  const s = (deploymentStatus ?? "").trim().toUpperCase();
+  if (!s || s === "UNKNOWN") {
+    return "unknown";
+  }
+
+  if (s === "SUCCESS" || s === "SLEEPING") {
+    return "online";
+  }
+  if (
+    s === "BUILDING" ||
+    s === "DEPLOYING" ||
+    s === "INITIALIZING" ||
+    s === "NEEDS_APPROVAL" ||
+    s === "QUEUED" ||
+    s === "WAITING" ||
+    s === "REMOVING" ||
+    s === "THROTTLED"
+  ) {
+    return "deploying";
+  }
+  if (s === "FAILED" || s === "CRASHED") {
+    return "failed";
+  }
+  if (s === "REMOVED" || s === "STOPPED" || s === "CANCELED" || s === "CANCELLED") {
+    return "completed";
+  }
+  if (s === "SKIPPED") {
+    return "skipped";
+  }
+  return "unknown";
 }
 
 const Q_PROJECT_SERVICES = `
@@ -400,6 +454,7 @@ export async function fetchRailwayVisibilityRows(options?: {
         state: "exited",
         status: "No active deployment",
         deploymentStatus: undefined,
+        railwayOnlineStatus: deploymentStatusToRailwayUi(undefined, false),
         service: byId.get(sid) || "",
         health: undefined,
         created: 0,
@@ -412,6 +467,7 @@ export async function fetchRailwayVisibilityRows(options?: {
 
     const status = dep.status ?? "UNKNOWN";
     const { state, health } = deploymentStatusToState(status);
+    const railwayOnlineStatus = deploymentStatusToRailwayUi(status, true);
 
     const createdSec = dep.createdAt
       ? Math.floor(new Date(dep.createdAt).getTime() / 1000)
@@ -426,6 +482,7 @@ export async function fetchRailwayVisibilityRows(options?: {
       state,
       status: `${status}${publicUrl ? ` · ${publicUrl}` : ""}`,
       deploymentStatus: status,
+      railwayOnlineStatus,
       service: byId.get(sid) || "",
       health,
       created: createdSec,

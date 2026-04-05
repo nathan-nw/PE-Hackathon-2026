@@ -21,7 +21,9 @@ import {
 import { Loader2, RefreshCw, RotateCcw, Skull } from "lucide-react";
 
 import type { WatchdogPayload } from "@/lib/watchdog-types";
+import { RailwayOnlineStatusBadge } from "@/components/railway-online-status-badge";
 import { WatchdogToastStack } from "@/components/watchdog-toast-stack";
+import type { RailwayOnlineStatus } from "@/lib/railway-visibility";
 
 type ChaosAction = "kill" | "restart";
 
@@ -55,6 +57,7 @@ type DockerContainer = {
   /** Set when Ops visibility source is Railway (GraphQL). */
   railwayServiceId?: string;
   railwayDeploymentId?: string;
+  railwayOnlineStatus?: RailwayOnlineStatus;
 };
 
 type DockerResponse = {
@@ -88,6 +91,7 @@ type ChaosStatus = {
   startedAt?: string;
   deploymentStatus?: string;
   statusLine?: string;
+  railwayOnlineStatus?: RailwayOnlineStatus;
   message?: string;
   error?: string;
 };
@@ -372,7 +376,7 @@ export function ChaosPanel() {
             {!watchdog
               ? "Loading watchdog status…"
               : watchdog.source === "railway"
-                ? "Polling Railway deployment status. The watchdog auto-redeploys only on CRASHED or FAILED (not after Chaos Kill / deploymentStop — that would undo an intentional shutdown). Disable with RAILWAY_WATCHDOG_AUTO_RECOVER=0. Toasts fire for recoveries and redeploys; recent poll lines are below."
+                ? "Polling Railway deployment status. The watchdog auto-redeploys only on CRASHED or FAILED (not after Chaos Kill / deploymentStop — that would undo an intentional shutdown). Disable with RAILWAY_WATCHDOG_AUTO_RECOVER=0. Toasts fire when a service goes from Completed/stopped to Deploying (reboot), on redeploys, and on crash recovery; recent poll lines are below."
                 : "Local stack: the compose-watchdog service scans Compose containers on each interval (starts exited tasks, restarts unhealthy ones). Alerts appear at the top-right when it acts."}
           </CardDescription>
         </CardHeader>
@@ -530,6 +534,16 @@ export function ChaosPanel() {
                   <dd>{watchStatus.running ? "yes" : "no"}</dd>
                   {watchStatus.source === "railway" ? (
                     <>
+                      <dt className="text-muted-foreground">Lifecycle</dt>
+                      <dd>
+                        {watchStatus.railwayOnlineStatus != null ? (
+                          <RailwayOnlineStatusBadge
+                            status={watchStatus.railwayOnlineStatus}
+                          />
+                        ) : (
+                          "—"
+                        )}
+                      </dd>
                       <dt className="text-muted-foreground">Deployment</dt>
                       <dd className="font-mono text-xs">
                         {watchStatus.deploymentStatus ?? "—"}
@@ -568,7 +582,9 @@ export function ChaosPanel() {
                 <TableRow>
                   <TableHead>Service</TableHead>
                   <TableHead>{docker?.source === "railway" ? "Deployment" : "Container"}</TableHead>
-                  <TableHead>State</TableHead>
+                  <TableHead>
+                    {docker?.source === "railway" ? "Lifecycle" : "State"}
+                  </TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="min-w-[260px]">Actions</TableHead>
                 </TableRow>
@@ -595,7 +611,16 @@ export function ChaosPanel() {
                     <TableRow key={c.id}>
                       <TableCell className="font-medium">{c.service || "—"}</TableCell>
                       <TableCell className="font-mono text-xs">{c.name}</TableCell>
-                      <TableCell>{stateBadge(c.state, c.health)}</TableCell>
+                      <TableCell>
+                        {docker?.source === "railway" &&
+                        c.railwayOnlineStatus != null ? (
+                          <RailwayOnlineStatusBadge
+                            status={c.railwayOnlineStatus}
+                          />
+                        ) : (
+                          stateBadge(c.state, c.health)
+                        )}
+                      </TableCell>
                       <TableCell className="max-w-[240px] truncate text-xs">{c.status}</TableCell>
                       <TableCell>
                         <div className="flex flex-wrap gap-1">
