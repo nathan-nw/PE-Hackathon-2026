@@ -22,6 +22,13 @@ from psycopg2.extensions import connection as PGConnection
 _DEFAULT_CONNECT_TIMEOUT_SEC = 15
 
 
+def _database_configured() -> bool:
+    if os.environ.get("DATABASE_URL", "").strip():
+        return True
+    host = os.environ.get("PGHOST") or os.environ.get("DATABASE_HOST")
+    return bool(host)
+
+
 def _with_connect_timeout(url: str, seconds: int) -> str:
     """Ensure libpq connect_timeout is set so unreachable DB fails fast."""
     if url.startswith("postgres://"):
@@ -49,14 +56,7 @@ def _connect() -> PGConnection:
 
     host = os.environ.get("PGHOST") or os.environ.get("DATABASE_HOST")
     if not host:
-        print(
-            "apply_migrations: DATABASE_URL is unset and PGHOST/DATABASE_HOST is missing.\n"
-            "On Railway: url-shortener → Variables → add DATABASE_URL referencing Postgres, e.g.\n"
-            "  ${{ Postgres.DATABASE_PRIVATE_URL }}  or  ${{ Postgres.DATABASE_URL }}\n"
-            "Or set PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE from the Postgres service.",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
+        raise RuntimeError("apply_migrations: _connect() requires DATABASE_URL or PGHOST/DATABASE_HOST")
 
     port = int(os.environ.get("PGPORT") or os.environ.get("DATABASE_PORT", "5432"))
     dbname = (
@@ -86,6 +86,18 @@ def main() -> int:
     if not migrations_dir.is_dir():
         print("No migrations directory; nothing to do.", file=sys.stderr)
         return 0
+
+    if not _database_configured():
+        print(
+            "apply_migrations: DATABASE_URL and PGHOST/DATABASE_HOST are unset — skipping migrations.\n"
+            "Set DATABASE_URL on url-shortener (Variable Reference from your Postgres plugin), e.g.\n"
+            "  ${{ <Postgres-service-name>.DATABASE_PRIVATE_URL }}\n"
+            "then redeploy; or run: SYNC_VARIABLES=1 node setup-railway.js from the repo root.\n"
+            "Set STRICT_MIGRATIONS=1 to fail the deploy instead of skipping.",
+            file=sys.stderr,
+        )
+        strict = os.environ.get("STRICT_MIGRATIONS", "").lower() in ("1", "true", "yes")
+        return 1 if strict else 0
 
     conn = _connect()
     conn.autocommit = False

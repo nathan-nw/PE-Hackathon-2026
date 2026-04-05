@@ -241,26 +241,50 @@ function varRef(serviceName, variableName) {
   return "${{ " + serviceName + "." + variableName + " }}";
 }
 
+/** Resolve plugin service names — dashboard may use "Postgres" or "postgresql" etc. */
+function findPostgresServiceName(byName) {
+  const explicit = (process.env.RAILWAY_POSTGRES_SERVICE_NAME || "").trim();
+  if (explicit && byName.has(explicit)) return explicit;
+  for (const c of ["Postgres", "postgres", "PostgreSQL", "postgresql"]) {
+    if (byName.has(c)) return c;
+  }
+  for (const name of byName.keys()) {
+    if (/postgres/i.test(name)) return name;
+  }
+  return null;
+}
+
+function findRedisServiceName(byName) {
+  const explicit = (process.env.RAILWAY_REDIS_SERVICE_NAME || "").trim();
+  if (explicit && byName.has(explicit)) return explicit;
+  for (const c of ["Redis", "redis"]) {
+    if (byName.has(c)) return c;
+  }
+  for (const name of byName.keys()) {
+    if (/^redis$/i.test(name) || /redis/i.test(name)) return name;
+  }
+  return null;
+}
+
 /**
  * Sets DATABASE_URL / Redis / cross-service URLs using private Postgres URL where available.
  * See https://docs.railway.com/reference/variables (DATABASE_PRIVATE_URL on Postgres plugin).
  */
 async function syncInternalDatabaseVariables(projectId, environmentId, byName, dry) {
-  const postgresService = (
-    process.env.RAILWAY_POSTGRES_SERVICE_NAME || "Postgres"
-  ).trim();
-  const redisService = (process.env.RAILWAY_REDIS_SERVICE_NAME || "Redis").trim();
+  const postgresService = findPostgresServiceName(byName);
+  const redisService = findRedisServiceName(byName);
   const usePublicDbUrl =
     process.env.SYNC_VARIABLES_USE_PUBLIC_DATABASE_URL === "1" ||
     process.env.SYNC_VARIABLES_USE_PUBLIC_DATABASE_URL === "true";
   const dbUrlKey = usePublicDbUrl ? "DATABASE_URL" : "DATABASE_PRIVATE_URL";
 
-  if (!byName.has(postgresService)) {
+  if (!postgresService) {
     console.warn(
-      `\n(Variable sync) No service named "${postgresService}" — set RAILWAY_POSTGRES_SERVICE_NAME or add Postgres. Skipping DATABASE_* references.`
+      `\n(Variable sync) No Postgres-like service found in this project — add a PostgreSQL plugin or set RAILWAY_POSTGRES_SERVICE_NAME. Skipping DATABASE_* references.`
     );
     return;
   }
+  console.log(`(Variable sync) Using Postgres service name: "${postgresService}"`);
 
   const skipDeployOnVarSync =
     process.env.SKIP_DEPLOY_ON_VARIABLE_SYNC !== "0" &&
@@ -293,15 +317,17 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
 
   await upsert("url-shortener", {
     DATABASE_URL: varRef(pg, dbUrlKey),
-    ...(byName.has(redis)
+    ...(redis
       ? { RATE_LIMIT_STORAGE: varRef(redis, "REDIS_URL") }
       : {}),
   });
 
-  if (!byName.has(redis)) {
+  if (!redis) {
     console.warn(
-      `(Variable sync) No service named "${redis}" — set RAILWAY_REDIS_SERVICE_NAME or add Redis. url-shortener RATE_LIMIT_STORAGE not set.`
+      `(Variable sync) No Redis-like service found — set RAILWAY_REDIS_SERVICE_NAME or add Redis. url-shortener RATE_LIMIT_STORAGE not set.`
     );
+  } else {
+    console.log(`(Variable sync) Using Redis service name: "${redis}"`);
   }
 
   await upsert("dashboard-backend", {
