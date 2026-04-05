@@ -12,5 +12,6 @@ Below is visual confirmation of our isolated test suite successfully passing tes
 
 *(Screenshot of a green, passing test below)*
 
-<img width="897" height="254" alt="Screenshot 2026-04-05 at 9 48 24 AM" src="https://github.com/user-attachments/assets/787e0699-b5af-4cdb-bab5-3c9837c292d8" />
+
+<img width="1116" height="779" alt="Screenshot 2026-04-05 at 9 38 14 AM" src="https://github.com/user-attachments/assets/14056043-4df5-4041-ad78-2bca31a48bd8" />
 
