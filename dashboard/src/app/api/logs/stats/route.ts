@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 
-import { dashboardBackendBase } from "@/lib/dashboard-backend-url";
+import {
+  dashboardBackendBase,
+  isDashboardBackendUrlConfigured,
+} from "@/lib/dashboard-backend-url";
+import { runtimeEnv } from "@/lib/server-runtime-env";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,9 +24,21 @@ export async function GET() {
     return NextResponse.json(body, { status: res.status });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Request failed";
+    const onRailway = Boolean(runtimeEnv("RAILWAY_PROJECT_ID"));
+    const configured = isDashboardBackendUrlConfigured();
+    let hint =
+      "Ensure dashboard-backend (FastAPI) is running on port 8000 for local dev.";
+    if (onRailway && !configured) {
+      hint =
+        "Set DASHBOARD_BACKEND_URL on the **dashboard** service to your **dashboard-backend** public URL, then redeploy.";
+    } else if (onRailway && configured) {
+      hint =
+        "Check dashboard-backend deploy logs and `/api/health` on that service.";
+    }
     return NextResponse.json(
       {
         error: message,
+        hint,
         total_ingested: 0,
         buffered_logs: 0,
         instances: {},

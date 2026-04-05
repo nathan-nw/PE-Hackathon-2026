@@ -146,6 +146,8 @@ export function getRailwayEnvDebugSnapshot(): {
     { present: boolean; valueLength: number; rawKeyMatched?: string }
   >;
   hasCredential: boolean;
+  /** FastAPI log proxy target for `/api/logs` (URL length only, not the URL string). */
+  dashboardBackendUrl: { configured: boolean; valueLength: number };
 } {
   const fromProc = parseLinuxEnviron();
   const relevantKeys: string[] = [];
@@ -218,6 +220,9 @@ export function getRailwayEnvDebugSnapshot(): {
 
   const hasCredential = ALL_TOKEN_KEYS.some((k) => tokens[k].present);
 
+  const dashBack = runtimeEnv("DASHBOARD_BACKEND_URL");
+  const dashBackNorm = dashBack ? normalizeEnvValue(dashBack) : "";
+
   return {
     platform: typeof process !== "undefined" ? process.platform : "unknown",
     linuxProcParsed: fromProc !== null,
@@ -225,6 +230,10 @@ export function getRailwayEnvDebugSnapshot(): {
     relevantKeys,
     tokens,
     hasCredential,
+    dashboardBackendUrl: {
+      configured: Boolean(dashBackNorm),
+      valueLength: dashBackNorm.length,
+    },
   };
 }
 
@@ -238,6 +247,7 @@ function logRailwayEnvToConsole(): void {
       relevantKeys: s.relevantKeys,
       tokens: s.tokens,
       hasCredential: s.hasCredential,
+      dashboardBackendUrl: s.dashboardBackendUrl,
     });
   } catch (e) {
     console.warn("[dashboard] RAILWAY env debug failed", e);

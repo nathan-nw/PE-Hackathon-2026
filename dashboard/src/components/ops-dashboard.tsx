@@ -125,6 +125,7 @@ type LogStatsResponse = {
     error_rate: number;
   };
   error?: string;
+  hint?: string;
 };
 
 function formatBytes(n: number | undefined) {
@@ -684,7 +685,10 @@ export function OpsDashboard() {
             </CardHeader>
             <CardContent>
               {logStats?.error && (
-                <p className="text-destructive mb-3 text-sm">{logStats.error}</p>
+                <p className="text-destructive mb-3 text-sm">
+                  {logStats.error}
+                  {logStats.hint ? ` — ${logStats.hint}` : ""}
+                </p>
               )}
               <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <div className="bg-muted/40 rounded-lg border p-3">
