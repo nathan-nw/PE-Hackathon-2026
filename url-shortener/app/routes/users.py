@@ -1,3 +1,4 @@
+import contextlib
 import csv
 import os
 from datetime import UTC, datetime
@@ -7,6 +8,7 @@ from playhouse.shortcuts import model_to_dict
 
 from app.database import db
 from app.models.user import User
+from app.request_helpers import parse_json_body
 
 CSV_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "csv_data")
 
@@ -37,19 +39,70 @@ def get_user(user_id):
 
 @users_bp.route("/users", methods=["POST"])
 def create_user():
-    data = request.get_json(silent=True)
-    if data is None:
-        return jsonify({"error": "Invalid or missing JSON body"}), 400
+    data, err = parse_json_body()
+    if err:
+        return err
 
     email = data.get("email")
     username = data.get("username")
     if not email or not username:
         return jsonify({"error": "email and username are required"}), 400
+    if not isinstance(email, str) or not isinstance(username, str):
+        return jsonify({"error": "email and username must be strings"}), 400
+    email = email.strip()
+    username = username.strip()
+    if not email or not username:
+        return jsonify({"error": "email and username must not be blank"}), 400
+    if "@" not in email:
+        return jsonify({"error": "email must be a valid email address"}), 400
 
     now = datetime.now(UTC)
-    user = User.create(username=username, email=email, created_at=now)
+    try:
+        user = User.create(username=username, email=email, created_at=now)
+    except Exception:
+        return jsonify({"error": "User with that username or email already exists"}), 409
 
     return jsonify(model_to_dict(user, backrefs=False)), 201
+
+
+@users_bp.route("/users/<int:user_id>", methods=["PUT"])
+def update_user(user_id):
+    try:
+        user = User.get_by_id(user_id)
+    except User.DoesNotExist:
+        return jsonify({"error": "User not found"}), 404
+
+    data, err = parse_json_body()
+    if err:
+        return err
+
+    if "username" in data:
+        if not isinstance(data["username"], str) or not data["username"].strip():
+            return jsonify({"error": "username must be a non-empty string"}), 400
+        user.username = data["username"].strip()
+    if "email" in data:
+        if not isinstance(data["email"], str) or not data["email"].strip():
+            return jsonify({"error": "email must be a non-empty string"}), 400
+        if "@" not in data["email"]:
+            return jsonify({"error": "email must be a valid email address"}), 400
+        user.email = data["email"].strip()
+    try:
+        user.save()
+    except Exception:
+        return jsonify({"error": "Username or email already taken"}), 409
+
+    return jsonify(model_to_dict(user, backrefs=False))
+
+
+@users_bp.route("/users/<int:user_id>", methods=["DELETE"])
+def delete_user(user_id):
+    try:
+        user = User.get_by_id(user_id)
+    except User.DoesNotExist:
+        return jsonify({"error": "User not found"}), 404
+
+    user.delete_instance()
+    return jsonify({"message": "User deleted"}), 200
 
 
 @users_bp.route("/users/bulk", methods=["POST"])
@@ -57,7 +110,7 @@ def bulk_load_users():
     # Accept JSON body with {"file": "users.csv"} or multipart file upload
     data = request.get_json(silent=True)
     if data and "file" in data:
-        filename = data["file"]
+        filename = os.path.basename(data["file"])
         filepath = os.path.join(CSV_DATA_DIR, filename)
         if not os.path.isfile(filepath):
             return jsonify({"error": f"File not found: {filename}"}), 404
@@ -74,6 +127,7 @@ def bulk_load_users():
         return jsonify({"error": "No file provided"}), 400
 
     created = 0
+    skipped = 0
     with db.atomic():
         for row in rows:
             username = row.get("username", "").strip()
@@ -82,8 +136,21 @@ def bulk_load_users():
                 continue
             created_at = row.get("created_at", "").strip()
             row_id = row.get("id", "").strip()
-            # Skip duplicates
+            # Upsert by id: if row has an explicit id, replace existing row
+            if row_id:
+                int_id = int(row_id)
+                existing = User.select().where(User.id == int_id).first()
+                if existing:
+                    existing.username = username
+                    existing.email = email
+                    if created_at:
+                        existing.created_at = created_at
+                    existing.save()
+                    created += 1
+                    continue
+            # Skip if username or email already taken
             if User.select().where((User.username == username) | (User.email == email)).exists():
+                skipped += 1
                 continue
             fields = {"username": username, "email": email, "created_at": created_at or datetime.now(UTC)}
             if row_id:
@@ -91,4 +158,16 @@ def bulk_load_users():
             User.create(**fields)
             created += 1
 
-    return jsonify({"message": f"Imported {created} users", "row_count": created}), 201
+    # Fix PostgreSQL sequence after explicit id inserts
+    with contextlib.suppress(Exception):
+        db.execute_sql("SELECT setval('users_id_seq', (SELECT COALESCE(MAX(id), 1) FROM users));")
+
+    return jsonify(
+        {
+            "message": f"Imported {created} users",
+            "count": created,
+            "imported": created,
+            "row_count": len(rows),
+            "skipped": skipped,
+        }
+    ), 201

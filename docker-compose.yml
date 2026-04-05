@@ -73,6 +73,7 @@ services:
       retries: 10
       start_period: 30s
 
+  # Prints app-logs to container stdout only (debug). DB persistence is dashboard-backend → dashboard_db.kafka_logs.
   kafka-log-consumer:
     build:
       context: ./url-shortener
@@ -111,6 +112,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       RATE_LIMIT_STORAGE: redis://redis:6379/1
       RATE_LIMIT_DEFAULT: "50000 per minute"
+      # Must match load-balancer + dashboard-backend so k6 X-Load-Test-Bypass skips app IP ban + Flask-Limiter.
+      LOAD_TEST_BYPASS_TOKEN: ${LOAD_TEST_BYPASS_TOKEN:-pe-hackathon-k6-edge-bypass}
       FLASK_DEBUG: "false"
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
@@ -147,6 +150,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       RATE_LIMIT_STORAGE: redis://redis:6379/1
       RATE_LIMIT_DEFAULT: "50000 per minute"
+      LOAD_TEST_BYPASS_TOKEN: ${LOAD_TEST_BYPASS_TOKEN:-pe-hackathon-k6-edge-bypass}
       FLASK_DEBUG: "false"
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
@@ -165,6 +169,7 @@ services:
       retries: 5
       start_period: 25s
 
+  # Published ports: override in `.env` if 8080/8081 are already in use on the host (e.g. LB_HTTP_PORT=18080).
   load-balancer:
     build:
       context: ./load-balancer
@@ -173,13 +178,22 @@ services:
     networks:
       - app_net
     ports:
-      - "8080:80"
-      - "8081:8081"
+      - "${LB_HTTP_PORT:-8080}:80"
+      - "${LB_STUB_STATUS_PORT:-8081}:8081"
+    environment:
+      # Same value must be on dashboard-backend so k6 sends X-Load-Test-Bypass (skips NGINX limit_req).
+      LOAD_TEST_BYPASS_TOKEN: ${LOAD_TEST_BYPASS_TOKEN:-pe-hackathon-k6-edge-bypass}
     depends_on:
       url-shortener-a:
         condition: service_healthy
       url-shortener-b:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   prometheus:
     image: prom/prometheus:v2.54.1
@@ -250,13 +264,12 @@ services:
       - "3001:3000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      # Kubernetes pod list: host kubeconfig → /kube/config (override path with KUBECONFIG_HOST in .env if needed).
-      - ${KUBECONFIG_HOST:-~/.kube/config}:/kube/config:ro
     environment:
+      # Ops → Chaos tab: compose-watchdog status (HTTP). Override for local `next dev` → http://127.0.0.1:8099
+      WATCHDOG_STATUS_URL: ${WATCHDOG_STATUS_URL:-http://compose-watchdog:8099}
+      # Ops → Chaos tab: docker kill (dashboard mounts docker.sock). Set CHAOS_KILL_ENABLED=0 to disable.
+      CHAOS_KILL_ENABLED: ${CHAOS_KILL_ENABLED:-1}
       VISIBILITY_COMPOSE_PROJECT: pe-hackathon-2026
-      VISIBILITY_K8S_ENABLED: "true"
-      KUBECONFIG: /kube/config
-      VISIBILITY_K8S_NAMESPACE: pe-hackathon
       VISIBILITY_ALERTMANAGER_URL: http://alertmanager:9093
       VISIBILITY_PROMETHEUS_URL: http://prometheus:9090
       # FastAPI log cache (Kafka → in-memory → dashboard /api/logs proxy)
@@ -291,6 +304,12 @@ services:
     ports:
       - "8000:8000"
     environment:
+      # k6 load-test.js sends this as X-Load-Test-Bypass — must match load-balancer (edge limit off for k6 only).
+      LOAD_TEST_BYPASS_TOKEN: ${LOAD_TEST_BYPASS_TOKEN:-pe-hackathon-k6-edge-bypass}
+      # k6 hits this API base (Compose: private LB). On Railway, sync sets https://<load-balancer public domain>.
+      LOAD_TEST_TARGET_URL: ${LOAD_TEST_TARGET_URL:-http://load-balancer:80}
+      # Override image default (8080) so published port 8000 matches the process (local dev).
+      PORT: "8000"
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       KAFKA_LOG_TOPIC: app-logs
       CACHE_MAX_ENTRIES: "1000"
@@ -300,8 +319,12 @@ services:
       DASHBOARD_DB_PORT: "5432"
       DASHBOARD_DB_USER: postgres
       DASHBOARD_DB_PASSWORD: postgres
+      # Ops tab: expand Compose ``db`` row → profile=main (same DB as url-shortener)
+      INTROSPECT_DB_URL: postgresql://postgres:postgres@db:5432/hackathon_db
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
     depends_on:
+      db:
+        condition: service_healthy
       kafka:
         condition: service_healthy
       dashboard-db:
@@ -310,11 +333,35 @@ services:
   user-frontend:
     build:
       context: ./user-frontend
+    environment:
+      # URL the *browser* uses to reach the NGINX load balancer (host port from LB_HTTP_PORT / compose).
+      BACKEND_URL: ${USER_FRONTEND_BACKEND_URL:-http://localhost:18080}
     restart: always
     networks:
       - app_net
     ports:
       - "3002:80"
+
+  # Polls the Docker API for this Compose project: starts exited containers (honors restart policy
+  # unless WATCHDOG_ONLY_ALWAYS=1) and restarts persistently unhealthy ones. Skips itself.
+  # See compose-watchdog/watchdog.py for env vars.
+  compose-watchdog:
+    build:
+      context: ./compose-watchdog
+    restart: always
+    networks:
+      - app_net
+    ports:
+      - "${WATCHDOG_HTTP_PUBLISH:-8099}:8099"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      COMPOSE_PROJECT: pe-hackathon-2026
+      WATCHDOG_INTERVAL_SEC: ${WATCHDOG_INTERVAL_SEC:-15}
+      WATCHDOG_HTTP_PORT: "8099"
+      WATCHDOG_SELF_SERVICE: compose-watchdog
+      # Optional: comma-separated compose service names to ignore (e.g. "prometheus,alertmanager").
+      WATCHDOG_EXCLUDE_SERVICES: ${WATCHDOG_EXCLUDE_SERVICES:-}
 
 networks:
   app_net:

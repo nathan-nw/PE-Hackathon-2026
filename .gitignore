@@ -12,6 +12,7 @@ build/
 
 # Environment variables
 .env
+.env.railway.setup
 
 # uv
 uv.lock
@@ -36,3 +37,6 @@ Thumbs.db
 judging/
 
 .npm-cache/
+
+# Node / npm (watchdog-service, local tooling, etc.)
+node_modules/

@@ -18,6 +18,7 @@ from peewee import OperationalError as PeeweeOperationalError
 from app.dynamic_rate_limit import get_current_rate_limit, record_request
 from app.instance_info import get_instance_id, increment_request_count, record_request_latency_ms
 from app.ip_ban import is_banned, record_violation
+from app.load_test_bypass import is_load_test_bypass_request
 from app.metrics import HTTP_REQUEST_DURATION, HTTP_REQUESTS
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,8 @@ def register_middleware(app):
     def _check_ip_ban():
         """Block banned IPs before any processing."""
         if request.path in _EXEMPT_PATHS or request.path.startswith(_EXEMPT_PREFIXES):
+            return
+        if is_load_test_bypass_request():
             return
         ip = request.remote_addr
         banned, info = is_banned(ip)
@@ -101,7 +104,11 @@ def register_middleware(app):
         response.headers["X-Request-ID"] = g.get("request_id", "")
         response.headers["X-Response-Time"] = f"{duration_ms}ms"
 
-        # Add dynamic rate limit info headers
+        # Chrome Private Network Access: e.g. page on http://localhost:5500 calling http://127.0.0.1:8080
+        if request.headers.get("Access-Control-Request-Private-Network") == "true":
+            response.headers["Access-Control-Allow-Private-Network"] = "true"
+
+        # Dynamic rate limit info headers
         rl = get_current_rate_limit()
         response.headers["X-RateLimit-Limit"] = str(rl["rate_limit"])
         response.headers["X-Active-Users"] = str(rl["active_users"])
@@ -139,6 +146,9 @@ def register_middleware(app):
     @app.errorhandler(429)
     def _rate_limited(e):
         ip = request.remote_addr
+        if is_load_test_bypass_request():
+            return jsonify({"error": "Rate limit exceeded."}), 429
+
         result = record_violation(ip)
         action = result.get("action", "none")
 

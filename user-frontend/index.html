@@ -3,10 +3,787 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>URL shortener</title>
+  <title>Short links · PE Hackathon</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      line-height: 1.5;
+    }
+    .wrap { max-width: 56rem; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+    h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      text-align: center;
+      margin-bottom: 0.35rem;
+      background: linear-gradient(135deg, #818cf8, #c084fc);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .sub { text-align: center; color: #94a3b8; font-size: 0.9rem; margin-bottom: 1.75rem; }
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 1.25rem 1.35rem;
+      margin-bottom: 1rem;
+    }
+    label { display: block; font-size: 0.8rem; color: #94a3b8; margin-bottom: 0.35rem; }
+    input[type="url"], input[type="text"], input[type="number"] {
+      width: 100%;
+      padding: 0.65rem 0.85rem;
+      border-radius: 8px;
+      border: 1px solid #334155;
+      background: #0f172a;
+      color: #e2e8f0;
+      font-size: 1rem;
+    }
+    input:focus { outline: none; border-color: #818cf8; }
+    .field { margin-bottom: 1rem; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+    @media (max-width: 520px) { .row { grid-template-columns: 1fr; } }
+    button.primary {
+      width: 100%;
+      margin-top: 0.25rem;
+      padding: 0.75rem 1rem;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      background: linear-gradient(135deg, #6366f1, #a855f7);
+      color: #fff;
+    }
+    button.primary:hover { filter: brightness(1.06); }
+    button.primary:disabled { opacity: 0.55; cursor: not-allowed; }
+    .msg {
+      margin-top: 1rem;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      display: none;
+    }
+    .msg.show { display: block; }
+    .msg.err { background: #450a0a; border: 1px solid #7f1d1d; color: #fecaca; }
+    .msg.ok { background: #052e16; border: 1px solid #166534; color: #bbf7d0; }
+    .result {
+      margin-top: 1rem;
+      padding: 1rem;
+      background: #0f172a;
+      border-radius: 8px;
+      border: 1px solid #334155;
+      display: none;
+    }
+    .result.show { display: block; }
+    .short-url {
+      font-family: ui-monospace, monospace;
+      font-size: 0.95rem;
+      word-break: break-all;
+      color: #a5b4fc;
+      margin-bottom: 0.75rem;
+    }
+    .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    button.ghost {
+      padding: 0.45rem 0.85rem;
+      border-radius: 6px;
+      border: 1px solid #475569;
+      background: transparent;
+      color: #e2e8f0;
+      font-size: 0.875rem;
+      cursor: pointer;
+    }
+    button.ghost:hover { background: #334155; }
+    .hint { font-size: 0.75rem; color: #64748b; margin-top: 0.5rem; }
+    .recent h2 { font-size: 0.85rem; color: #94a3b8; margin-bottom: 0.75rem; font-weight: 600; }
+    .recent ul { list-style: none; }
+    .recent li {
+      font-size: 0.85rem;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid #334155;
+      display: flex;
+      justify-content: space-between;
+      gap: 0.5rem;
+      align-items: baseline;
+    }
+    .recent li:last-child { border-bottom: none; }
+    .recent a { color: #a5b4fc; text-decoration: none; }
+    .recent a:hover { text-decoration: underline; }
+    .recent .orig { color: #64748b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 55%; }
+    .browse h2 { font-size: 1rem; color: #e2e8f0; margin-bottom: 0.75rem; font-weight: 600; }
+    .browse .toolbar {
+      display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: flex-end;
+      margin-bottom: 1rem;
+    }
+    .browse .toolbar .field { margin-bottom: 0; min-width: 5rem; }
+    .browse .toolbar label { margin-bottom: 0.25rem; }
+    .table-wrap { overflow-x: auto; border-radius: 8px; border: 1px solid #334155; }
+    table.urls { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
+    table.urls th {
+      text-align: left; padding: 0.5rem 0.65rem; background: #0f172a; color: #94a3b8; font-weight: 600;
+      border-bottom: 1px solid #334155; white-space: nowrap;
+    }
+    table.urls td {
+      padding: 0.5rem 0.65rem; border-bottom: 1px solid #1e293b; vertical-align: top;
+    }
+    table.urls tr:last-child td { border-bottom: none; }
+    table.urls a.short { color: #a5b4fc; word-break: break-all; }
+    table.urls .orig-cell { color: #94a3b8; max-width: 14rem; }
+    table.urls .orig-cell span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .badge { font-size: 0.65rem; padding: 0.12rem 0.4rem; border-radius: 4px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+    .badge.on { background: #14532d; color: #bbf7d0; }
+    .badge.off { background: #450a0a; color: #fecaca; }
+    .browse .pager { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.75rem; font-size: 0.85rem; color: #94a3b8; }
+    .browse .pager button.ghost { margin: 0; }
+    .browse .empty { color: #64748b; font-size: 0.9rem; padding: 1rem 0; text-align: center; }
+    .events-panel {
+      margin-top: 0.75rem; padding: 0.75rem; background: #0f172a; border-radius: 8px; border: 1px solid #334155;
+      font-size: 0.75rem; max-height: 12rem; overflow: auto; display: none;
+    }
+    .events-panel.show { display: block; }
+    .events-panel pre { margin: 0; white-space: pre-wrap; word-break: break-word; color: #cbd5e1; font-family: ui-monospace, monospace; }
+  </style>
 </head>
 <body>
-  <h1>User app</h1>
-  <p>Placeholder for the public shortening UI. Point API calls at the load balancer (e.g. <code>http://localhost:8080</code>) in dev.</p>
+  <div class="wrap">
+    <h1>Shorten a link</h1>
+    <p class="sub">Flask API: <code style="color:#cbd5e1;">POST /shorten</code>, <code style="color:#cbd5e1;">GET /urls</code>, <code style="color:#cbd5e1;">GET /users/&lt;id&gt;/urls</code> · needs a valid <code style="color:#cbd5e1;">user_id</code> for new links</p>
+
+    <div class="card">
+      <p class="hint" style="margin-bottom: 1rem;">
+        API base is set automatically from <code style="color:#cbd5e1;">/api-config.js</code> (<code style="color:#cbd5e1;">BACKEND_URL</code>).
+        Local Compose: <code style="color:#cbd5e1;">USER_FRONTEND_BACKEND_URL</code> in the repo root <code style="color:#cbd5e1;">.env</code> (default <code style="color:#cbd5e1;">http://localhost:18080</code>).
+        Railway: <code style="color:#cbd5e1;">SYNC_VARIABLES=1</code> in <code style="color:#cbd5e1;">setup-railway.js</code> → load-balancer URL (e.g. <code style="color:#cbd5e1;">https://load-balancer-production-8df2.up.railway.app</code>).
+      </p>
+      <div class="field">
+        <label for="longUrl">Long URL</label>
+        <input type="url" id="longUrl" placeholder="https://example.com/path" required />
+      </div>
+      <div class="row">
+        <div class="field">
+          <label for="userId">User ID</label>
+          <input type="number" id="userId" min="1" step="1" value="1" required />
+        </div>
+        <div class="field">
+          <label for="title">Title (optional)</label>
+          <input type="text" id="title" placeholder="My link" maxlength="500" />
+        </div>
+      </div>
+      <div class="field">
+        <label for="shortCode">Custom short code (optional)</label>
+        <input type="text" id="shortCode" placeholder="Leave empty for random" maxlength="20" pattern="[A-Za-z0-9]*" />
+      </div>
+      <button type="button" class="primary" id="submitBtn">Create short link</button>
+      <div class="msg err" id="errMsg"></div>
+      <div class="msg ok" id="okMsg"></div>
+      <div class="result" id="result">
+        <div class="short-url" id="shortUrlOut"></div>
+        <div class="actions">
+          <button type="button" class="ghost" id="copyBtn">Copy</button>
+          <button type="button" class="ghost" id="openBtn">Open</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card recent" id="recentCard" style="display:none;">
+      <h2>Recent (this browser)</h2>
+      <ul id="recentList"></ul>
+    </div>
+
+    <div class="card browse">
+      <h2>URLs from the database</h2>
+      <p class="hint" style="margin-bottom: 1rem;">
+        Uses <code style="color:#cbd5e1;">GET /urls</code> (paginated) and <code style="color:#cbd5e1;">GET /users/&lt;id&gt;/urls</code>.
+        Actions: <code style="color:#cbd5e1;">DELETE /urls/&lt;id&gt;</code> (soft delete), <code style="color:#cbd5e1;">PUT</code> to reactivate, <code style="color:#cbd5e1;">GET /urls/&lt;id&gt;/events</code>.
+      </p>
+      <div class="toolbar">
+        <div class="field">
+          <label for="listPage">Page</label>
+          <input type="number" id="listPage" min="1" step="1" value="1" />
+        </div>
+        <div class="field">
+          <label for="listPerPage">Per page</label>
+          <input type="number" id="listPerPage" min="1" max="100" step="1" value="20" />
+        </div>
+        <button type="button" class="ghost" id="loadAllBtn">Load all URLs</button>
+        <button type="button" class="ghost" id="loadUserBtn">Load this user&apos;s URLs</button>
+      </div>
+      <div class="msg err" id="browseErr"></div>
+      <div class="pager" id="browsePager" style="display:none;">
+        <span id="browseMeta"></span>
+        <button type="button" class="ghost" id="prevPageBtn">Previous</button>
+        <button type="button" class="ghost" id="nextPageBtn">Next</button>
+      </div>
+      <div class="table-wrap" id="tableWrap" style="display:none;">
+        <table class="urls" id="urlsTable">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Short link</th>
+              <th>Original</th>
+              <th>Title</th>
+              <th>User</th>
+              <th>Status</th>
+              <th>Created</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="urlsTbody"></tbody>
+        </table>
+      </div>
+      <p class="empty" id="browseEmpty">Click <strong>Load all URLs</strong> or <strong>Load this user&apos;s URLs</strong> to fetch from the API.</p>
+      <div class="events-panel" id="eventsPanel">
+        <div style="color:#94a3b8;margin-bottom:0.35rem;">Events</div>
+        <pre id="eventsPre"></pre>
+      </div>
+    </div>
+  </div>
+
+  <script src="/api-config.js"></script>
+  <script>
+    (function () {
+      var STORAGE_RECENT = "pe_shortener_recent_v1";
+      var MAX_RECENT = 12;
+
+      function normalizeBase(url) {
+        return (url || "").replace(/\/+$/, "");
+      }
+
+      /**
+       * Resolved API origin: /api-config.js (BACKEND_URL at container start), else local dev default.
+       */
+      function getBackendBase() {
+        var raw = "";
+        if (typeof window.__PE_BACKEND_URL__ === "string") {
+          raw = window.__PE_BACKEND_URL__.trim();
+        }
+        if (!raw) raw = "http://localhost:18080";
+        return normalizeLoopbackHost(normalizeBase(raw));
+      }
+
+      /**
+       * Use "localhost" instead of 127.0.0.1 for the API host when the page is on http(s)://localhost.
+       * That avoids Chrome Private Network Access preflight in many setups (localhost → 127.0.0.1).
+       */
+      function normalizeLoopbackHost(base) {
+        try {
+          if (!/^https?:\/\//i.test(base)) return base;
+          var loc = window.location.hostname;
+          if (loc !== "localhost" && loc !== "127.0.0.1") return base;
+          var u = new URL(base);
+          if (u.hostname === "127.0.0.1" || u.hostname === "[::1]") {
+            u.hostname = "localhost";
+            return u.toString().replace(/\/+$/, "");
+          }
+        } catch (e) {}
+        return base;
+      }
+
+      function loadRecent() {
+        try {
+          return JSON.parse(localStorage.getItem(STORAGE_RECENT) || "[]");
+        } catch (e) {
+          return [];
+        }
+      }
+
+      function saveRecent(entry) {
+        var list = loadRecent().filter(function (x) {
+          return x.short !== entry.short || x.base !== entry.base;
+        });
+        list.unshift(entry);
+        list = list.slice(0, MAX_RECENT);
+        localStorage.setItem(STORAGE_RECENT, JSON.stringify(list));
+        renderRecent();
+      }
+
+      function renderRecent() {
+        var list = loadRecent();
+        var card = document.getElementById("recentCard");
+        var ul = document.getElementById("recentList");
+        ul.innerHTML = "";
+        if (!list.length) {
+          card.style.display = "none";
+          return;
+        }
+        card.style.display = "block";
+        list.forEach(function (item) {
+          var li = document.createElement("li");
+          var a = document.createElement("a");
+          a.href = item.full;
+          a.target = "_blank";
+          a.rel = "noopener noreferrer";
+          a.textContent = item.short;
+          var span = document.createElement("span");
+          span.className = "orig";
+          span.title = item.original;
+          span.textContent = item.original;
+          li.appendChild(a);
+          li.appendChild(span);
+          ul.appendChild(li);
+        });
+      }
+
+      var lastFull = "";
+
+      function showErr(t) {
+        var e = document.getElementById("errMsg");
+        var o = document.getElementById("okMsg");
+        o.classList.remove("show");
+        e.textContent = t;
+        e.classList.add("show");
+      }
+      function showOk(t) {
+        var e = document.getElementById("errMsg");
+        var o = document.getElementById("okMsg");
+        e.classList.remove("show");
+        o.textContent = t;
+        o.classList.add("show");
+      }
+      function hideMsgs() {
+        document.getElementById("errMsg").classList.remove("show");
+        document.getElementById("okMsg").classList.remove("show");
+      }
+
+      var browseState = { mode: null, page: 1, perPage: 20, total: 0 };
+      var eventsOpenForId = null;
+
+      function fkId(v) {
+        if (v && typeof v === "object" && v.id != null) return v.id;
+        return v;
+      }
+
+      function formatWhen(iso) {
+        if (iso == null || iso === "") return "—";
+        try {
+          var d = new Date(iso);
+          if (isNaN(d.getTime())) return String(iso);
+          return d.toLocaleString();
+        } catch (e) {
+          return String(iso);
+        }
+      }
+
+      function shortFull(base, code) {
+        return base + "/" + encodeURIComponent(code);
+      }
+
+      function getBrowseBase() {
+        return getBackendBase();
+      }
+
+      function showBrowseErr(t) {
+        var e = document.getElementById("browseErr");
+        if (!t) {
+          e.classList.remove("show");
+          e.textContent = "";
+          return;
+        }
+        e.textContent = t;
+        e.classList.add("show");
+      }
+
+      function hideBrowseErr() {
+        showBrowseErr("");
+      }
+
+      function hideEventsPanel() {
+        eventsOpenForId = null;
+        document.getElementById("eventsPanel").classList.remove("show");
+      }
+
+      async function toggleEvents(urlId) {
+        var panel = document.getElementById("eventsPanel");
+        var pre = document.getElementById("eventsPre");
+        var base = getBrowseBase();
+        if (eventsOpenForId === urlId) {
+          hideEventsPanel();
+          return;
+        }
+        eventsOpenForId = urlId;
+        pre.textContent = "Loading…";
+        panel.classList.add("show");
+        try {
+          var res = await fetch(base + "/urls/" + urlId + "/events", {
+            headers: { Accept: "application/json" }
+          });
+          var data = await res.json().catch(function () { return null; });
+          if (!res.ok) {
+            pre.textContent = (data && data.error) || res.statusText || "Failed";
+            return;
+          }
+          pre.textContent = JSON.stringify(data, null, 2);
+        } catch (ex) {
+          pre.textContent = ex.message || String(ex);
+        }
+      }
+
+      function renderBrowseTable(rows, meta) {
+        hideBrowseErr();
+        var tbody = document.getElementById("urlsTbody");
+        var wrap = document.getElementById("tableWrap");
+        var empty = document.getElementById("browseEmpty");
+        var pager = document.getElementById("browsePager");
+        var metaEl = document.getElementById("browseMeta");
+        tbody.innerHTML = "";
+        hideEventsPanel();
+
+        var base = getBrowseBase();
+
+        if (!rows || !rows.length) {
+          wrap.style.display = "none";
+          empty.style.display = "block";
+          empty.textContent = "No URLs returned.";
+          pager.style.display = "none";
+          return;
+        }
+        empty.style.display = "none";
+        wrap.style.display = "block";
+
+        if (meta && meta.mode === "all") {
+          browseState.mode = "all";
+          browseState.page = meta.page;
+          browseState.perPage = meta.perPage;
+          browseState.total = meta.total;
+          var lastPage = Math.max(1, Math.ceil(meta.total / meta.perPage) || 1);
+          metaEl.textContent =
+            "Page " + meta.page + " of " + lastPage + " · " + meta.total + " total";
+          pager.style.display = "flex";
+          document.getElementById("listPage").value = String(meta.page);
+          document.getElementById("prevPageBtn").disabled = meta.page <= 1;
+          document.getElementById("nextPageBtn").disabled = meta.page >= lastPage;
+        } else if (meta && meta.mode === "user") {
+          browseState.mode = "user";
+          metaEl.textContent = rows.length + " URL(s) for user " + meta.userId;
+          pager.style.display = "none";
+        } else {
+          pager.style.display = "none";
+        }
+
+        rows.forEach(function (row) {
+          var id = row.id;
+          var code = row.short_code;
+          var full = base && code ? shortFull(base, code) : "";
+          var uid = fkId(row.user_id);
+
+          var tr = document.createElement("tr");
+
+          var tdId = document.createElement("td");
+          tdId.textContent = String(id);
+
+          var tdShort = document.createElement("td");
+          if (base && code) {
+            var a = document.createElement("a");
+            a.className = "short";
+            a.href = full;
+            a.target = "_blank";
+            a.rel = "noopener noreferrer";
+            a.textContent = code;
+            tdShort.appendChild(a);
+          } else {
+            tdShort.textContent = code || "—";
+          }
+
+          var tdOrig = document.createElement("td");
+          tdOrig.className = "orig-cell";
+          var spOrig = document.createElement("span");
+          spOrig.title = row.original_url || "";
+          spOrig.textContent = row.original_url || "—";
+          tdOrig.appendChild(spOrig);
+
+          var tdTitle = document.createElement("td");
+          tdTitle.textContent = row.title || "—";
+
+          var tdUser = document.createElement("td");
+          tdUser.textContent = uid != null ? String(uid) : "—";
+
+          var tdStatus = document.createElement("td");
+          var badge = document.createElement("span");
+          badge.className = "badge " + (row.is_active ? "on" : "off");
+          badge.textContent = row.is_active ? "active" : "inactive";
+          tdStatus.appendChild(badge);
+
+          var tdCreated = document.createElement("td");
+          tdCreated.textContent = formatWhen(row.created_at);
+
+          var tdOps = document.createElement("td");
+          var ops = document.createElement("div");
+          ops.style.display = "flex";
+          ops.style.flexWrap = "wrap";
+          ops.style.gap = "0.35rem";
+
+          function addBtn(label, fn) {
+            var b = document.createElement("button");
+            b.type = "button";
+            b.className = "ghost";
+            b.textContent = label;
+            b.addEventListener("click", fn);
+            ops.appendChild(b);
+          }
+
+          addBtn("Copy", function () {
+            if (!full) return;
+            navigator.clipboard.writeText(full).then(function () {
+              hideBrowseErr();
+              showOk("Copied short URL.");
+            });
+          });
+          addBtn("Open", function () {
+            if (full) window.open(full, "_blank", "noopener,noreferrer");
+          });
+          addBtn("Events", function () {
+            toggleEvents(id);
+          });
+          if (row.is_active) {
+            addBtn("Deactivate", function () {
+              if (!confirm("Deactivate this short link? (soft delete)")) return;
+              deactivateUrl(id);
+            });
+          } else {
+            addBtn("Reactivate", function () {
+              reactivateUrl(id);
+            });
+          }
+
+          tdOps.appendChild(ops);
+
+          tr.appendChild(tdId);
+          tr.appendChild(tdShort);
+          tr.appendChild(tdOrig);
+          tr.appendChild(tdTitle);
+          tr.appendChild(tdUser);
+          tr.appendChild(tdStatus);
+          tr.appendChild(tdCreated);
+          tr.appendChild(tdOps);
+          tbody.appendChild(tr);
+        });
+      }
+
+      async function refreshBrowse() {
+        if (browseState.mode === "all") {
+          await doLoadAll(browseState.page);
+        } else if (browseState.mode === "user") {
+          await doLoadUser();
+        }
+      }
+
+      async function deactivateUrl(urlId) {
+        var base = getBrowseBase();
+        try {
+          var res = await fetch(base + "/urls/" + urlId, { method: "DELETE" });
+          var data = await res.json().catch(function () { return {}; });
+          if (!res.ok) {
+            showBrowseErr((data.error || res.statusText) + " (" + res.status + ")");
+            return;
+          }
+          hideBrowseErr();
+          showOk("URL deactivated.");
+          await refreshBrowse();
+        } catch (ex) {
+          showBrowseErr(ex.message || String(ex));
+        }
+      }
+
+      async function reactivateUrl(urlId) {
+        var base = getBrowseBase();
+        try {
+          var res = await fetch(base + "/urls/" + urlId, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify({ is_active: true })
+          });
+          var data = await res.json().catch(function () { return {}; });
+          if (!res.ok) {
+            showBrowseErr((data.error || res.statusText) + " (" + res.status + ")");
+            return;
+          }
+          hideBrowseErr();
+          showOk("URL reactivated.");
+          await refreshBrowse();
+        } catch (ex) {
+          showBrowseErr(ex.message || String(ex));
+        }
+      }
+
+      async function doLoadAll(page) {
+        var base = getBrowseBase();
+        var perPage = parseInt(document.getElementById("listPerPage").value, 10) || 20;
+        perPage = Math.min(100, Math.max(1, perPage));
+        document.getElementById("listPerPage").value = String(perPage);
+        var p = page != null ? page : parseInt(document.getElementById("listPage").value, 10) || 1;
+        p = Math.max(1, p);
+        document.getElementById("listPage").value = String(p);
+        var btn = document.getElementById("loadAllBtn");
+        btn.disabled = true;
+        hideBrowseErr();
+        try {
+          var res = await fetch(base + "/urls?page=" + p + "&per_page=" + perPage, {
+            headers: { Accept: "application/json" }
+          });
+          var data = await res.json().catch(function () { return null; });
+          if (!res.ok) {
+            showBrowseErr(
+              (data && data.error) || res.statusText || "Request failed (" + res.status + ")"
+            );
+            return;
+          }
+          renderBrowseTable(data.data || [], {
+            mode: "all",
+            page: data.page,
+            perPage: data.per_page,
+            total: data.total
+          });
+        } catch (ex) {
+          showBrowseErr(
+            ex.message ||
+              "Network error — check BACKEND_URL / load balancer deployment."
+          );
+        } finally {
+          btn.disabled = false;
+        }
+      }
+
+      async function doLoadUser() {
+        var base = getBrowseBase();
+        var uid = parseInt(document.getElementById("userId").value, 10);
+        if (!uid || uid < 1) {
+          showBrowseErr("User ID must be a positive integer.");
+          return;
+        }
+        var btn = document.getElementById("loadUserBtn");
+        btn.disabled = true;
+        hideBrowseErr();
+        try {
+          var res = await fetch(base + "/users/" + uid + "/urls", {
+            headers: { Accept: "application/json" }
+          });
+          var data = await res.json().catch(function () { return null; });
+          if (!res.ok) {
+            showBrowseErr(
+              (data && data.error) || res.statusText || "Request failed (" + res.status + ")"
+            );
+            return;
+          }
+          var rows = Array.isArray(data) ? data : [];
+          renderBrowseTable(rows, { mode: "user", userId: uid });
+        } catch (ex) {
+          showBrowseErr(
+            ex.message ||
+              "Network error — check BACKEND_URL / load balancer deployment."
+          );
+        } finally {
+          btn.disabled = false;
+        }
+      }
+
+      document.getElementById("loadAllBtn").addEventListener("click", function () {
+        var p = parseInt(document.getElementById("listPage").value, 10) || 1;
+        doLoadAll(Math.max(1, p));
+      });
+
+      document.getElementById("loadUserBtn").addEventListener("click", function () {
+        doLoadUser();
+      });
+
+      document.getElementById("prevPageBtn").addEventListener("click", function () {
+        if (browseState.mode !== "all") return;
+        var p = browseState.page - 1;
+        if (p < 1) return;
+        document.getElementById("listPage").value = String(p);
+        doLoadAll(p);
+      });
+
+      document.getElementById("nextPageBtn").addEventListener("click", function () {
+        if (browseState.mode !== "all") return;
+        var lastPage = Math.max(1, Math.ceil(browseState.total / browseState.perPage) || 1);
+        var p = browseState.page + 1;
+        if (p > lastPage) return;
+        document.getElementById("listPage").value = String(p);
+        doLoadAll(p);
+      });
+
+      document.getElementById("submitBtn").addEventListener("click", async function () {
+        hideMsgs();
+        document.getElementById("result").classList.remove("show");
+        var base = getBackendBase();
+
+        var longUrl = document.getElementById("longUrl").value.trim();
+        if (!longUrl) {
+          showErr("Enter a URL to shorten.");
+          return;
+        }
+
+        var uid = parseInt(document.getElementById("userId").value, 10);
+        if (!uid || uid < 1) {
+          showErr("User ID must be a positive integer.");
+          return;
+        }
+
+        var body = {
+          original_url: longUrl,
+          user_id: uid,
+          title: document.getElementById("title").value.trim() || undefined
+        };
+        var code = document.getElementById("shortCode").value.trim();
+        if (code) body.short_code = code;
+
+        var btn = document.getElementById("submitBtn");
+        btn.disabled = true;
+        try {
+          var res = await fetch(base + "/shorten", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify(body)
+          });
+          var data = await res.json().catch(function () { return {}; });
+          if (!res.ok) {
+            var err = data.error || res.statusText || "Request failed";
+            showErr(err + " (" + res.status + ")");
+            return;
+          }
+          var sc = data.short_code;
+          if (!sc) {
+            showErr("Unexpected response from API.");
+            return;
+          }
+          lastFull = base + "/" + encodeURIComponent(sc);
+          document.getElementById("shortUrlOut").textContent = lastFull;
+          document.getElementById("result").classList.add("show");
+          showOk("Created.");
+          saveRecent({
+            base: base,
+            short: lastFull,
+            full: lastFull,
+            original: longUrl
+          });
+        } catch (ex) {
+          showErr(
+            ex.message ||
+              "Network error — check BACKEND_URL (NGINX load balancer). Wrong host/port often surfaces as a CORS error."
+          );
+        } finally {
+          btn.disabled = false;
+        }
+      });
+
+      document.getElementById("copyBtn").addEventListener("click", function () {
+        if (!lastFull) return;
+        navigator.clipboard.writeText(lastFull).then(function () {
+          showOk("Copied to clipboard.");
+        }).catch(function () {
+          showErr("Could not copy — select the link manually.");
+        });
+      });
+
+      document.getElementById("openBtn").addEventListener("click", function () {
+        if (lastFull) window.open(lastFull, "_blank", "noopener,noreferrer");
+      });
+
+      renderRecent();
+    })();
+  </script>
 </body>
 </html>

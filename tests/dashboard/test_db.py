@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import json
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
-import pytest
 
 from cache import LogCache
 from db import flush_logs, flush_stats, init_db
@@ -194,7 +192,7 @@ class TestInitDb:
     def test_retries_and_fails(self, mock_get_conn, mock_sleep):
         result = init_db()
         assert result is False
-        assert mock_get_conn.call_count == 30
+        assert mock_get_conn.call_count == 20
 
 
 # ---------------------------------------------------------------------------

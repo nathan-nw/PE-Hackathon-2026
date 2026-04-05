@@ -1,9 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { ContainerStats } from "dockerode";
 import { getDockerConnectionOptions } from "@/lib/docker-options";
+import {
+  debugEnvEnabled,
+  getRailwayEnvDebugSnapshot,
+  runtimeEnv,
+} from "@/lib/server-runtime-env";
+import {
+  fetchRailwayVisibilityRows,
+  railwayIdsConfigured,
+  railwayVisibilityConfigured,
+} from "@/lib/railway-visibility";
+import { getRailwayHeartbeatExitLifecycleState } from "@/lib/railway-heartbeat-exit-state";
+import { effectiveRailwayOnlineStatusAfterProbe } from "@/lib/watchdog-core/heartbeat-lifecycle";
+import { pingRailwayServiceHeartbeats } from "@/lib/service-heartbeat";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+/** Avoid stale Railway/deployment rows after chaos kill or redeploy (browser/CDN caching). */
+const VISIBILITY_CACHE_HEADERS = {
+  "Cache-Control": "private, no-store, must-revalidate",
+} as const;
 
 async function getDocker() {
   const { default: Docker } = await import("dockerode");
@@ -25,8 +43,74 @@ function cpuPercentFromStats(stats: ContainerStats): number | undefined {
 
 export async function GET(request: NextRequest) {
   const stats = request.nextUrl.searchParams.get("stats") === "1";
+  const heartbeats = request.nextUrl.searchParams.get("heartbeats") === "1";
   const project =
-    process.env.VISIBILITY_COMPOSE_PROJECT || "pe-hackathon-2026";
+    runtimeEnv("VISIBILITY_COMPOSE_PROJECT") || "pe-hackathon-2026";
+
+  if (railwayIdsConfigured()) {
+    if (!railwayVisibilityConfigured()) {
+      const pid = runtimeEnv("RAILWAY_PROJECT_ID") ?? "";
+      const baseError =
+        "Set RAILWAY_PROJECT_TOKEN or RAILWAY_API_TOKEN on the dashboard service (variable names must not have leading/trailing spaces). Redeploy after fixing.";
+      return NextResponse.json(
+        {
+          source: "railway" as const,
+          project: pid,
+          projectId: pid,
+          containers: [],
+          error: baseError,
+          ...(debugEnvEnabled()
+            ? { envDebug: getRailwayEnvDebugSnapshot() }
+            : {}),
+        },
+        { headers: VISIBILITY_CACHE_HEADERS }
+      );
+    }
+    const r = await fetchRailwayVisibilityRows({ includeStats: stats });
+    if (r.error || !heartbeats) {
+      return NextResponse.json(
+        {
+          source: "railway" as const,
+          project: r.project,
+          projectId: r.projectId,
+          containers: r.containers,
+          error: r.error,
+        },
+        { headers: VISIBILITY_CACHE_HEADERS }
+      );
+    }
+
+    const beats = await pingRailwayServiceHeartbeats(r.containers);
+    const byId = new Map(beats.map((b) => [b.railwayServiceId, b]));
+    const exitSt = getRailwayHeartbeatExitLifecycleState();
+    const containers = r.containers.map((c) => {
+      const hb = byId.get(c.railwayServiceId);
+      const railwayOnlineStatus = effectiveRailwayOnlineStatusAfterProbe(
+        exitSt,
+        c.railwayServiceId,
+        c.railwayDeploymentId ?? "",
+        c.railwayOnlineStatus,
+        hb,
+        { scheduleRedeem: false }
+      );
+      return {
+        ...c,
+        railwayOnlineStatus,
+        heartbeat: hb,
+      };
+    });
+
+    return NextResponse.json(
+      {
+        source: "railway" as const,
+        project: r.project,
+        projectId: r.projectId,
+        containers,
+        error: r.error,
+      },
+      { headers: VISIBILITY_CACHE_HEADERS }
+    );
+  }
 
   try {
     const docker = await getDocker();
@@ -80,12 +164,19 @@ export async function GET(request: NextRequest) {
       })
     );
 
-    return NextResponse.json({ project, containers: rows });
+    return NextResponse.json(
+      {
+        source: "docker" as const,
+        project,
+        containers: rows,
+      },
+      { headers: VISIBILITY_CACHE_HEADERS }
+    );
   } catch (e) {
     const message = e instanceof Error ? e.message : "Unknown error";
     return NextResponse.json(
-      { error: message, project, containers: [] },
-      { status: 503 }
+      { source: "docker" as const, error: message, project, containers: [] },
+      { status: 503, headers: VISIBILITY_CACHE_HEADERS }
     );
   }
 }

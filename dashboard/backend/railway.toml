@@ -1,0 +1,10 @@
+# Set Root Directory to `dashboard/backend`. Omit KAFKA_* on Railway unless you add a managed Kafka.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+watchPatterns = ["/dashboard/backend/**"]
+
+[deploy]
+healthcheckPath = "/api/health"
+healthcheckTimeout = 30
