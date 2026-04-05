@@ -154,8 +154,12 @@ export function ChaosPanel() {
     setLoading(true);
     try {
       const [d, c] = await Promise.all([
-        fetch("/api/visibility/docker").then((r) => r.json()),
-        fetch("/api/visibility/docker/chaos/config").then((r) => r.json()),
+        fetch("/api/visibility/docker", { cache: "no-store" }).then((r) =>
+          r.json()
+        ),
+        fetch("/api/visibility/docker/chaos/config", { cache: "no-store" }).then(
+          (r) => r.json()
+        ),
       ]);
       setDocker(d as DockerResponse);
       setConfig(c as ChaosConfig);
@@ -238,7 +242,8 @@ export function ChaosPanel() {
     setWatchError(null);
     try {
       const res = await fetch(
-        `/api/visibility/docker/chaos/status?service=${encodeURIComponent(service)}`
+        `/api/visibility/docker/chaos/status?service=${encodeURIComponent(service)}`,
+        { cache: "no-store" }
       );
       const j = (await res.json()) as ChaosStatus & { error?: string };
       if (!res.ok) {

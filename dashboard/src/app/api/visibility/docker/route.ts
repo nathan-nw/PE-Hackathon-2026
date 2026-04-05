@@ -15,6 +15,11 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/** Avoid stale Railway/deployment rows after chaos kill or redeploy (browser/CDN caching). */
+const VISIBILITY_CACHE_HEADERS = {
+  "Cache-Control": "private, no-store, must-revalidate",
+} as const;
+
 async function getDocker() {
   const { default: Docker } = await import("dockerode");
   return new Docker(getDockerConnectionOptions());
@@ -43,25 +48,31 @@ export async function GET(request: NextRequest) {
       const pid = runtimeEnv("RAILWAY_PROJECT_ID") ?? "";
       const baseError =
         "Set RAILWAY_PROJECT_TOKEN or RAILWAY_API_TOKEN on the dashboard service (variable names must not have leading/trailing spaces). Redeploy after fixing.";
-      return NextResponse.json({
-        source: "railway" as const,
-        project: pid,
-        projectId: pid,
-        containers: [],
-        error: baseError,
-        ...(debugEnvEnabled()
-          ? { envDebug: getRailwayEnvDebugSnapshot() }
-          : {}),
-      });
+      return NextResponse.json(
+        {
+          source: "railway" as const,
+          project: pid,
+          projectId: pid,
+          containers: [],
+          error: baseError,
+          ...(debugEnvEnabled()
+            ? { envDebug: getRailwayEnvDebugSnapshot() }
+            : {}),
+        },
+        { headers: VISIBILITY_CACHE_HEADERS }
+      );
     }
     const r = await fetchRailwayVisibilityRows({ includeStats: stats });
-    return NextResponse.json({
-      source: "railway" as const,
-      project: r.project,
-      projectId: r.projectId,
-      containers: r.containers,
-      error: r.error,
-    });
+    return NextResponse.json(
+      {
+        source: "railway" as const,
+        project: r.project,
+        projectId: r.projectId,
+        containers: r.containers,
+        error: r.error,
+      },
+      { headers: VISIBILITY_CACHE_HEADERS }
+    );
   }
 
   try {
@@ -116,16 +127,19 @@ export async function GET(request: NextRequest) {
       })
     );
 
-    return NextResponse.json({
-      source: "docker" as const,
-      project,
-      containers: rows,
-    });
+    return NextResponse.json(
+      {
+        source: "docker" as const,
+        project,
+        containers: rows,
+      },
+      { headers: VISIBILITY_CACHE_HEADERS }
+    );
   } catch (e) {
     const message = e instanceof Error ? e.message : "Unknown error";
     return NextResponse.json(
       { source: "docker" as const, error: message, project, containers: [] },
-      { status: 503 }
+      { status: 503, headers: VISIBILITY_CACHE_HEADERS }
     );
   }
 }

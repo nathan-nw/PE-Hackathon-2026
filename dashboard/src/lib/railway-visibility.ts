@@ -65,13 +65,23 @@ export async function railwayGraphql<T>(
 /** @internal Alias for historical call sites in this file. */
 const gql = railwayGraphql;
 
-function deploymentStatusToState(status: string): {
+/** Map Railway `DeploymentStatus` to Docker-like state + optional health hint for the Ops UI. */
+export function deploymentStatusToState(status: string): {
   state: string;
   health?: string;
 } {
-  const s = (status || "").toUpperCase();
-  if (s === "SUCCESS") return { state: "running", health: "healthy" };
-  if (s === "SLEEPING") return { state: "running", health: undefined };
+  const s = (status || "").trim().toUpperCase();
+  if (!s || s === "UNKNOWN") {
+    return { state: "unknown", health: undefined };
+  }
+
+  if (s === "SUCCESS") {
+    return { state: "running", health: "healthy" };
+  }
+  if (s === "SLEEPING") {
+    return { state: "running", health: undefined };
+  }
+
   if (
     s === "BUILDING" ||
     s === "DEPLOYING" ||
@@ -84,9 +94,21 @@ function deploymentStatusToState(status: string): {
   ) {
     return { state: "running", health: "starting" };
   }
-  if (s === "FAILED" || s === "CRASHED") return { state: "exited" };
-  if (s === "REMOVED") return { state: "dead" };
-  return { state: "running" };
+
+  if (s === "FAILED" || s === "CRASHED") {
+    return { state: "exited", health: "unhealthy" };
+  }
+  if (s === "REMOVED") {
+    return { state: "dead", health: undefined };
+  }
+  if (s === "STOPPED" || s === "CANCELED" || s === "CANCELLED") {
+    return { state: "exited", health: undefined };
+  }
+  if (s === "SKIPPED") {
+    return { state: "skipped", health: undefined };
+  }
+
+  return { state: "unknown", health: undefined };
 }
 
 const Q_PROJECT_SERVICES = `
@@ -369,29 +391,46 @@ export async function fetchRailwayVisibilityRows(options?: {
     const key = aliasKeys[i];
     const conn = batch[key];
     const dep = conn?.edges?.[0]?.node;
-    const status = dep?.status ?? "UNKNOWN";
+
+    if (!dep) {
+      rows.push({
+        id: `service:${sid}`,
+        name: byId.get(sid) || sid,
+        image: "Railway",
+        state: "exited",
+        status: "No active deployment",
+        deploymentStatus: undefined,
+        service: byId.get(sid) || "",
+        health: undefined,
+        created: 0,
+        railwayServiceId: sid,
+        railwayDeploymentId: undefined,
+        railwayPublicUrl: undefined,
+      });
+      continue;
+    }
+
+    const status = dep.status ?? "UNKNOWN";
     const { state, health } = deploymentStatusToState(status);
 
-    const createdSec = dep?.createdAt
+    const createdSec = dep.createdAt
       ? Math.floor(new Date(dep.createdAt).getTime() / 1000)
       : 0;
 
-    const publicUrl = dep?.staticUrl || dep?.url || undefined;
+    const publicUrl = dep.staticUrl || dep.url || undefined;
 
     rows.push({
-      id: dep?.id ?? `service:${sid}`,
+      id: dep.id,
       name: byId.get(sid) || sid,
       image: "Railway",
       state,
-      status: dep
-        ? `${status}${publicUrl ? ` · ${publicUrl}` : ""}`
-        : "No deployment yet",
-      deploymentStatus: dep ? status : undefined,
+      status: `${status}${publicUrl ? ` · ${publicUrl}` : ""}`,
+      deploymentStatus: status,
       service: byId.get(sid) || "",
       health,
       created: createdSec,
       railwayServiceId: sid,
-      railwayDeploymentId: dep?.id,
+      railwayDeploymentId: dep.id,
       railwayPublicUrl: publicUrl ?? undefined,
     });
   }

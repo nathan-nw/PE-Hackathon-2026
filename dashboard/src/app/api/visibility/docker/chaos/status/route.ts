@@ -11,6 +11,15 @@ import { runtimeEnv } from "@/lib/server-runtime-env";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const NO_STORE = { "Cache-Control": "private, no-store, must-revalidate" } as const;
+
+function json(data: unknown, init?: { status?: number }) {
+  return NextResponse.json(data, {
+    status: init?.status,
+    headers: NO_STORE,
+  });
+}
+
 async function getDocker() {
   const { default: Docker } = await import("dockerode");
   return new Docker(getDockerConnectionOptions());
@@ -30,7 +39,7 @@ export async function GET(request: NextRequest) {
     runtimeEnv("VISIBILITY_COMPOSE_PROJECT") || "pe-hackathon-2026";
 
   if (!service && !containerId) {
-    return NextResponse.json(
+    return json(
       { error: "Query parameter required: service=<compose-service> or id=<container-id>" },
       { status: 400 }
     );
@@ -38,15 +47,14 @@ export async function GET(request: NextRequest) {
 
   if (railwayIdsConfigured()) {
     if (!railwayVisibilityConfigured()) {
-      return NextResponse.json(
-        { error: "Railway API token missing for chaos status." },
-        { status: 503 }
-      );
+      return json({ error: "Railway API token missing for chaos status." }, {
+        status: 503,
+      });
     }
 
     const name = service ?? "";
     if (!name) {
-      return NextResponse.json(
+      return json(
         { error: "For Railway, use service=<railway-service-name>" },
         { status: 400 }
       );
@@ -55,25 +63,22 @@ export async function GET(request: NextRequest) {
     try {
       const r = await fetchRailwayVisibilityRows({ includeStats: false });
       if (r.error) {
-        return NextResponse.json(
-          { error: r.error, found: false },
-          { status: 503 }
-        );
+        return json({ error: r.error, found: false }, { status: 503 });
       }
 
       const row = r.containers.find(
         (c) => c.service.trim().toLowerCase() === name.toLowerCase()
       );
       if (!row) {
-        return NextResponse.json({
+        return json({
           found: false,
           service: name,
           message: `No Railway service named "${name}" in this project.`,
         });
       }
 
-      const ds = row.deploymentStatus ?? "UNKNOWN";
-      return NextResponse.json({
+      const ds = row.deploymentStatus;
+      return json({
         found: true,
         source: "railway" as const,
         containerId: row.railwayDeploymentId ?? row.id,
@@ -82,7 +87,7 @@ export async function GET(request: NextRequest) {
         state: row.state,
         running: row.state === "running",
         restarting: ds === "DEPLOYING" || ds === "BUILDING",
-        deploymentStatus: ds,
+        deploymentStatus: ds ?? null,
         health: row.health,
         railwayServiceId: row.railwayServiceId,
         railwayDeploymentId: row.railwayDeploymentId,
@@ -90,7 +95,7 @@ export async function GET(request: NextRequest) {
       });
     } catch (e) {
       const message = e instanceof Error ? e.message : "Unknown error";
-      return NextResponse.json({ error: message, found: false }, { status: 503 });
+      return json({ error: message, found: false }, { status: 503 });
     }
   }
 
@@ -124,7 +129,7 @@ export async function GET(request: NextRequest) {
       "";
     const proj = info.Config?.Labels?.["com.docker.compose.project"] ?? "";
     if (!proj || proj !== project) {
-      return NextResponse.json(
+      return json(
         {
           error:
             "Container is not part of the configured Compose project (check VISIBILITY_COMPOSE_PROJECT).",
@@ -141,7 +146,7 @@ export async function GET(request: NextRequest) {
         ? String((rp as { Name?: string }).Name ?? "")
         : "";
 
-    return NextResponse.json({
+    return json({
       found: true,
       source: "docker" as const,
       containerId: info.Id ?? id,
@@ -160,6 +165,6 @@ export async function GET(request: NextRequest) {
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Unknown error";
-    return NextResponse.json({ error: message, found: false }, { status: 503 });
+    return json({ error: message, found: false }, { status: 503 });
   }
 }

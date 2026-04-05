@@ -214,9 +214,13 @@ export function OpsDashboard() {
       : "/api/visibility/k8s/pods";
     try {
       const [d, p, a] = await Promise.all([
-        fetch(`/api/visibility/docker${qs}`).then((r) => r.json()),
-        fetch(podsUrl).then((r) => r.json()),
-        fetch("/api/visibility/alerts").then((r) => r.json()),
+        fetch(`/api/visibility/docker${qs}`, { cache: "no-store" }).then((r) =>
+          r.json()
+        ),
+        fetch(podsUrl, { cache: "no-store" }).then((r) => r.json()),
+        fetch("/api/visibility/alerts", { cache: "no-store" }).then((r) =>
+          r.json()
+        ),
       ]);
       setDocker(d as DockerResponse);
       setPods(p as PodsResponse);
