@@ -45,7 +45,7 @@ ALLOW_INSECURE_LOG_INGEST = os.environ.get("ALLOW_INSECURE_LOG_INGEST", "").stri
     "yes",
 )
 CACHE_MAX_ENTRIES = int(os.environ.get("CACHE_MAX_ENTRIES", "50000"))
-DB_FLUSH_INTERVAL = float(os.environ.get("DB_FLUSH_INTERVAL", "30"))
+DB_FLUSH_INTERVAL = float(os.environ.get("DB_FLUSH_INTERVAL", "5"))
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
 cache = LogCache(max_entries=CACHE_MAX_ENTRIES)
