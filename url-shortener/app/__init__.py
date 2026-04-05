@@ -1,5 +1,6 @@
-import contextlib
+import logging
 import os
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -19,6 +20,8 @@ from app.logging_config import configure_logging  # noqa: E402
 from app.metrics import metrics_response  # noqa: E402
 from app.middleware import register_middleware  # noqa: E402
 from app.routes import register_routes  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 
 def create_app():
@@ -74,16 +77,26 @@ def create_app():
     # Ensure tables exist (safe to call repeatedly — uses IF NOT EXISTS).
     with app.app_context():
         db.create_tables([User, Url, Event, LoadTestResult], safe=True)
-        # Seed a default user so the UI works out of the box.
-        with contextlib.suppress(Exception):
-            User.get_or_create(
-                id=1,
-                defaults={
-                    "username": "default",
-                    "email": "default@example.com",
-                    "created_at": __import__("datetime").datetime.now(__import__("datetime").UTC),
-                },
-            )
+        # Seed a default user so the UI works out of the box (hosted DB may be slow on first connect).
+        for attempt in range(3):
+            try:
+                User.get_or_create(
+                    id=1,
+                    defaults={
+                        "username": "default",
+                        "email": "default@example.com",
+                        "created_at": __import__("datetime").datetime.now(__import__("datetime").UTC),
+                    },
+                )
+                break
+            except Exception as e:
+                logger.warning(
+                    "Default user (id=1) seed attempt %s/3 failed: %s",
+                    attempt + 1,
+                    e,
+                )
+                if attempt < 2:
+                    time.sleep(0.5)
 
     # Register before API blueprints so `/`, `/health`, and `/metrics` are not shadowed by `/<short_code>`.
     @app.route("/favicon.ico")

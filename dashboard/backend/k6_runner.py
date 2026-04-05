@@ -215,8 +215,12 @@ class K6Runner:
                     self._stats.errors += (
                         int(value) if isinstance(value, (int, float)) else 0
                     )
-                    total = self._stats.requests or 1
-                    self._stats.error_rate = min(1.0, self._stats.errors / total)
+                    # Never use `requests or 1`: JSON Points can reorder so errors arrive
+                    # before http_reqs — that falsely shows 100% until requests catch up.
+                    if self._stats.requests > 0:
+                        self._stats.error_rate = min(
+                            1.0, self._stats.errors / self._stats.requests
+                        )
                 elif metric == "http_req_duration":
                     self._durations.append(value)
                     n = len(self._durations)
