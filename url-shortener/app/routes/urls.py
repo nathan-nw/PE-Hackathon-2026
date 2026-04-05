@@ -59,12 +59,14 @@ def create_short_url():
         return jsonify({"error": url_err}), 400
 
     user_id = data["user_id"]
-    if not isinstance(user_id, int):
+    if isinstance(user_id, bool) or not isinstance(user_id, int):
         return jsonify({"error": "user_id must be an integer"}), 400
 
     title = data.get("title", "")
     if not isinstance(title, str):
         return jsonify({"error": "title must be a string"}), 400
+    if title and not title.strip():
+        return jsonify({"error": "title must not be blank"}), 400
 
     try:
         User.get_by_id(user_id)
@@ -72,8 +74,8 @@ def create_short_url():
         return jsonify({"error": "User not found"}), 404
 
     short_code = data.get("short_code")
-    if short_code is not None and not isinstance(short_code, str):
-        return jsonify({"error": "short_code must be a string"}), 400
+    if short_code is not None and (not isinstance(short_code, str) or not short_code.strip()):
+        return jsonify({"error": "short_code must be a non-empty string"}), 400
     short_code = short_code or generate_short_code()
 
     if Url.select().where(Url.short_code == short_code).exists():
