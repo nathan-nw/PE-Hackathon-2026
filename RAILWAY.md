@@ -91,7 +91,7 @@ There is no Docker socket on Railway, so the Next.js dashboard cannot use **`doc
 
 2. **From your machine** — Copy **`.env.railway.setup.example`** to **`.env.railway.setup`**, set **`DASHBOARD_RAILWAY_PROJECT_TOKEN`** (or **`DASHBOARD_RAILWAY_API_TOKEN`**), then run **`SYNC_VARIABLES=1 node setup-railway.js`**. That upserts the token onto the **dashboard** service (same names as above). Redeploy **dashboard** after the variable appears.
 
-**If variables are set but Ops still asks for a token:** the dashboard must read secrets at **container runtime** (Next.js must not inline `process.env` for tokens at image build time). Use a current **`dashboard`** build that includes `server-runtime-env` / dynamic env lookup, then **redeploy** after changing variables.
+**If variables are set but Ops still asks for a token:** Railway injects secrets at **container runtime**; older Next.js bundles could inline empty values for `process.env`. Current **`dashboard`** code reads Linux **`/proc/self/environ`** so tokens match what the kernel sees. **Redeploy** the dashboard after pulling the latest. (`.env.local` is **not** deployed — only **Variables** in the Railway UI apply in production.)
 
 ## dashboard_db
 

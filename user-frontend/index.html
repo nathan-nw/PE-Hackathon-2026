@@ -153,11 +153,11 @@
     <p class="sub">Flask API: <code style="color:#cbd5e1;">POST /shorten</code>, <code style="color:#cbd5e1;">GET /urls</code>, <code style="color:#cbd5e1;">GET /users/&lt;id&gt;/urls</code> · needs a valid <code style="color:#cbd5e1;">user_id</code> for new links</p>
 
     <div class="card">
-      <div class="field">
-        <label for="apiBase">API base URL</label>
-        <input type="url" id="apiBase" placeholder="http://localhost:18080" autocomplete="off" />
-        <p class="hint">Default comes from <code style="color:#cbd5e1;">/api-config.js</code> (built from <code style="color:#cbd5e1;">BACKEND_URL</code> in Docker / Railway). Local Compose: set <code style="color:#cbd5e1;">USER_FRONTEND_BACKEND_URL</code> in the repo root <code style="color:#cbd5e1;">.env</code> (see <code style="color:#cbd5e1;">user-frontend/.env.example</code>). Use the <strong>load balancer</strong> (NGINX), not the API container port — run <code style="color:#cbd5e1;">docker compose port load-balancer 80</code> if unsure. A CORS error usually means the wrong host/port. On Railway, <code style="color:#cbd5e1;">setup-railway.js</code> with <code style="color:#cbd5e1;">SYNC_VARIABLES=1</code> sets <code style="color:#cbd5e1;">BACKEND_URL</code> to the load-balancer URL.</p>
-      </div>
+      <p class="hint" style="margin-bottom: 1rem;">
+        API base is set automatically from <code style="color:#cbd5e1;">/api-config.js</code> (<code style="color:#cbd5e1;">BACKEND_URL</code>).
+        Local Compose: <code style="color:#cbd5e1;">USER_FRONTEND_BACKEND_URL</code> in the repo root <code style="color:#cbd5e1;">.env</code> (default <code style="color:#cbd5e1;">http://localhost:18080</code>).
+        Railway: <code style="color:#cbd5e1;">SYNC_VARIABLES=1</code> in <code style="color:#cbd5e1;">setup-railway.js</code> → load-balancer URL (e.g. <code style="color:#cbd5e1;">https://load-balancer-production-8df2.up.railway.app</code>).
+      </p>
       <div class="field">
         <label for="longUrl">Long URL</label>
         <input type="url" id="longUrl" placeholder="https://example.com/path" required />
@@ -245,7 +245,6 @@
   <script src="/api-config.js"></script>
   <script>
     (function () {
-      var STORAGE_API = "pe_shortener_api_base";
       var STORAGE_RECENT = "pe_shortener_recent_v1";
       var MAX_RECENT = 12;
 
@@ -253,12 +252,16 @@
         return (url || "").replace(/\/+$/, "");
       }
 
-      function getInjectedBackend() {
+      /**
+       * Resolved API origin: /api-config.js (BACKEND_URL at container start), else local dev default.
+       */
+      function getBackendBase() {
+        var raw = "";
         if (typeof window.__PE_BACKEND_URL__ === "string") {
-          var s = window.__PE_BACKEND_URL__.trim();
-          if (s) return normalizeBase(s);
+          raw = window.__PE_BACKEND_URL__.trim();
         }
-        return "";
+        if (!raw) raw = "http://localhost:18080";
+        return normalizeLoopbackHost(normalizeBase(raw));
       }
 
       /**
@@ -277,19 +280,6 @@
           }
         } catch (e) {}
         return base;
-      }
-
-      function loadApiBase() {
-        var saved = localStorage.getItem(STORAGE_API);
-        var input = document.getElementById("apiBase");
-        var injected = getInjectedBackend();
-        var fallback = "http://localhost:18080";
-        input.value = saved || injected || fallback;
-      }
-
-      function saveApiBase() {
-        var v = normalizeBase(document.getElementById("apiBase").value.trim());
-        if (v) localStorage.setItem(STORAGE_API, v);
       }
 
       function loadRecent() {
@@ -382,7 +372,7 @@
       }
 
       function getBrowseBase() {
-        return normalizeLoopbackHost(normalizeBase(document.getElementById("apiBase").value.trim()));
+        return getBackendBase();
       }
 
       function showBrowseErr(t) {
@@ -409,10 +399,6 @@
         var panel = document.getElementById("eventsPanel");
         var pre = document.getElementById("eventsPre");
         var base = getBrowseBase();
-        if (!base) {
-          showBrowseErr("Set API base URL.");
-          return;
-        }
         if (eventsOpenForId === urlId) {
           hideEventsPanel();
           return;
@@ -586,10 +572,6 @@
 
       async function deactivateUrl(urlId) {
         var base = getBrowseBase();
-        if (!base) {
-          showBrowseErr("Set API base URL.");
-          return;
-        }
         try {
           var res = await fetch(base + "/urls/" + urlId, { method: "DELETE" });
           var data = await res.json().catch(function () { return {}; });
@@ -607,10 +589,6 @@
 
       async function reactivateUrl(urlId) {
         var base = getBrowseBase();
-        if (!base) {
-          showBrowseErr("Set API base URL.");
-          return;
-        }
         try {
           var res = await fetch(base + "/urls/" + urlId, {
             method: "PUT",
@@ -632,12 +610,6 @@
 
       async function doLoadAll(page) {
         var base = getBrowseBase();
-        if (!base) {
-          showBrowseErr("Set API base URL.");
-          return;
-        }
-        document.getElementById("apiBase").value = base;
-        saveApiBase();
         var perPage = parseInt(document.getElementById("listPerPage").value, 10) || 20;
         perPage = Math.min(100, Math.max(1, perPage));
         document.getElementById("listPerPage").value = String(perPage);
@@ -667,7 +639,7 @@
         } catch (ex) {
           showBrowseErr(
             ex.message ||
-              "Network error — check API base (NGINX / load balancer URL)."
+              "Network error — check BACKEND_URL / load balancer deployment."
           );
         } finally {
           btn.disabled = false;
@@ -676,12 +648,6 @@
 
       async function doLoadUser() {
         var base = getBrowseBase();
-        if (!base) {
-          showBrowseErr("Set API base URL.");
-          return;
-        }
-        document.getElementById("apiBase").value = base;
-        saveApiBase();
         var uid = parseInt(document.getElementById("userId").value, 10);
         if (!uid || uid < 1) {
           showBrowseErr("User ID must be a positive integer.");
@@ -706,7 +672,7 @@
         } catch (ex) {
           showBrowseErr(
             ex.message ||
-              "Network error — check API base (NGINX / load balancer URL)."
+              "Network error — check BACKEND_URL / load balancer deployment."
           );
         } finally {
           btn.disabled = false;
@@ -742,13 +708,7 @@
       document.getElementById("submitBtn").addEventListener("click", async function () {
         hideMsgs();
         document.getElementById("result").classList.remove("show");
-        var base = normalizeLoopbackHost(normalizeBase(document.getElementById("apiBase").value.trim()));
-        if (!base) {
-          showErr("Set API base URL.");
-          return;
-        }
-        document.getElementById("apiBase").value = base;
-        saveApiBase();
+        var base = getBackendBase();
 
         var longUrl = document.getElementById("longUrl").value.trim();
         if (!longUrl) {
@@ -802,7 +762,7 @@
         } catch (ex) {
           showErr(
             ex.message ||
-              "Network error — set API base to your NGINX load balancer (see hint). Wrong host port looks like a CORS failure."
+              "Network error — check BACKEND_URL (NGINX load balancer). Wrong host/port often surfaces as a CORS error."
           );
         } finally {
           btn.disabled = false;
@@ -822,9 +782,6 @@
         if (lastFull) window.open(lastFull, "_blank", "noopener,noreferrer");
       });
 
-      document.getElementById("apiBase").addEventListener("change", saveApiBase);
-
-      loadApiBase();
       renderRecent();
     })();
   </script>
