@@ -9,6 +9,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from flask import Flask, jsonify, render_template  # noqa: E402
 
+from app.cache import init_cache  # noqa: E402
 from app.circuit_breaker import db_circuit_breaker  # noqa: E402
 from app.database import db, init_db  # noqa: E402
 from app.instance_info import get_instance_id, get_instance_stats  # noqa: E402
@@ -23,26 +24,38 @@ def create_app():
 
     configure_logging()
 
-    # Rate limiting
+    # Rate limiting — backed by Redis so limits are shared across containers.
+    # The dynamic_rate_limit module adjusts the effective limit based on active connections,
+    # but Flask-Limiter needs a static default. We set it high here and let the dynamic
+    # system + Nginx handle the real throttling.
     from flask_limiter import Limiter
     from flask_limiter.util import get_remote_address
 
     limiter = Limiter(
         app=app,
         key_func=get_remote_address,
-        default_limits=[os.environ.get("RATE_LIMIT_DEFAULT", "200 per minute")],
+        default_limits=[os.environ.get("RATE_LIMIT_DEFAULT", "5000 per minute")],
         storage_uri=os.environ.get("RATE_LIMIT_STORAGE", "memory://"),
     )
     app.limiter = limiter
 
     init_db(app)
+    init_cache()
     register_middleware(app)
 
+    @app.after_request
+    def _add_cors(response):
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        return response
+
     from app.models import Event, Url, User  # noqa: F401 - registers models with Peewee
+    from app.models.load_test_result import LoadTestResult  # noqa: E402
 
     # Ensure tables exist (safe to call repeatedly — uses IF NOT EXISTS).
     with app.app_context():
-        db.create_tables([User, Url, Event], safe=True)
+        db.create_tables([User, Url, Event, LoadTestResult], safe=True)
         # Seed a default user so the UI works out of the box.
         with contextlib.suppress(Exception):
             User.get_or_create(

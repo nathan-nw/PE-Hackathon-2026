@@ -486,6 +486,34 @@
       refreshInstanceHud();
       setInterval(refreshInstanceHud, 2500);
 
+      /* ── URL Cache (localStorage, 7-day TTL) ── */
+      const CACHE_PREFIX = "brief_cache_";
+      const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+      function getCachedUrl(originalUrl) {
+        try {
+          const raw = localStorage.getItem(CACHE_PREFIX + originalUrl);
+          if (!raw) return null;
+          const entry = JSON.parse(raw);
+          if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
+            localStorage.removeItem(CACHE_PREFIX + originalUrl);
+            return null;
+          }
+          return entry.data;
+        } catch {
+          return null;
+        }
+      }
+
+      function setCachedUrl(originalUrl, data) {
+        try {
+          localStorage.setItem(CACHE_PREFIX + originalUrl, JSON.stringify({
+            timestamp: Date.now(),
+            data: data,
+          }));
+        } catch { /* storage full — ignore */ }
+      }
+
       /* ── Shorten Form ── */
       document
         .getElementById("shorten-form")
@@ -494,15 +522,43 @@
           const resultContainer = document.getElementById("result-container");
           const resultDiv = document.getElementById("result");
 
+          const originalUrl = document.getElementById("original_url").value;
+          const shortCode = document.getElementById("short_code").value.trim();
+
+          // Check localStorage cache (skip if custom short code requested)
+          if (!shortCode) {
+            const cached = getCachedUrl(originalUrl);
+            if (cached) {
+              resultContainer.classList.remove("hidden");
+              const shortUrl = `${BASE}/${cached.short_code}`;
+              resultDiv.className =
+                "bg-surface-container-low rounded-xl p-6 border border-outline-variant/10 flex items-center justify-between group";
+              resultDiv.innerHTML = `
+                    <div class="flex items-center gap-4">
+                        <div class="w-10 h-10 bg-tertiary/10 rounded-lg flex items-center justify-center text-tertiary">
+                            <span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">bolt</span>
+                        </div>
+                        <div>
+                            <p class="text-xs font-bold text-tertiary uppercase tracking-widest mb-0.5">Shortened Link</p>
+                            <a href="${shortUrl}" target="_blank" class="text-on-surface font-headline font-semibold text-lg hover:underline">${shortUrl}</a>
+                        </div>
+                    </div>
+                    <button onclick="navigator.clipboard.writeText('${shortUrl}');this.querySelector('span:last-child').textContent='Copied!';setTimeout(()=>this.querySelector('span:last-child').textContent='Copy',1500)" class="flex items-center gap-2 px-4 py-2 rounded-lg text-primary font-bold hover:bg-white transition-colors">
+                        <span class="material-symbols-outlined text-[20px]">content_copy</span>
+                        <span class="text-sm font-headline">Copy</span>
+                    </button>`;
+              return;
+            }
+          }
+
           const body = {
-            original_url: document.getElementById("original_url").value,
+            original_url: originalUrl,
             user_id: parseInt(document.getElementById("user_id").value),
           };
 
           const title = document.getElementById("title").value.trim();
           if (title) body.title = title;
 
-          const shortCode = document.getElementById("short_code").value.trim();
           if (shortCode) body.short_code = shortCode;
 
           /* Friendly messages — never show raw stack traces to users */
@@ -540,6 +596,9 @@
                         </div>`;
               return;
             }
+
+            // Cache the response keyed by original URL
+            setCachedUrl(originalUrl, data);
 
             const shortUrl = `${BASE}/${data.short_code}`;
             resultDiv.className =
