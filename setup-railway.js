@@ -4,7 +4,7 @@
  * https://docs.railway.com/integrations/api
  *
  * - Ensures Git-linked app services exist (same repo, different root directories):
- *   url-shortener-a, url-shortener-b, load-balancer, user-frontend, dashboard, dashboard-backend, prometheus (optional Telemetry).
+ *   url-shortener-a, url-shortener-b, load-balancer, user-frontend, dashboard, dashboard-backend.
  * - Sets the deploy branch (default: staging) on each service's deployment trigger.
  * - Sets rootDirectory, railwayConfigFile, and watchPatterns on each service instance (matches each
  *   app folder's railway.toml — same paths as Settings → Root / Config-as-code / Watch paths).
@@ -207,13 +207,6 @@ const SERVICE_SPECS = [
     rootDirectory: "dashboard/backend",
     railwayConfigFile: "/dashboard/backend/railway.toml",
     watchPatterns: ["/dashboard/backend/**"],
-  },
-  {
-    name: "prometheus",
-    rootDirectory: "prometheus",
-    railwayConfigFile: "/prometheus/railway.toml",
-    // Broad patterns so Git pushes are not SKIPPED when only other folders changed (see prometheus/railway.toml).
-    watchPatterns: ["/**", "/*", "/.*"],
   },
   {
     name: "railway-watchdog",
@@ -659,23 +652,10 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
               "https://" + varRef("url-shortener-a", "RAILWAY_PUBLIC_DOMAIN"),
           }
         : {}),
-    ...(byName.has("prometheus")
-      ? {
-          PROMETHEUS_URL:
-            "http://" +
-            varRef("prometheus", "RAILWAY_PRIVATE_DOMAIN") +
-            ":" +
-            varRef("prometheus", "PORT"),
-        }
-      : {}),
     ...(kafka ? { KAFKA_BOOTSTRAP_SERVERS: kafkaBootstrapRef(kafka) } : {}),
     ...(logIngestToken ? { LOG_INGEST_TOKEN: logIngestToken } : {}),
   };
   await upsert("dashboard-backend", dashboardBackendVars);
-
-  if (byName.has("prometheus")) {
-    await upsert("prometheus", { PORT: "9090" });
-  }
 
   const watchdogPoll = (process.env.RAILWAY_WATCHDOG_POLL_SEC || "").trim();
   const watchdogAutoRecoverRaw = (

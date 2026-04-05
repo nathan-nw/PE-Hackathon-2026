@@ -25,8 +25,6 @@ const INTERNAL_HTTP_SERVICES = new Set(
     "kafka",
     "zookeeper",
     "kafka-log-consumer",
-    "prometheus",
-    "alertmanager",
     "db-backup",
   ].map((s) => s.toLowerCase())
 );

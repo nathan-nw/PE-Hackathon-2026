@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from datetime import datetime
 from collections import Counter, deque
 from dataclasses import dataclass, field
 from typing import Any
@@ -397,6 +398,32 @@ class LogCache:
                 "current_rate": current_rate,
             },
         }
+
+    def get_http_log_entries_for_telemetry(
+        self, window_minutes: int
+    ) -> list[dict[str, Any]]:
+        """HTTP request lines in the time window (for Telemetry tab; same shape as Kafka ingest)."""
+        now = time.time()
+        window_start = now - window_minutes * 60
+        with self._lock:
+            logs = list(self._logs)
+        out: list[dict[str, Any]] = []
+        for entry in logs:
+            if entry.get("status_code") is None or entry.get("duration_ms") is None:
+                continue
+            ts_str = entry.get("timestamp")
+            if not ts_str:
+                continue
+            try:
+                ts = datetime.fromisoformat(
+                    str(ts_str).replace("Z", "+00:00")
+                ).timestamp()
+            except (ValueError, AttributeError):
+                continue
+            if ts < window_start or ts > now:
+                continue
+            out.append(entry)
+        return out
 
     def clear(self) -> None:
         """Reset all cached data."""

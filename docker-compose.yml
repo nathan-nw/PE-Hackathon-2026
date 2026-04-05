@@ -195,40 +195,6 @@ services:
       retries: 3
       start_period: 15s
 
-  prometheus:
-    image: prom/prometheus:v2.54.1
-    restart: unless-stopped
-    networks:
-      - app_net
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./prometheus/rules:/etc/prometheus/rules:ro
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.retention.time=15d
-      - --web.enable-lifecycle
-    depends_on:
-      url-shortener-a:
-        condition: service_healthy
-      url-shortener-b:
-        condition: service_healthy
-      alertmanager:
-        condition: service_started
-
-  alertmanager:
-    image: prom/alertmanager:v0.27.0
-    restart: unless-stopped
-    networks:
-      - app_net
-    ports:
-      - "9093:9093"
-    volumes:
-      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
-    command:
-      - --config.file=/etc/alertmanager/alertmanager.yml
-
   db-backup:
     image: prodrigestivill/postgres-backup-local:16
     restart: unless-stopped
@@ -251,9 +217,6 @@ services:
   dashboard:
     build:
       context: ./dashboard
-      args:
-        NEXT_PUBLIC_PROMETHEUS_URL: http://localhost:9090
-        NEXT_PUBLIC_ALERTMANAGER_PUBLIC_URL: http://localhost:9093
     restart: always
     networks:
       - app_net
@@ -270,8 +233,7 @@ services:
       # Ops → Chaos tab: docker kill (dashboard mounts docker.sock). Set CHAOS_KILL_ENABLED=0 to disable.
       CHAOS_KILL_ENABLED: ${CHAOS_KILL_ENABLED:-1}
       VISIBILITY_COMPOSE_PROJECT: pe-hackathon-2026
-      VISIBILITY_ALERTMANAGER_URL: http://alertmanager:9093
-      VISIBILITY_PROMETHEUS_URL: http://prometheus:9090
+      VISIBILITY_ALERTMANAGER_DISABLED: "1"
       # FastAPI log cache (Kafka → in-memory → dashboard /api/logs proxy)
       DASHBOARD_BACKEND_URL: http://dashboard-backend:8000
 
@@ -322,8 +284,7 @@ services:
       # Ops tab: expand Compose ``db`` row → profile=main (same DB as url-shortener)
       INTROSPECT_DB_URL: postgresql://postgres:postgres@db:5432/hackathon_db
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
-      # Ops Telemetry tab: Next proxies PromQL + instance-stats via this service (see dashboard/backend/telemetry.py).
-      PROMETHEUS_URL: http://prometheus:9090
+      # Ops Telemetry tab: golden signals from HTTP logs + instance-stats via load balancer (see telemetry_agg.py).
       TELEMETRY_LOAD_BALANCER_URL: http://load-balancer:80
     depends_on:
       db:
@@ -332,8 +293,6 @@ services:
         condition: service_healthy
       dashboard-db:
         condition: service_healthy
-      prometheus:
-        condition: service_started
 
   user-frontend:
     build:
@@ -365,7 +324,7 @@ services:
       WATCHDOG_INTERVAL_SEC: ${WATCHDOG_INTERVAL_SEC:-15}
       WATCHDOG_HTTP_PORT: "8099"
       WATCHDOG_SELF_SERVICE: compose-watchdog
-      # Optional: comma-separated compose service names to ignore (e.g. "prometheus,alertmanager").
+      # Optional: comma-separated compose service names to ignore.
       WATCHDOG_EXCLUDE_SERVICES: ${WATCHDOG_EXCLUDE_SERVICES:-}
 
 networks:

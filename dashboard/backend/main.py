@@ -31,12 +31,8 @@ from db import (
 from discord_alerter import DiscordAlerter
 from k6_runner import K6Runner
 from kafka_consumer import run_consumer
-from telemetry import (
-    aggregate_instance_stats,
-    prometheus_base,
-    prometheus_proxy,
-    telemetry_load_balancer_base,
-)
+from telemetry import aggregate_instance_stats, telemetry_load_balancer_base
+from telemetry_agg import build_golden_signals
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO").upper(),
@@ -167,16 +163,20 @@ def health():
     if n is not None:
         out["persisted_kafka_logs"] = n
     out["telemetry"] = {
-        "prometheus_base": prometheus_base(),
         "telemetry_load_balancer_base": telemetry_load_balancer_base(),
     }
     return out
 
 
-@app.get("/api/telemetry/prometheus")
-def telemetry_prometheus(request: Request):
-    """Proxy PromQL to Prometheus (Ops Telemetry tab; used from Next.js via ``DASHBOARD_BACKEND_URL``)."""
-    return prometheus_proxy(request)
+@app.get("/api/telemetry/golden-signals")
+def telemetry_golden_signals(
+    range_minutes: int = Query(30, ge=1, le=1440),
+    step_seconds: int = Query(15, ge=5, le=300),
+):
+    """Latency + traffic time series from HTTP request logs (Kafka / HTTP ingest → ``kafka_logs``)."""
+    return build_golden_signals(
+        cache, range_minutes=range_minutes, step_seconds=step_seconds
+    )
 
 
 @app.get("/api/telemetry/instance-stats")

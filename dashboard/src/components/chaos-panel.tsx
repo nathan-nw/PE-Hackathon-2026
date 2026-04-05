@@ -40,8 +40,6 @@ const FALLBACK_ALLOWED_SERVICES = [
   "url-shortener-a",
   "url-shortener-b",
   "load-balancer",
-  "prometheus",
-  "alertmanager",
   "db-backup",
   "dashboard-db",
   "dashboard-backend",

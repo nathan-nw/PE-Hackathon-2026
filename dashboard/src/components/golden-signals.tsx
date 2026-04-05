@@ -10,17 +10,10 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
-const POLL_MS = 15_000; // match Prometheus scrape interval
+const POLL_MS = 15_000;
 const RANGE_MINUTES = 30;
 
 // ── Types ──────────────────────────────────────────────────────────────────
-
-type TimeSeriesPoint = [number, string]; // [unix_ts, value_string]
-
-type PromResult = {
-  metric: Record<string, string>;
-  values: TimeSeriesPoint[];
-};
 
 type ChartSeries = {
   label: string;
@@ -41,25 +34,31 @@ type InstanceStats = {
   load_average_1m: number;
 };
 
-// ── Prometheus helpers ─────────────────────────────────────────────────────
+type GoldenSignalsPayload = {
+  latency?: {
+    p50?: [number, number][];
+    p95?: [number, number][];
+    p99?: [number, number][];
+  };
+  traffic?: {
+    total?: [number, number][];
+    by_status?: Record<string, [number, number][]>;
+  };
+  source?: string;
+  requests_in_window?: number;
+};
 
-async function promQueryRange(query: string, rangeMin: number, step: string): Promise<PromResult[]> {
-  const now = Math.floor(Date.now() / 1000);
-  const start = now - rangeMin * 60;
+async function fetchGoldenSignals(): Promise<GoldenSignalsPayload | null> {
   const params = new URLSearchParams({
-    type: "query_range",
-    query,
-    start: String(start),
-    end: String(now),
-    step,
+    range_minutes: String(RANGE_MINUTES),
+    step_seconds: "15",
   });
   try {
-    const res = await fetch(`/api/prometheus?${params}`);
-    if (!res.ok) return [];
-    const data = await res.json();
-    return data?.data?.result ?? [];
+    const res = await fetch(`/api/telemetry/golden-signals?${params}`);
+    if (!res.ok) return null;
+    return (await res.json()) as GoldenSignalsPayload;
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -73,7 +72,6 @@ async function fetchInstanceStats(): Promise<InstanceStats[]> {
     results.push(row);
   };
 
-  // Backend may return one JSON array (aggregated); direct LB returns one replica per request.
   for (let i = 0; i < 4; i++) {
     try {
       const res = await fetch("/api/visibility/instance-stats");
@@ -127,12 +125,12 @@ function MiniChart({
   const chartW = width - padLeft - padRight;
   const chartH = height - padTop - padBottom;
 
-  // Flatten all points to find axis ranges
   const allPoints = series.flatMap((s) => s.points);
   if (allPoints.length === 0) {
     return (
       <div className="text-muted-foreground flex items-center justify-center" style={{ height }}>
-        No data from Prometheus. Ensure services are running.
+        No HTTP request data in this window. Generate traffic to the API and ensure logs reach
+        dashboard-backend (Kafka or HTTP ingest).
       </div>
     );
   }
@@ -152,7 +150,6 @@ function MiniChart({
     return { y: yScale(v), label: fmt(v) };
   });
 
-  // X-axis time labels (every 5 minutes)
   const xLabels: { x: number; label: string }[] = [];
   const spanS = maxT - minT;
   const intervalS = Math.max(300, Math.ceil(spanS / 6 / 60) * 60);
@@ -201,7 +198,6 @@ function MiniChart({
         onMouseMove={handleMouseMove}
         onMouseLeave={() => setTooltip(null)}
       >
-        {/* Grid */}
         {gridLines.map((g, i) => (
           <g key={i}>
             <line x1={padLeft} y1={g.y} x2={padLeft + chartW} y2={g.y} stroke="currentColor" strokeOpacity={0.08} />
@@ -211,19 +207,16 @@ function MiniChart({
           </g>
         ))}
 
-        {/* X labels */}
         {xLabels.map((xl, i) => (
           <text key={i} x={xl.x} y={height - 8} textAnchor="middle" fontSize={10} fill="currentColor" fillOpacity={0.5}>
             {xl.label}
           </text>
         ))}
 
-        {/* Y label */}
         <text x={12} y={padTop - 8} fontSize={10} fill="currentColor" fillOpacity={0.6}>
           {yLabel}
         </text>
 
-        {/* Series */}
         {series.map((s) => {
           if (s.points.length === 0) return null;
           const path = s.points
@@ -241,7 +234,6 @@ function MiniChart({
           );
         })}
 
-        {/* Hover line */}
         {tooltip && (
           <line
             x1={((tooltip.x - (svgRef.current?.getBoundingClientRect().left ?? 0)) / (svgRef.current?.getBoundingClientRect().width ?? 1)) * width}
@@ -255,7 +247,6 @@ function MiniChart({
         )}
       </svg>
 
-      {/* Tooltip */}
       {tooltip && (
         <div
           className="pointer-events-none fixed z-50 rounded-lg border bg-popover px-3 py-2 text-popover-foreground shadow-md"
@@ -290,8 +281,6 @@ function ChartLegend({ series }: { series: ChartSeries[] }) {
   );
 }
 
-// ── Stat Box ───────────────────────────────────────────────────────────────
-
 function StatBox({ label, value, sub, alert }: { label: string; value: string; sub?: string; alert?: boolean }) {
   return (
     <div className="bg-muted/40 rounded-lg border p-3">
@@ -309,46 +298,24 @@ export function GoldenSignals() {
   const [trafficSeries, setTrafficSeries] = useState<ChartSeries[]>([]);
   const [saturation, setSaturation] = useState<InstanceStats[]>([]);
   const [loading, setLoading] = useState(true);
+  const [metaRequests, setMetaRequests] = useState<number | null>(null);
 
-  // Current values for stat boxes
   const [currentP50, setCurrentP50] = useState<number | null>(null);
   const [currentP95, setCurrentP95] = useState<number | null>(null);
   const [currentP99, setCurrentP99] = useState<number | null>(null);
   const [currentRps, setCurrentRps] = useState<number | null>(null);
 
   const fetchData = useCallback(async () => {
-    const step = "15s";
+    const payload = await fetchGoldenSignals();
+    setMetaRequests(payload?.requests_in_window ?? null);
 
-    const [p50Raw, p95Raw, p99Raw, rpsRaw, rpsPerStatusRaw] = await Promise.all([
-      promQueryRange(
-        'histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket[1m])) by (le))',
-        RANGE_MINUTES, step
-      ),
-      promQueryRange(
-        'histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[1m])) by (le))',
-        RANGE_MINUTES, step
-      ),
-      promQueryRange(
-        'histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[1m])) by (le))',
-        RANGE_MINUTES, step
-      ),
-      promQueryRange(
-        'sum(rate(http_requests_total[1m]))',
-        RANGE_MINUTES, step
-      ),
-      promQueryRange(
-        'sum(rate(http_requests_total[1m])) by (status_code)',
-        RANGE_MINUTES, step
-      ),
-    ]);
+    const lat = payload?.latency;
+    const toPoints = (pairs: [number, number][] | undefined) =>
+      (pairs ?? []).map(([t, v]) => ({ t, v })).filter((p) => isFinite(p.v));
 
-    // Parse latency series (convert seconds to ms)
-    const toMs = (results: PromResult[]): { t: number; v: number }[] =>
-      (results[0]?.values ?? []).map(([t, v]) => ({ t, v: parseFloat(v) * 1000 })).filter((p) => isFinite(p.v));
-
-    const p50Points = toMs(p50Raw);
-    const p95Points = toMs(p95Raw);
-    const p99Points = toMs(p99Raw);
+    const p50Points = toPoints(lat?.p50);
+    const p95Points = toPoints(lat?.p95);
+    const p99Points = toPoints(lat?.p99);
 
     setLatencySeries([
       { label: "p50", color: "#22c55e", points: p50Points },
@@ -360,26 +327,27 @@ export function GoldenSignals() {
     if (p95Points.length > 0) setCurrentP95(p95Points[p95Points.length - 1].v);
     if (p99Points.length > 0) setCurrentP99(p99Points[p99Points.length - 1].v);
 
-    // Parse traffic series
-    const totalRps = (rpsRaw[0]?.values ?? []).map(([t, v]) => ({ t, v: parseFloat(v) })).filter((p) => isFinite(p.v));
+    const tr = payload?.traffic;
+    const totalRps = (tr?.total ?? []).map(([t, v]) => ({ t, v })).filter((p) => isFinite(p.v));
 
-    // Status code breakdown for traffic
     const statusColors: Record<string, string> = {
-      "200": "#22c55e", "201": "#16a34a", "302": "#3b82f6",
-      "400": "#f59e0b", "404": "#eab308", "429": "#f97316",
-      "500": "#ef4444", "503": "#dc2626",
+      "200": "#22c55e",
+      "201": "#16a34a",
+      "302": "#3b82f6",
+      "400": "#f59e0b",
+      "404": "#eab308",
+      "429": "#f97316",
+      "500": "#ef4444",
+      "503": "#dc2626",
     };
 
-    const trafficByStatus: ChartSeries[] = rpsPerStatusRaw.map((r) => {
-      const code = r.metric.status_code || "unknown";
-      return {
-        label: `${code}`,
-        color: statusColors[code] || "#94a3b8",
-        points: r.values.map(([t, v]) => ({ t, v: parseFloat(v) })).filter((p) => isFinite(p.v)),
-      };
-    }).filter((s) => s.points.length > 0);
+    const byStatus = tr?.by_status ?? {};
+    const trafficByStatus: ChartSeries[] = Object.entries(byStatus).map(([code, pairs]) => ({
+      label: code,
+      color: statusColors[code] || "#94a3b8",
+      points: (pairs ?? []).map(([t, v]) => ({ t, v })).filter((p) => isFinite(p.v)),
+    })).filter((s) => s.points.length > 0);
 
-    // If we have per-status, use that; otherwise use total
     if (trafficByStatus.length > 0) {
       setTrafficSeries(trafficByStatus);
     } else {
@@ -388,7 +356,6 @@ export function GoldenSignals() {
 
     if (totalRps.length > 0) setCurrentRps(totalRps[totalRps.length - 1].v);
 
-    // Saturation: fetch instance stats
     const stats = await fetchInstanceStats();
     setSaturation(stats);
 
@@ -406,13 +373,15 @@ export function GoldenSignals() {
 
   return (
     <div className="space-y-4">
-      {/* Latency */}
       <Card>
         <CardHeader>
           <CardTitle>Latency</CardTitle>
           <CardDescription>
-            Request duration percentiles (p50, p95, p99) over the last {RANGE_MINUTES} minutes.
-            Source: Prometheus <code>http_request_duration_seconds</code> histogram.
+            Request duration percentiles (p50, p95, p99) over the last {RANGE_MINUTES} minutes, computed from
+            structured HTTP logs (same pipeline as the Logs tab).
+            {metaRequests != null && metaRequests > 0 ? (
+              <span className="text-muted-foreground"> — {metaRequests} requests in window.</span>
+            ) : null}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -441,13 +410,12 @@ export function GoldenSignals() {
         </CardContent>
       </Card>
 
-      {/* Traffic */}
       <Card>
         <CardHeader>
           <CardTitle>Traffic</CardTitle>
           <CardDescription>
-            Requests per second by status code over the last {RANGE_MINUTES} minutes.
-            Source: Prometheus <code>http_requests_total</code> counter.
+            Estimated requests per second by status code (bucketed from HTTP log lines) over the last {RANGE_MINUTES}{" "}
+            minutes.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -457,7 +425,7 @@ export function GoldenSignals() {
               label="Peak req/s (visible)"
               value={
                 trafficSeries.length > 0
-                  ? Math.max(...trafficSeries.flatMap((s) => s.points.map((p) => p.v))).toFixed(1)
+                  ? Math.max(...trafficSeries.flatMap((s) => s.points.map((p) => p.v)), 0).toFixed(1)
                   : "—"
               }
             />
@@ -477,7 +445,6 @@ export function GoldenSignals() {
         </CardContent>
       </Card>
 
-      {/* Saturation */}
       <Card>
         <CardHeader>
           <CardTitle>Saturation</CardTitle>

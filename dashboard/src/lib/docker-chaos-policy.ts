@@ -19,8 +19,6 @@ const DEFAULT_ALLOWED_SERVICES = new Set([
   "url-shortener-a",
   "url-shortener-b",
   "load-balancer",
-  "prometheus",
-  "alertmanager",
   "db-backup",
   "dashboard-db",
   "dashboard-backend",

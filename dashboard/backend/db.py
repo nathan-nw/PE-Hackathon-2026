@@ -359,6 +359,45 @@ def flush_logs(logs: list[dict[str, Any]]) -> int:
             conn.close()
 
 
+def fetch_http_telemetry_rows(window_minutes: int) -> list[dict[str, Any]] | None:
+    """HTTP log rows for Telemetry golden-signals (latency percentiles + RPS by status)."""
+    conn = None
+    try:
+        conn = get_connection()
+        cutoff = f"{window_minutes} minutes"
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT timestamp, status_code, duration_ms, request_id
+                    FROM kafka_logs
+                    WHERE timestamp >= NOW() - %s::interval
+                      AND status_code IS NOT NULL
+                      AND duration_ms IS NOT NULL
+                    ORDER BY timestamp ASC
+                    """,
+                    (cutoff,),
+                )
+                rows: list[dict[str, Any]] = []
+                for ts, status_code, duration_ms, request_id in cur.fetchall():
+                    ts_iso = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
+                    rows.append(
+                        {
+                            "timestamp": ts_iso,
+                            "status_code": int(status_code),
+                            "duration_ms": float(duration_ms),
+                            "request_id": (request_id or "") or "",
+                        }
+                    )
+        return rows
+    except Exception as exc:
+        logger.warning("fetch_http_telemetry_rows failed: %s", exc)
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
 def query_error_buckets(
     window_minutes: int = 60, log_limit: int = 5000
 ) -> dict[str, Any] | None:

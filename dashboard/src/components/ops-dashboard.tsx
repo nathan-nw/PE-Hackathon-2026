@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -30,13 +30,7 @@ import { RailwayOnlineStatusBadge } from "@/components/railway-online-status-bad
 import { cn } from "@/lib/utils";
 import type { RailwayOnlineStatus } from "@/lib/railway-visibility";
 import type { HeartbeatPingResult } from "@/lib/service-heartbeat";
-import {
-  ChevronDown,
-  ChevronRight,
-  ExternalLink,
-  Loader2,
-  RefreshCw,
-} from "lucide-react";
+import { ChevronDown, ChevronRight, Loader2, RefreshCw } from "lucide-react";
 
 const POLL_MS = 12_000;
 const LOG_POLL_MS = 2_500;
@@ -186,12 +180,6 @@ export function OpsDashboard() {
   const [pgLoading, setPgLoading] = useState(false);
   const [pgError, setPgError] = useState<string | null>(null);
   const pgReqGen = useRef(0);
-
-  const promUrl =
-    process.env.NEXT_PUBLIC_PROMETHEUS_URL ?? "http://localhost:9090";
-  const amPublicUrl =
-    process.env.NEXT_PUBLIC_ALERTMANAGER_PUBLIC_URL ??
-    "http://localhost:9093";
 
   const fetchAll = useCallback(async () => {
     setError(null);
@@ -738,52 +726,6 @@ export function OpsDashboard() {
 
         <TabsContent value="telemetry" keepMounted>
           <GoldenSignals />
-          <div className="mt-4 grid gap-4 sm:grid-cols-2">
-            <Card>
-              <CardHeader>
-                <CardTitle>Prometheus</CardTitle>
-                <CardDescription>
-                  Metrics and PromQL console (opens in a new tab).
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <a
-                  href={`${promUrl.replace(/\/$/, "")}/graph`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className={cn(
-                    buttonVariants({ variant: "outline", size: "sm" }),
-                    "inline-flex gap-1.5"
-                  )}
-                >
-                  Open Prometheus
-                  <ExternalLink className="size-3.5" />
-                </a>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle>Alertmanager</CardTitle>
-                <CardDescription>
-                  Silences and alert groups in the UI.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <a
-                  href={amPublicUrl.replace(/\/$/, "")}
-                  target="_blank"
-                  rel="noreferrer"
-                  className={cn(
-                    buttonVariants({ variant: "outline", size: "sm" }),
-                    "inline-flex gap-1.5"
-                  )}
-                >
-                  Open Alertmanager
-                  <ExternalLink className="size-3.5" />
-                </a>
-              </CardContent>
-            </Card>
-          </div>
         </TabsContent>
 
         <TabsContent value="incidents" keepMounted>
