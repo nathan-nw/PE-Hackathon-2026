@@ -223,9 +223,7 @@ def list_url_events(url_id):
     except Url.DoesNotExist:
         return jsonify({"error": "URL not found"}), 404
 
-    events = (
-        Event.select().where(Event.url_id == url_id).order_by(Event.timestamp.desc())
-    )
+    events = Event.select().where(Event.url_id == url_id).order_by(Event.timestamp.desc())
     return jsonify([model_to_dict(e, backrefs=False) for e in events])
 
 

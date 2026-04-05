@@ -22,9 +22,7 @@ from app.metrics import HTTP_REQUEST_DURATION, HTTP_REQUESTS
 logger = logging.getLogger(__name__)
 
 # Paths not counted toward avg latency / requests_observed in /api/instance-stats (still in Prometheus).
-_EXCLUDE_FROM_INSTANCE_STATS = frozenset(
-    {"/api/instance-stats", "/metrics", "/health", "/live", "/ready"}
-)
+_EXCLUDE_FROM_INSTANCE_STATS = frozenset({"/api/instance-stats", "/metrics", "/health", "/live", "/ready"})
 
 
 def register_middleware(app):
