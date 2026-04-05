@@ -44,7 +44,9 @@ type DockerContainer = {
 };
 
 type DockerResponse = {
+  source?: "docker" | "railway";
   project: string;
+  projectId?: string;
   containers: DockerContainer[];
   error?: string;
 };
@@ -299,13 +301,16 @@ export function OpsDashboard() {
     );
   }, [docker]);
 
+  const showDockerStats =
+    includeStats && docker?.source !== "railway";
+
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-8">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Ops</h1>
           <p className="text-muted-foreground text-sm">
-            Compose, Kubernetes, Alertmanager, and Kafka log stream (
+            Compose / Railway, Kubernetes, Alertmanager, and Kafka log stream (
             {mainTab === "logs"
               ? `logs ~${LOG_POLL_MS / 1000}s`
               : `${POLL_MS / 1000}s`}{" "}
@@ -313,15 +318,17 @@ export function OpsDashboard() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <label className="text-muted-foreground flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={includeStats}
-              onChange={(e) => setIncludeStats(e.target.checked)}
-              className="accent-primary rounded border"
-            />
-            Docker stats
-          </label>
+          {docker?.source !== "railway" && (
+            <label className="text-muted-foreground flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={includeStats}
+                onChange={(e) => setIncludeStats(e.target.checked)}
+                className="accent-primary rounded border"
+              />
+              Docker stats
+            </label>
+          )}
           <label className="text-muted-foreground flex items-center gap-2 text-sm">
             <input
               type="checkbox"
@@ -378,12 +385,39 @@ export function OpsDashboard() {
         <TabsContent value="containers" className="space-y-2">
           <Card>
             <CardHeader>
-              <CardTitle>Docker</CardTitle>
+              <CardTitle>
+                {docker?.source === "railway" ? "Railway services" : "Docker"}
+              </CardTitle>
               <CardDescription>
-                Project{" "}
-                <span className="text-foreground font-mono">
-                  {docker?.project ?? "—"}
-                </span>
+                {docker?.source === "railway" ? (
+                  <>
+                    Project{" "}
+                    <span className="text-foreground font-mono">
+                      {docker?.project ?? "—"}
+                    </span>
+                    {docker?.projectId && (
+                      <>
+                        {" "}
+                        <span className="text-muted-foreground">·</span>{" "}
+                        <a
+                          className="text-primary hover:underline"
+                          href={`https://railway.com/project/${docker.projectId}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open in Railway
+                        </a>
+                      </>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    Compose project{" "}
+                    <span className="text-foreground font-mono">
+                      {docker?.project ?? "—"}
+                    </span>
+                  </>
+                )}
                 {docker?.error && (
                   <span className="text-destructive"> — {docker.error}</span>
                 )}
@@ -394,12 +428,14 @@ export function OpsDashboard() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Service</TableHead>
-                    <TableHead>Container</TableHead>
+                    <TableHead>
+                      {docker?.source === "railway" ? "Deployment" : "Container"}
+                    </TableHead>
                     <TableHead>Image</TableHead>
                     <TableHead>State</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="w-[120px]">App logs</TableHead>
-                    {includeStats && (
+                    {showDockerStats && (
                       <>
                         <TableHead>CPU %</TableHead>
                         <TableHead>Memory</TableHead>
@@ -411,11 +447,12 @@ export function OpsDashboard() {
                   {sortedContainers.length === 0 && (
                     <TableRow>
                       <TableCell
-                        colSpan={includeStats ? 9 : 6}
+                        colSpan={showDockerStats ? 9 : 6}
                         className="text-muted-foreground"
                       >
-                        No containers for this Compose project, or Docker API
-                        unreachable.
+                        {docker?.source === "railway"
+                          ? "No Railway services returned, or the Railway API request failed (check dashboard service variables: RAILWAY_PROJECT_ID, RAILWAY_ENVIRONMENT_ID, and a token)."
+                          : "No containers for this Compose project, or Docker API unreachable."}
                       </TableCell>
                     </TableRow>
                   )}
@@ -452,7 +489,7 @@ export function OpsDashboard() {
                           );
                         })()}
                       </TableCell>
-                      {includeStats && (
+                      {showDockerStats && (
                         <>
                           <TableCell>
                             {c.cpuPercent != null

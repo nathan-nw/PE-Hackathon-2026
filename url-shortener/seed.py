@@ -22,7 +22,7 @@ import sys
 if "DATABASE_URL" in os.environ and not os.environ.get("DATABASE_URL", "").strip():
     del os.environ["DATABASE_URL"]
 
-from peewee import chunked
+from peewee import PostgresqlDatabase, chunked
 
 from app import create_app
 from app.database import db
@@ -31,6 +31,26 @@ from app.models.url import Url
 from app.models.user import User
 
 DEFAULT_CSV_DIR = os.path.join(os.path.dirname(__file__), "csv_data")
+
+
+def _reset_postgres_serial_sequences():
+    """Advance SERIAL sequences after INSERTs with explicit ids (CSV seed).
+
+    PostgreSQL does not bump the sequence when rows are inserted with explicit primary keys,
+    so the next DEFAULT can collide (e.g. duplicate key on urls_pkey). Safe to call anytime.
+    """
+    underlying = getattr(db, "obj", db)
+    if not isinstance(underlying, PostgresqlDatabase):
+        return
+    for table in ("users", "urls", "events"):
+        db.execute_sql(
+            f"""
+            SELECT setval(
+                pg_get_serial_sequence('{table}', 'id'),
+                COALESCE((SELECT MAX(id) FROM {table}), 0)
+            )
+            """
+        )
 
 
 def _insert_many(model, batch, merge: bool):
@@ -108,6 +128,7 @@ def seed(csv_dir, drop=False, merge: bool = False, if_empty: bool = False):
     load_users(csv_dir, merge=merge)
     load_urls(csv_dir, merge=merge)
     load_events(csv_dir, merge=merge)
+    _reset_postgres_serial_sequences()
     print("\nDone! Database seeded successfully.")
 
 
@@ -134,9 +155,14 @@ if __name__ == "__main__":
         dest="if_empty",
         help="Do nothing if users table already has at least one row (ignored with --drop)",
     )
+    parser.add_argument(
+        "--fix-sequences-only",
+        action="store_true",
+        help="PostgreSQL only: realign SERIAL sequences to MAX(id). Use after CSV seed with explicit ids.",
+    )
     args = parser.parse_args()
 
-    if not os.path.isdir(args.csv_dir):
+    if not args.fix_sequences_only and not os.path.isdir(args.csv_dir):
         print(f"Error: CSV directory not found: {args.csv_dir}")
         sys.exit(1)
 
@@ -144,12 +170,20 @@ if __name__ == "__main__":
     with app.app_context():
         db.connect(reuse_if_open=True)
         try:
-            seed(
-                args.csv_dir,
-                drop=args.drop,
-                merge=args.merge,
-                if_empty=args.if_empty,
-            )
+            if args.fix_sequences_only:
+                underlying = getattr(db, "obj", db)
+                if not isinstance(underlying, PostgresqlDatabase):
+                    print("Not using PostgreSQL; nothing to do.")
+                else:
+                    _reset_postgres_serial_sequences()
+                    print("PostgreSQL serial sequences updated (users, urls, events).")
+            else:
+                seed(
+                    args.csv_dir,
+                    drop=args.drop,
+                    merge=args.merge,
+                    if_empty=args.if_empty,
+                )
         finally:
             if not db.is_closed():
                 db.close()

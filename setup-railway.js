@@ -445,6 +445,11 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
       DASHBOARD_BACKEND_URL: "https://" + varRef("dashboard-backend", "RAILWAY_PUBLIC_DOMAIN"),
       VISIBILITY_K8S_ENABLED: "false",
       VISIBILITY_COMPOSE_PROJECT: "pe-hackathon-2026",
+      // Ops tab: list services via Railway GraphQL (no Docker socket in the cloud).
+      RAILWAY_PROJECT_ID: projectId,
+      RAILWAY_ENVIRONMENT_ID: environmentId,
+      VISIBILITY_ALERTMANAGER_DISABLED: "1",
+      // Add RAILWAY_PROJECT_TOKEN or RAILWAY_API_TOKEN in the dashboard service manually (secret).
     });
   }
 

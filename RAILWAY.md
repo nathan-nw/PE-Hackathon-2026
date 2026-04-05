@@ -79,6 +79,10 @@ Kafka, Zookeeper, Prometheus, Alertmanager, and `db-backup` are **not** provisio
 
 Older setups used one API service. This repo now expects **`url-shortener-a`**, **`url-shortener-b`**, and **`load-balancer`**. Add the new Git-linked services (or run `.\scripts\railway-provision.ps1` on a fresh project), then **`node setup-railway.js`**. Remove or disable the old **`url-shortener`** service to avoid duplicate deploys and confusion.
 
+## Dashboard Ops tab (hosted)
+
+There is no Docker socket on Railway, so the Next.js dashboard cannot use **`dockerode`**. With **`SYNC_VARIABLES=1`**, **`setup-railway.js`** sets **`RAILWAY_PROJECT_ID`**, **`RAILWAY_ENVIRONMENT_ID`**, and **`VISIBILITY_ALERTMANAGER_DISABLED=1`** on the **`dashboard`** service. Add a **[project token](https://docs.railway.com/reference/public-api#project-token)** or account **[API token](https://railway.com/account/tokens)** as **`RAILWAY_PROJECT_TOKEN`** or **`RAILWAY_API_TOKEN`** (service variable, marked secret). The Ops **Containers** tab then lists Railway services and each service’s latest **deployment** status via the [public GraphQL API](https://docs.railway.com/reference/public-api). Redeploy the dashboard after changing variables.
+
 ## dashboard_db
 
 If `dashboard-backend` uses the same Postgres instance as the API, create a second database once (e.g. in Railway’s Postgres query UI): `CREATE DATABASE dashboard_db;`. With **`SYNC_VARIABLES=1`**, `setup-railway.js` sets **`DASHBOARD_DATABASE_URL`** to the same private URL as the API and **`DASHBOARD_DB_NAME=dashboard_db`** so the app connects to that database (see `dashboard/backend/db.py`).

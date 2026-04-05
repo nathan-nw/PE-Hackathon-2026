@@ -23,7 +23,21 @@ function alertmanagerBaseUrl(): string {
   return "http://127.0.0.1:9093";
 }
 
+function alertsDisabled(): boolean {
+  const v = process.env.VISIBILITY_ALERTMANAGER_DISABLED;
+  return v === "1" || v === "true";
+}
+
 export async function GET() {
+  if (alertsDisabled()) {
+    return NextResponse.json({
+      alerts: [],
+      source: "disabled" as const,
+      message:
+        "Alertmanager is not deployed on Railway; enable Compose-style alerting or set VISIBILITY_ALERTMANAGER_URL.",
+    });
+  }
+
   const base = alertmanagerBaseUrl();
   const url = `${base}/api/v2/alerts`;
 
@@ -75,7 +89,12 @@ export async function GET() {
           ? "Alertmanager request timed out (is it running on :9093?)"
           : e.message
         : "Unknown error";
-    return NextResponse.json({ error: message, alerts: [] }, { status: 503 });
+    // 200 so the Ops UI loads; message explains missing Alertmanager (typical on Railway).
+    return NextResponse.json({
+      error: message,
+      alerts: [],
+      source: "unreachable" as const,
+    });
   } finally {
     if (abortTimer) clearTimeout(abortTimer);
   }

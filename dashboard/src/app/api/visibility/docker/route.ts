@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { ContainerStats } from "dockerode";
 import { getDockerConnectionOptions } from "@/lib/docker-options";
+import {
+  fetchRailwayVisibilityRows,
+  railwayIdsConfigured,
+  railwayVisibilityConfigured,
+} from "@/lib/railway-visibility";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,6 +32,28 @@ export async function GET(request: NextRequest) {
   const stats = request.nextUrl.searchParams.get("stats") === "1";
   const project =
     process.env.VISIBILITY_COMPOSE_PROJECT || "pe-hackathon-2026";
+
+  if (railwayIdsConfigured()) {
+    if (!railwayVisibilityConfigured()) {
+      const pid = process.env.RAILWAY_PROJECT_ID ?? "";
+      return NextResponse.json({
+        source: "railway" as const,
+        project: pid,
+        projectId: pid,
+        containers: [],
+        error:
+          "Add RAILWAY_PROJECT_TOKEN (project token) or RAILWAY_API_TOKEN to the dashboard service variables so the Ops tab can call the Railway API (no Docker socket on Railway).",
+      });
+    }
+    const r = await fetchRailwayVisibilityRows();
+    return NextResponse.json({
+      source: "railway" as const,
+      project: r.project,
+      projectId: r.projectId,
+      containers: r.containers,
+      error: r.error,
+    });
+  }
 
   try {
     const docker = await getDocker();
@@ -80,11 +107,15 @@ export async function GET(request: NextRequest) {
       })
     );
 
-    return NextResponse.json({ project, containers: rows });
+    return NextResponse.json({
+      source: "docker" as const,
+      project,
+      containers: rows,
+    });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Unknown error";
     return NextResponse.json(
-      { error: message, project, containers: [] },
+      { source: "docker" as const, error: message, project, containers: [] },
       { status: 503 }
     );
   }
