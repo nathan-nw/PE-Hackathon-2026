@@ -376,8 +376,9 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
   // url-shortener-a / url-shortener-b: same env as compose replicas (shared DB; distinct INSTANCE_ID).
   // Explicit PORT so ${{ url-shortener-a.PORT }} resolves on the load-balancer (runtime-only PORT is
   // not referenceable from other services — see Railway variables docs / Help Station).
+  // Use 8080 to align with Railway’s common web port (Compose/local image default remains 5000 via Dockerfile).
   const urlShortenerBase = {
-    PORT: "5000",
+    PORT: "8080",
     DATABASE_URL: varRef(pg, dbUrlKey),
     FLASK_DEBUG: "false",
     KAFKA_LOG_TOPIC: "app-logs",
@@ -416,7 +417,7 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
     await upsert("load-balancer", {
       URL_SHORTENER_A_HOST: varRef("url-shortener-a", "RAILWAY_PRIVATE_DOMAIN"),
       URL_SHORTENER_B_HOST: varRef("url-shortener-b", "RAILWAY_PRIVATE_DOMAIN"),
-      // Gunicorn binds to Railway's PORT (runtime) — not the Dockerfile's 5000 default.
+      // Gunicorn binds to Railway's PORT (synced above — typically 8080 on Railway).
       URL_SHORTENER_A_PORT: varRef("url-shortener-a", "PORT"),
       URL_SHORTENER_B_PORT: varRef("url-shortener-b", "PORT"),
     });

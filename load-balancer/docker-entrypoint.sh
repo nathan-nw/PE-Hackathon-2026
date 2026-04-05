@@ -23,7 +23,7 @@ if is_railway && [ -n "${URL_SHORTENER_A_HOST:-}" ]; then
   if [ -z "${URL_SHORTENER_A_PORT:-}" ] && [ -z "${URL_SHORTENER_B_PORT:-}" ] && [ -z "${URL_SHORTENER_PORT:-}" ]; then
     echo "ERROR: Railway load-balancer needs URL_SHORTENER_A_PORT and URL_SHORTENER_B_PORT (or URL_SHORTENER_PORT)." >&2
     echo "       Runtime PORT is not referenceable across services unless PORT is set on each API service." >&2
-    echo "       Run: SYNC_VARIABLES=1 node setup-railway.js  (sets PORT=5000 on APIs + port refs on this service)" >&2
+    echo "       Run: SYNC_VARIABLES=1 node setup-railway.js  (sets PORT on APIs + port refs on this service)" >&2
     exit 1
   fi
 fi
