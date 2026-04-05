@@ -296,15 +296,31 @@ function latestMetricValue(
   return best.value;
 }
 
+/** Peak sample in the window — better for CPU/RAM *usage* than latest (often ~0 between spikes). */
+function maxMetricValue(
+  values: { ts: string; value: number }[] | null | undefined
+): number | undefined {
+  if (!values?.length) return undefined;
+  let m = -Infinity;
+  for (const x of values) {
+    const v = x.value;
+    if (typeof v === "number" && !Number.isNaN(v)) m = Math.max(m, v);
+  }
+  return m === -Infinity ? undefined : m;
+}
+
 /**
- * Latest CPU/memory per service from Railway observability (GraphQL `metrics`).
- * Requires the same token scope as other project queries.
+ * CPU/memory per service from Railway observability (GraphQL `metrics`).
+ * Uses peak usage (max) over ~45m for CPU/RAM *usage*; latest sample for limits — latest-only
+ * usage was often ~0% for bursty services. Requires the same token scope as other project queries.
  */
 async function fetchRailwayServiceMetricsByServiceId(
   environmentId: string
 ): Promise<Map<string, ServiceMetricAcc>> {
   const out = new Map<string, ServiceMetricAcc>();
-  const startDate = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+  // Longer window + max usage samples — Railway's latest point is often near-zero for bursty web workloads.
+  const lookbackMin = 45;
+  const startDate = new Date(Date.now() - lookbackMin * 60 * 1000).toISOString();
   let data: MetricsQueryData;
   try {
     data = await gql<MetricsQueryData>(Q_ENV_METRICS, {
@@ -333,9 +349,13 @@ async function fetchRailwayServiceMetricsByServiceId(
       acc = {};
       out.set(sid, acc);
     }
-    const v = latestMetricValue(row.values ?? undefined);
-    if (v == null || Number.isNaN(v)) continue;
     const m = row.measurement;
+    const vals = row.values ?? undefined;
+    const v =
+      m === "CPU_LIMIT" || m === "MEMORY_LIMIT_GB"
+        ? latestMetricValue(vals)
+        : maxMetricValue(vals);
+    if (v == null || Number.isNaN(v)) continue;
     if (m === "CPU_USAGE") acc.cpuUsage = v;
     else if (m === "CPU_LIMIT") acc.cpuLimit = v;
     else if (m === "MEMORY_USAGE_GB") acc.memUsageGb = v;
@@ -361,6 +381,9 @@ function applyRailwayMetricsToRows(
       acc.cpuLimit > 0
     ) {
       cpuPercent = (acc.cpuUsage / acc.cpuLimit) * 100;
+    } else if (acc.cpuUsage != null && (acc.cpuLimit == null || acc.cpuLimit <= 0)) {
+      // Some plans omit a usable limit; show usage as % of a single core (matches "share" mental model).
+      cpuPercent = Math.min(100, acc.cpuUsage * 100);
     }
 
     let memUsage: number | undefined;

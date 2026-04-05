@@ -212,7 +212,8 @@ const SERVICE_SPECS = [
     name: "prometheus",
     rootDirectory: "prometheus",
     railwayConfigFile: "/prometheus/railway.toml",
-    watchPatterns: ["/prometheus/**"],
+    // Broad patterns so Git pushes are not SKIPPED when only other folders changed (see prometheus/railway.toml).
+    watchPatterns: ["/**", "/*", "/.*"],
   },
   {
     name: "railway-watchdog",

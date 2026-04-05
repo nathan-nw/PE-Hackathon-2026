@@ -500,7 +500,7 @@ export function OpsDashboard() {
                         </TableCell>
                         <TableCell>
                           {c.cpuPercent != null
-                            ? `${c.cpuPercent.toFixed(1)}%`
+                            ? `${(c.cpuPercent < 1 ? c.cpuPercent.toFixed(2) : c.cpuPercent.toFixed(1))}%`
                             : "—"}
                         </TableCell>
                         <TableCell className="text-xs">

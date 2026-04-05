@@ -32,8 +32,9 @@ def increment_request_count() -> None:
 def get_instance_stats() -> dict:
     """Snapshot for GET /api/instance-stats (JSON)."""
     proc = psutil.Process()
-    # Short interval gives a meaningful CPU% without blocking too long on each poll.
-    cpu_pct = round(proc.cpu_percent(interval=0.05), 1)
+    # Blocking interval avoids the meaningless first reading from non-blocking cpu_percent.
+    # Slightly longer window captures bursty Gunicorn workers better than 50ms.
+    cpu_pct = round(proc.cpu_percent(interval=0.12), 1)
     mem = proc.memory_info()
     rss_mb = round(mem.rss / (1024 * 1024), 1)
     mem_pct = round(proc.memory_percent(), 1)
