@@ -56,6 +56,40 @@ def create_user():
     return jsonify(model_to_dict(user, backrefs=False)), 201
 
 
+@users_bp.route("/users/<int:user_id>", methods=["PUT"])
+def update_user(user_id):
+    try:
+        user = User.get_by_id(user_id)
+    except User.DoesNotExist:
+        return jsonify({"error": "User not found"}), 404
+
+    data = request.get_json(silent=True)
+    if data is None:
+        return jsonify({"error": "Invalid or missing JSON body"}), 400
+
+    if "username" in data:
+        user.username = data["username"]
+    if "email" in data:
+        user.email = data["email"]
+    try:
+        user.save()
+    except Exception:
+        return jsonify({"error": "Username or email already taken"}), 409
+
+    return jsonify(model_to_dict(user, backrefs=False))
+
+
+@users_bp.route("/users/<int:user_id>", methods=["DELETE"])
+def delete_user(user_id):
+    try:
+        user = User.get_by_id(user_id)
+    except User.DoesNotExist:
+        return jsonify({"error": "User not found"}), 404
+
+    user.delete_instance()
+    return jsonify({"message": "User deleted"}), 200
+
+
 @users_bp.route("/users/bulk", methods=["POST"])
 def bulk_load_users():
     # Accept JSON body with {"file": "users.csv"} or multipart file upload
@@ -113,4 +147,12 @@ def bulk_load_users():
     with contextlib.suppress(Exception):
         db.execute_sql("SELECT setval('users_id_seq', (SELECT COALESCE(MAX(id), 1) FROM users));")
 
-    return jsonify({"message": f"Imported {created} users", "row_count": created, "skipped": skipped}), 201
+    return jsonify(
+        {
+            "message": f"Imported {created} users",
+            "count": created,
+            "imported": created,
+            "row_count": len(rows),
+            "skipped": skipped,
+        }
+    ), 201
