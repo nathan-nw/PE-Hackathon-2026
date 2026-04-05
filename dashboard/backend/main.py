@@ -10,12 +10,13 @@ import logging
 import os
 import threading
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from cache import LogCache
-from db import init_db
+from db import count_kafka_logs, fetch_logs_from_db, get_connection, init_db
 from kafka_consumer import run_consumer
 
 logging.basicConfig(
@@ -39,6 +40,40 @@ CACHE_MAX_ENTRIES = int(os.environ.get("CACHE_MAX_ENTRIES", "1000"))
 DB_FLUSH_INTERVAL = float(os.environ.get("DB_FLUSH_INTERVAL", "30"))
 
 cache = LogCache(max_entries=CACHE_MAX_ENTRIES)
+
+
+def _log_entry_key(entry: dict[str, Any]) -> tuple:
+    return (
+        str(entry.get("timestamp", "")),
+        str(entry.get("message", "")),
+        str(entry.get("instance_id", "")),
+        str(entry.get("logger", "")),
+    )
+
+
+def _merge_logs(
+    memory_logs: list[dict[str, Any]],
+    db_logs: list[dict[str, Any]],
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Combine ring buffer and DB rows, dedupe identical lines, newest first."""
+    combined = list(memory_logs) + list(db_logs)
+
+    def ts_sort_key(e: dict[str, Any]) -> str:
+        return str(e.get("timestamp") or "")
+
+    combined.sort(key=ts_sort_key, reverse=True)
+    seen: set[tuple] = set()
+    out: list[dict[str, Any]] = []
+    for e in combined:
+        k = _log_entry_key(e)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(e)
+        if len(out) >= limit:
+            break
+    return out
 
 
 @asynccontextmanager
@@ -78,14 +113,30 @@ app.add_middleware(
 @app.get("/api/health")
 def health():
     st = cache.get_stats()
-    return {
+    db_ok = False
+    try:
+        conn = get_connection()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+        conn.close()
+        db_ok = True
+    except Exception:
+        db_ok = False
+    out: dict[str, Any] = {
         "status": "ok",
+        "service": "dashboard-backend",
         "kafka_topic": KAFKA_TOPIC,
         "kafka_enabled": KAFKA_ENABLED,
         "http_ingest_enabled": bool(LOG_INGEST_TOKEN) or ALLOW_INSECURE_LOG_INGEST,
         "log_cache_ingested": st["total_ingested"],
         "log_cache_buffered": st["buffered_logs"],
+        "database_connected": db_ok,
     }
+    n = count_kafka_logs()
+    if n is not None:
+        out["persisted_kafka_logs"] = n
+    return out
 
 
 @app.post("/api/ingest")
@@ -140,22 +191,58 @@ def get_logs(
     level: str | None = Query(None),
     instance_id: str | None = Query(None),
     search: str | None = Query(None, description="Case-insensitive substring in message/logger/path"),
+    source: str = Query(
+        "merged",
+        description="memory | db | merged — merged combines ring buffer + Postgres kafka_logs",
+    ),
 ):
-    """Return recent log entries from the cache (newest first)."""
-    return {
-        "logs": cache.get_logs(
-            limit=limit,
-            level=level,
-            instance_id=instance_id,
-            search=search,
-        ),
-    }
+    """Return recent logs: memory-only, DB-only, or merged (default; survives restarts)."""
+    src = source.lower().strip() if source else "merged"
+    if src not in ("memory", "db", "merged"):
+        src = "merged"
+    if src == "memory":
+        return {
+            "logs": cache.get_logs(
+                limit=limit,
+                level=level,
+                instance_id=instance_id,
+                search=search,
+            ),
+            "source": src,
+        }
+    if src == "db":
+        return {
+            "logs": fetch_logs_from_db(
+                limit=limit,
+                level=level,
+                instance_id=instance_id,
+                search=search,
+            ),
+            "source": src,
+        }
+    mem = cache.get_logs(
+        limit=min(2000, CACHE_MAX_ENTRIES),
+        level=level,
+        instance_id=instance_id,
+        search=search,
+    )
+    db_rows = fetch_logs_from_db(
+        limit=min(2000, max(limit * 3, 100)),
+        level=level,
+        instance_id=instance_id,
+        search=search,
+    )
+    return {"logs": _merge_logs(mem, db_rows, limit), "source": "merged"}
 
 
 @app.get("/api/stats")
 def get_stats():
-    """Return per-instance and global aggregate statistics."""
-    return cache.get_stats()
+    """Return per-instance and global aggregate statistics plus persisted row count when DB works."""
+    st = cache.get_stats()
+    n = count_kafka_logs()
+    if n is not None:
+        st["persisted_kafka_logs"] = n
+    return st
 
 
 @app.post("/api/flush")

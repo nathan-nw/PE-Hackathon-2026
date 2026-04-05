@@ -224,3 +224,68 @@ def flush_stats(stats: dict[str, dict[str, Any]]) -> int:
     except Exception as exc:
         logger.error("Failed to flush stats to DB: %s", exc)
         return 0
+
+
+def count_kafka_logs() -> int | None:
+    """Return row count in kafka_logs, or None if the query fails."""
+    try:
+        conn = get_connection()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM kafka_logs")
+                row = cur.fetchone()
+        conn.close()
+        return int(row[0]) if row else 0
+    except Exception as exc:
+        logger.warning("count_kafka_logs: %s", exc)
+        return None
+
+
+def fetch_logs_from_db(
+    limit: int = 100,
+    level: str | None = None,
+    instance_id: str | None = None,
+    search: str | None = None,
+) -> list[dict[str, Any]]:
+    """Load recent rows from kafka_logs (newest first). Payload shape matches Kafka / HTTP ingest."""
+    if limit < 1:
+        return []
+    try:
+        conn = get_connection()
+        with conn:
+            with conn.cursor() as cur:
+                conditions: list[str] = []
+                params: list[Any] = []
+                if level:
+                    conditions.append("UPPER(TRIM(level)) = UPPER(TRIM(%s))")
+                    params.append(level)
+                if instance_id:
+                    conditions.append("instance_id = %s")
+                    params.append(instance_id)
+                if search and search.strip():
+                    q = f"%{search.strip()}%"
+                    conditions.append(
+                        "(message ILIKE %s OR logger ILIKE %s OR COALESCE(path, '') ILIKE %s)"
+                    )
+                    params.extend([q, q, q])
+                where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+                sql = f"""
+                    SELECT raw_json FROM kafka_logs
+                    {where}
+                    ORDER BY COALESCE(timestamp, ingested_at) DESC NULLS LAST
+                    LIMIT %s
+                """
+                params.append(limit)
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+        conn.close()
+        out: list[dict[str, Any]] = []
+        for (rj,) in rows:
+            if isinstance(rj, dict):
+                out.append(rj)
+            elif rj is not None:
+                out.append(json.loads(rj) if isinstance(rj, str) else rj)
+        return out
+    except Exception as exc:
+        logger.error("fetch_logs_from_db failed: %s", exc)
+        return []
