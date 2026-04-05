@@ -10,6 +10,5 @@ Alertmanager doesn't just log the error into the void—it is rigorously configu
 ### Live Demo Verification
 Below is the explicit visual verification proving that the end-to-end routing pipeline is fully functional constraint-wise. We intentionally broke the application infrastructure, and you can see the immediate push notification natively delivered to the designated operator channel!
 
-*(To capture the perfect screenshot for this requirement, execute a chaos test in your terminal by running `docker compose stop url-shortener-a url-shortener-b`. Wait approximately ~75 seconds for the system engines to evaluate the sustained outage, and take a screenshot of the RED automated Discord message popping up in your server!)*
 
-*[Insert Discord Alert Screenshot Here]*
+<img width="1468" height="742" alt="Screenshot 2026-04-05 at 10 48 52 AM" src="https://github.com/user-attachments/assets/0f855bc0-8bc9-40c9-89bb-0d5c21e1ef9a" />
