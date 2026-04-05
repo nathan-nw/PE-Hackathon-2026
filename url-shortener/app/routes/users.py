@@ -48,6 +48,12 @@ def create_user():
         return jsonify({"error": "email and username are required"}), 400
     if not isinstance(email, str) or not isinstance(username, str):
         return jsonify({"error": "email and username must be strings"}), 400
+    email = email.strip()
+    username = username.strip()
+    if not email or not username:
+        return jsonify({"error": "email and username must not be blank"}), 400
+    if "@" not in email:
+        return jsonify({"error": "email must be a valid email address"}), 400
 
     now = datetime.now(UTC)
     try:
@@ -70,9 +76,15 @@ def update_user(user_id):
         return jsonify({"error": "Invalid or missing JSON body"}), 400
 
     if "username" in data:
-        user.username = data["username"]
+        if not isinstance(data["username"], str) or not data["username"].strip():
+            return jsonify({"error": "username must be a non-empty string"}), 400
+        user.username = data["username"].strip()
     if "email" in data:
-        user.email = data["email"]
+        if not isinstance(data["email"], str) or not data["email"].strip():
+            return jsonify({"error": "email must be a non-empty string"}), 400
+        if "@" not in data["email"]:
+            return jsonify({"error": "email must be a valid email address"}), 400
+        user.email = data["email"].strip()
     try:
         user.save()
     except Exception:
@@ -97,7 +109,7 @@ def bulk_load_users():
     # Accept JSON body with {"file": "users.csv"} or multipart file upload
     data = request.get_json(silent=True)
     if data and "file" in data:
-        filename = data["file"]
+        filename = os.path.basename(data["file"])
         filepath = os.path.join(CSV_DATA_DIR, filename)
         if not os.path.isfile(filepath):
             return jsonify({"error": f"File not found: {filename}"}), 404

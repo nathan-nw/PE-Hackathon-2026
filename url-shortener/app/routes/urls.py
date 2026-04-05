@@ -80,7 +80,10 @@ def create_short_url():
     except User.DoesNotExist:
         return jsonify({"error": "User not found"}), 404
 
-    short_code = data.get("short_code") or generate_short_code()
+    short_code = data.get("short_code")
+    if short_code is not None and not isinstance(short_code, str):
+        return jsonify({"error": "short_code must be a string"}), 400
+    short_code = short_code or generate_short_code()
 
     if Url.select().where(Url.short_code == short_code).exists():
         return jsonify({"error": "Short code already exists"}), 409
@@ -190,6 +193,10 @@ def update_url(url_id):
         url_err = _validate_url(data["original_url"])
         if url_err:
             return jsonify({"error": url_err}), 400
+    if "title" in data and not isinstance(data["title"], str):
+        return jsonify({"error": "title must be a string"}), 400
+    if "is_active" in data and not isinstance(data["is_active"], bool):
+        return jsonify({"error": "is_active must be a boolean"}), 400
 
     now = datetime.now(UTC)
 
