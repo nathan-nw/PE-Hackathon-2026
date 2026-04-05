@@ -38,6 +38,8 @@
  *   SKIP_LOG_INGEST_AUTO_TOKEN=1  — do not auto-generate LOG_INGEST_TOKEN when unset (SYNC_VARIABLES + no Kafka)
  *   LOG_INGEST_USE_PRIVATE_URL=1  — set LOG_INGEST_URL to http://<private>:PORT/api/ingest (default: https://<RAILWAY_PUBLIC_DOMAIN>/api/ingest — works through Railway edge)
  *   RAILWAY_WATCHDOG_POLL_SEC=15  — optional; with SYNC_VARIABLES=1, sets hosted Ops watchdog poll interval (matches compose-watchdog default)
+ *   CHAOS_KILL_ENABLED=1  — optional; default when unset is 1 on dashboard so hosted Ops Chaos Kill/Reboot work (set 0 in .env.railway.setup to disable)
+ *   RAILWAY_WATCHDOG_AUTO_RECOVER=1  — optional; default 1; watchdog calls serviceInstanceDeploy(latest) when a deployment is CRASHED/FAILED/etc.
  */
 
 const crypto = require("crypto");
@@ -628,6 +630,23 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
     const dashboardPt = (process.env.DASHBOARD_RAILWAY_PROJECT_TOKEN || "").trim();
     const dashboardAt = (process.env.DASHBOARD_RAILWAY_API_TOKEN || "").trim();
     const watchdogPoll = (process.env.RAILWAY_WATCHDOG_POLL_SEC || "").trim();
+    const chaosKillRaw = (process.env.CHAOS_KILL_ENABLED ?? "1").trim();
+    const chaosKillEnabled =
+      chaosKillRaw === "" ||
+      chaosKillRaw === "1" ||
+      chaosKillRaw.toLowerCase() === "true" ||
+      chaosKillRaw.toLowerCase() === "yes" ||
+      chaosKillRaw.toLowerCase() === "on";
+    const watchdogAutoRecoverRaw = (
+      process.env.RAILWAY_WATCHDOG_AUTO_RECOVER ?? "1"
+    ).trim();
+    const watchdogAutoRecover =
+      watchdogAutoRecoverRaw === "" ||
+      watchdogAutoRecoverRaw === "1" ||
+      watchdogAutoRecoverRaw.toLowerCase() === "true" ||
+      watchdogAutoRecoverRaw.toLowerCase() === "yes" ||
+      watchdogAutoRecoverRaw.toLowerCase() === "on";
+
     const dashboardVars = {
       // Private HTTP URL: Next.js server-side fetch to the public HTTPS domain often fails
       // (edge/DNS/hairpin); same pattern as load-balancer → url-shortener via RAILWAY_PRIVATE_DOMAIN.
@@ -642,6 +661,9 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
       RAILWAY_PROJECT_ID: projectId,
       RAILWAY_ENVIRONMENT_ID: environmentId,
       VISIBILITY_ALERTMANAGER_DISABLED: "1",
+      // Hosted Chaos tab: production Next.js defaults chaos off unless explicitly enabled.
+      CHAOS_KILL_ENABLED: chaosKillEnabled ? "1" : "0",
+      RAILWAY_WATCHDOG_AUTO_RECOVER: watchdogAutoRecover ? "1" : "0",
       ...(watchdogPoll ? { RAILWAY_WATCHDOG_POLL_SEC: watchdogPoll } : {}),
     };
     if (dashboardPt) {
@@ -652,6 +674,10 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
       console.warn(
         "(Variable sync) No DASHBOARD_RAILWAY_PROJECT_TOKEN or DASHBOARD_RAILWAY_API_TOKEN — add RAILWAY_PROJECT_TOKEN or RAILWAY_API_TOKEN on the dashboard service in Railway, or set one of those env vars in .env.railway.setup and re-run."
       );
+    }
+    const chaosAllowed = (process.env.CHAOS_ALLOWED_SERVICES || "").trim();
+    if (chaosAllowed) {
+      dashboardVars.CHAOS_ALLOWED_SERVICES = chaosAllowed;
     }
     await upsert("dashboard", dashboardVars);
   }

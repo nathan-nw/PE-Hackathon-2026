@@ -105,7 +105,23 @@ Older setups used one API service. This repo now expects **`url-shortener-a`**, 
 
 ## Dashboard Ops tab (hosted)
 
-There is no Docker socket on Railway, so the Next.js dashboard cannot use **`dockerode`**. With **`SYNC_VARIABLES=1`**, **`setup-railway.js`** sets **`RAILWAY_PROJECT_ID`**, **`RAILWAY_ENVIRONMENT_ID`**, and **`VISIBILITY_ALERTMANAGER_DISABLED=1`** on the **`dashboard`** service. You still need a **Railway API token** on that service so server-side routes can call the [GraphQL API](https://docs.railway.com/reference/public-api).
+There is no Docker socket on Railway, so the Next.js dashboard cannot use **`dockerode`**. With **`SYNC_VARIABLES=1`**, **`setup-railway.js`** sets **`RAILWAY_PROJECT_ID`**, **`RAILWAY_ENVIRONMENT_ID`**, **`VISIBILITY_ALERTMANAGER_DISABLED=1`**, **`CHAOS_KILL_ENABLED=1`**, and **`RAILWAY_WATCHDOG_AUTO_RECOVER=1`** on the **`dashboard`** service so the **Chaos** tab Kill/Reboot buttons and the Railway watchdog behave like local Compose (see below). You still need a **Railway API token** on that service so server-side routes can call the [GraphQL API](https://docs.railway.com/reference/public-api).
+
+### Where the “watchdog” runs (hosted)
+
+The **Railway deployment watchdog** is **not** a separate service and **not** part of **`dashboard-backend`** (FastAPI). It runs **inside the Next.js `dashboard` service**: server-side API routes poll the Railway GraphQL API on a timer driven by the browser, and in-memory state lives in the **Node** process. **`compose-watchdog`** in **`docker-compose.yml`** is the separate container used **only for local Docker** (starts exited Compose tasks, etc.).
+
+To apply variable sync from your machine (after **`DASHBOARD_RAILWAY_PROJECT_TOKEN`** is in **`.env.railway.setup`**):
+
+```powershell
+$env:RAILWAY_API_TOKEN = "your-account-token"
+$env:SYNC_VARIABLES = "1"
+node setup-railway.js
+```
+
+Then **redeploy the `dashboard` service** in Railway so it picks up **`CHAOS_KILL_ENABLED`** and the token. If Kill/Reboot stay disabled, open the **dashboard** service → **Variables** and confirm **`CHAOS_KILL_ENABLED=1`**, **`RAILWAY_PROJECT_ID`**, **`RAILWAY_ENVIRONMENT_ID`**, and **`RAILWAY_PROJECT_TOKEN`** (or **`RAILWAY_API_TOKEN`**) are present with **no leading/trailing spaces** in the variable names.
+
+If Railway **service names** in the project do not match the default allowlist (e.g. **`url-shortener-a`**), set **`CHAOS_ALLOWED_SERVICES`** on **`dashboard`** to a comma-separated list of **exact** names from the Ops table, or add **`CHAOS_ALLOWED_SERVICES=...`** to **`.env.railway.setup`** and run **`SYNC_VARIABLES=1`** again.
 
 **Where to add it (pick one):**
 
