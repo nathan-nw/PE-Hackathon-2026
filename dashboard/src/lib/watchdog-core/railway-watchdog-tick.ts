@@ -13,6 +13,7 @@ import { runtimeEnv } from "./server-runtime-env";
 import {
   buildHeartbeatProbeUrl,
   pingHeartbeatUrl,
+  shouldUsePrivateRailwayHeartbeat,
 } from "./service-heartbeat";
 
 import type {
@@ -382,7 +383,11 @@ export async function runRailwayWatchdogTick(
           target: `heartbeat skipped (${name})`,
           detail: "no probe path for service",
         });
-      } else if (!row.railwayPublicUrl?.trim()) {
+      } else if (
+        !probeUrl &&
+        !row.railwayPublicUrl?.trim() &&
+        !shouldUsePrivateRailwayHeartbeat()
+      ) {
         pushActivity(state, {
           kind: "http",
           target: `heartbeat skipped (${name})`,

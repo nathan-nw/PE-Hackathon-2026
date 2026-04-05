@@ -113,6 +113,8 @@ Production uses a dedicated Git-linked service **`railway-watchdog`** (see **`wa
 
 If **`WATCHDOG_SERVICE_URL`** is unset (e.g. local dev), the dashboard falls back to **in-process** polling via API routes. **`compose-watchdog`** in **`docker-compose.yml`** is the separate container for **local Docker** only (Compose container restarts, etc.); it is not the hosted Railway worker.
 
+**Watchdog HTTP heartbeats:** Railway’s GraphQL deployment `url` / `staticUrl` fields are often **hostnames without `https://`**, which breaks `fetch` unless normalized. The shared **`service-heartbeat`** logic prepends **`https://`** for public probes. On the **`railway-watchdog`** service (and any process with **`RAILWAY_PRIVATE_DOMAIN`**), heartbeats default to the **private mesh**: `http://<service-name>.railway.internal:<port>/path` (port **`8080`** or **`RAILWAY_HEARTBEAT_INTERNAL_PORT`**), which matches how **`setup-railway.js`** wires internal URLs elsewhere. Set **`RAILWAY_HEARTBEAT_USE_PRIVATE_URL=0`** on the worker to force public HTTPS probes only.
+
 To apply variable sync from your machine (after **`DASHBOARD_RAILWAY_PROJECT_TOKEN`** is in **`.env.railway.setup`**):
 
 ```powershell

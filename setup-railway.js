@@ -671,6 +671,8 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
       RAILWAY_PROJECT_ID: projectId,
       RAILWAY_ENVIRONMENT_ID: environmentId,
       RAILWAY_WATCHDOG_AUTO_RECOVER: watchdogAutoRecover ? "1" : "0",
+      // Heartbeats use private mesh (http://<service>.railway.internal:8080/...) when unset; see service-heartbeat.ts
+      RAILWAY_HEARTBEAT_INTERNAL_PORT: "8080",
       ...(watchdogPoll ? { RAILWAY_WATCHDOG_POLL_SEC: watchdogPoll } : {}),
     };
     if (dashboardPt) {

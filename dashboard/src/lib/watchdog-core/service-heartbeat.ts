@@ -2,7 +2,18 @@
  * HTTP heartbeat probes for Railway-hosted services (public URL + path).
  * Used by Ops/Chaos visibility and the Railway watchdog when deployment status
  * says SUCCESS but the app is wedged.
+ *
+ * On Railway, GraphQL often returns `url` / `staticUrl` **without** a scheme
+ * (`foo.up.railway.app`), which makes `fetch()` throw "Failed to parse URL".
+ * `normalizePublicUrlForFetch` prepends `https://` in that case.
+ *
+ * When `RAILWAY_PRIVATE_DOMAIN` is set (watchdog/dashboard running on Railway),
+ * heartbeats default to the **private mesh**: `http://<service>.railway.internal:<port>/path`
+ * unless `RAILWAY_HEARTBEAT_USE_PRIVATE_URL=0`. Port defaults to 8080 or
+ * `RAILWAY_HEARTBEAT_INTERNAL_PORT`.
  */
+
+import { runtimeEnv } from "./server-runtime-env";
 
 /** Services with no meaningful public HTTP probe (data / metrics / internal). */
 const INTERNAL_HTTP_SERVICES = new Set(
@@ -33,8 +44,55 @@ export function heartbeatPathForService(serviceName: string): string | null {
   if (s === "dashboard") return "/api/health";
   if (s === "user-frontend") return "/";
   if (s === "load-balancer" || s.startsWith("url-shortener")) return "/live";
+  if (s === "railway-watchdog") return "/health";
 
   return null;
+}
+
+function heartbeatInternalPort(): number {
+  const n = parseInt(runtimeEnv("RAILWAY_HEARTBEAT_INTERNAL_PORT") ?? "8080", 10);
+  return Number.isFinite(n) && n > 0 && n < 65536 ? n : 8080;
+}
+
+/**
+ * When true, heartbeats use `http://<service>.railway.internal:<port>` (private mesh).
+ * Default ON when `RAILWAY_PRIVATE_DOMAIN` is set; set `RAILWAY_HEARTBEAT_USE_PRIVATE_URL=0` to force public URLs.
+ */
+export function shouldUsePrivateRailwayHeartbeat(): boolean {
+  const explicit = (runtimeEnv("RAILWAY_HEARTBEAT_USE_PRIVATE_URL") ?? "").trim().toLowerCase();
+  if (
+    explicit === "0" ||
+    explicit === "false" ||
+    explicit === "no" ||
+    explicit === "off"
+  ) {
+    return false;
+  }
+  if (
+    explicit === "1" ||
+    explicit === "true" ||
+    explicit === "yes" ||
+    explicit === "on"
+  ) {
+    return true;
+  }
+  return Boolean(runtimeEnv("RAILWAY_PRIVATE_DOMAIN")?.trim());
+}
+
+function serviceInternalHostname(serviceName: string): string {
+  return serviceName
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "-");
+}
+
+/** Ensure `fetch()` receives an absolute URL with a scheme. */
+export function normalizePublicUrlForFetch(raw: string): string {
+  const s = raw.trim();
+  if (!s) return s;
+  if (/^https?:\/\//i.test(s)) return s;
+  if (s.startsWith("//")) return `https:${s}`;
+  return `https://${s}`;
 }
 
 export function buildHeartbeatProbeUrl(
@@ -43,9 +101,16 @@ export function buildHeartbeatProbeUrl(
 ): string | null {
   const path = heartbeatPathForService(serviceName);
   if (!path) return null;
+
+  if (shouldUsePrivateRailwayHeartbeat()) {
+    const host = serviceInternalHostname(serviceName);
+    const port = heartbeatInternalPort();
+    return `http://${host}.railway.internal:${port}${path}`;
+  }
+
   const raw = (publicUrl ?? "").trim();
   if (!raw) return null;
-  const base = raw.replace(/\/+$/, "");
+  const base = normalizePublicUrlForFetch(raw).replace(/\/+$/, "");
   return `${base}${path}`;
 }
 
