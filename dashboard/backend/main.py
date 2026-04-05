@@ -37,9 +37,12 @@ KAFKA_BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "")
 KAFKA_TOPIC = os.environ.get("KAFKA_LOG_TOPIC", "app-logs")
 # Set empty, omit, or DISABLED for hosts without Kafka (e.g. Railway); logs tab stays empty.
 KAFKA_ENABLED = bool(
-    KAFKA_BOOTSTRAP_SERVERS.strip() and KAFKA_BOOTSTRAP_SERVERS.strip().upper() != "DISABLED"
+    KAFKA_BOOTSTRAP_SERVERS.strip()
+    and KAFKA_BOOTSTRAP_SERVERS.strip().upper() != "DISABLED"
 )
-ALLOW_INSECURE_LOG_INGEST = os.environ.get("ALLOW_INSECURE_LOG_INGEST", "").strip().lower() in (
+ALLOW_INSECURE_LOG_INGEST = os.environ.get(
+    "ALLOW_INSECURE_LOG_INGEST", ""
+).strip().lower() in (
     "1",
     "true",
     "yes",
@@ -50,6 +53,7 @@ DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
 cache = LogCache(max_entries=CACHE_MAX_ENTRIES)
 k6 = K6Runner()
+alerter = DiscordAlerter(webhook_url=DISCORD_WEBHOOK_URL)
 
 
 def _log_ingest_token() -> str:
@@ -99,7 +103,6 @@ async def lifespan(app: FastAPI):
 
     # Kafka log stream (optional — disabled when no broker / DISABLED)
     if KAFKA_ENABLED:
-        alerter = DiscordAlerter(webhook_url=DISCORD_WEBHOOK_URL)
         consumer_thread = threading.Thread(
             target=run_consumer,
             args=(cache, KAFKA_BOOTSTRAP_SERVERS, KAFKA_TOPIC),
@@ -219,7 +222,9 @@ def get_logs(
     limit: int = Query(100, ge=1, le=50000),
     level: str | None = Query(None),
     instance_id: str | None = Query(None),
-    search: str | None = Query(None, description="Case-insensitive substring in message/logger/path"),
+    search: str | None = Query(
+        None, description="Case-insensitive substring in message/logger/path"
+    ),
     source: str = Query(
         "merged",
         description="memory | db | merged — merged combines ring buffer + Postgres kafka_logs",
@@ -323,7 +328,9 @@ def get_errors(
         recent_buckets = sorted_buckets[-5:]
         recent_total = sum(b["total"] for b in recent_buckets)
         recent_errors = sum(b["errors"] for b in recent_buckets)
-        current_rate = round((recent_errors / recent_total) * 100, 2) if recent_total > 0 else 0.0
+        current_rate = (
+            round((recent_errors / recent_total) * 100, 2) if recent_total > 0 else 0.0
+        )
 
         return {
             "buckets": sorted_buckets,
@@ -344,6 +351,7 @@ def get_errors(
 def clear_errors():
     """Clear all log data from both DB and in-memory cache."""
     from db import clear_logs
+
     cache.clear()
     deleted = clear_logs()
     return {"status": "cleared", "deleted_rows": deleted}
@@ -380,3 +388,15 @@ def k6_status():
 def k6_stop():
     """Stop the running k6 test."""
     return k6.stop()
+
+
+@app.post("/api/alertmanager-webhook")
+async def alertmanager_webhook(request: Request):
+    """Receive Alertmanager webhook notifications and forward to Discord."""
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON body required")
+
+    count = alerter.send_alertmanager_alerts(payload)
+    return {"status": "ok", "alerts_forwarded": count}
