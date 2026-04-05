@@ -1,4 +1,3 @@
-import json
 from datetime import UTC, datetime
 
 from flask import Blueprint, jsonify, request
@@ -7,6 +6,7 @@ from playhouse.shortcuts import model_to_dict
 from app.models.event import Event
 from app.models.url import Url
 from app.models.user import User
+from app.request_helpers import normalize_details, parse_json_body
 
 events_bp = Blueprint("events", __name__)
 
@@ -38,11 +38,9 @@ def list_events():
 
 @events_bp.route("/events", methods=["POST"])
 def create_event():
-    data = request.get_json(silent=True)
-    if data is None:
-        return jsonify({"error": "Invalid or missing JSON body"}), 400
-    if not isinstance(data, dict):
-        return jsonify({"error": "Request body must be a JSON object"}), 400
+    data, err = parse_json_body()
+    if err:
+        return err
 
     url_id = data.get("url_id")
     user_id = data.get("user_id")
@@ -50,9 +48,9 @@ def create_event():
     if not url_id or not user_id or not event_type:
         return jsonify({"error": "url_id, user_id, and event_type are required"}), 400
 
-    if not isinstance(url_id, int):
+    if isinstance(url_id, bool) or not isinstance(url_id, int):
         return jsonify({"error": "url_id must be an integer"}), 400
-    if not isinstance(user_id, int):
+    if isinstance(user_id, bool) or not isinstance(user_id, int):
         return jsonify({"error": "user_id must be an integer"}), 400
     if not isinstance(event_type, str) or not event_type.strip():
         return jsonify({"error": "event_type must be a non-empty string"}), 400
@@ -67,17 +65,17 @@ def create_event():
     except User.DoesNotExist:
         return jsonify({"error": "User not found"}), 404
 
-    details = data.get("details", {})
-    if isinstance(details, (dict, list)):
-        details = json.dumps(details)
-    elif not isinstance(details, str):
-        return jsonify({"error": "details must be a JSON object or string"}), 400
+    raw_details = data.get("details", {})
+    try:
+        details = normalize_details(raw_details)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
     now = datetime.now(UTC)
     event = Event.create(
         url_id=url_id,
         user_id=user_id,
-        event_type=event_type,
+        event_type=event_type.strip(),
         timestamp=now,
         details=details,
     )
