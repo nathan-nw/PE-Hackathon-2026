@@ -14,4 +14,5 @@ The exact automation blueprints are located within the repository's `.github/wor
 
 ### Pipeline Verification
 Below is a visual verification from our repository showing the GitHub Action executing successfully, confirming that our automated defense barrier works and successfully ran the tests.
+<img width="1468" height="736" alt="Screenshot 2026-04-05 at 9 40 53 AM" src="https://github.com/user-attachments/assets/110e4b5b-70f0-461f-b44b-7d2dfab6b0c6" />
 
