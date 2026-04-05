@@ -726,7 +726,6 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
                 "https://" + varRef("url-shortener-a", "RAILWAY_PUBLIC_DOMAIN"),
             }
           : {}),
-      VISIBILITY_K8S_ENABLED: "false",
       VISIBILITY_COMPOSE_PROJECT: "pe-hackathon-2026",
       // Ops tab: list services via Railway GraphQL (no Docker socket in the cloud).
       RAILWAY_PROJECT_ID: projectId,

@@ -106,25 +106,6 @@ type DockerResponse = {
   error?: string;
 };
 
-type PodRow = {
-  name: string;
-  namespace: string;
-  phase: string;
-  ready: string;
-  restarts: number;
-  age: string;
-};
-
-type PodsResponse = {
-  enabled: boolean;
-  namespace: string;
-  /** When true, listing used listPodForAllNamespaces; namespace field is "*". */
-  allNamespaces?: boolean;
-  pods: PodRow[];
-  message?: string;
-  error?: string;
-};
-
 type AlertRow = {
   name: string;
   severity?: string;
@@ -188,13 +169,10 @@ function stateBadge(state: string, health?: string) {
 
 export function OpsDashboard() {
   const [docker, setDocker] = useState<DockerResponse | null>(null);
-  const [pods, setPods] = useState<PodsResponse | null>(null);
   const [alerts, setAlerts] = useState<AlertsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastFetch, setLastFetch] = useState<Date | null>(null);
-  const [includeStats, setIncludeStats] = useState(false);
-  const [k8sAllNamespaces, setK8sAllNamespaces] = useState(false);
 
   const [mainTab, setMainTab] = useState("containers");
   const [logInstanceJump, setLogInstanceJump] = useState<{
@@ -217,22 +195,17 @@ export function OpsDashboard() {
 
   const fetchAll = useCallback(async () => {
     setError(null);
-    const qs = `?${["heartbeats=1", includeStats ? "stats=1" : ""].filter(Boolean).join("&")}`;
-    const podsUrl = k8sAllNamespaces
-      ? "/api/visibility/k8s/pods?allNamespaces=1"
-      : "/api/visibility/k8s/pods";
+    const qs = "?heartbeats=1&stats=1";
     try {
-      const [d, p, a] = await Promise.all([
+      const [d, a] = await Promise.all([
         fetch(`/api/visibility/docker${qs}`, { cache: "no-store" }).then((r) =>
           r.json()
         ),
-        fetch(podsUrl, { cache: "no-store" }).then((r) => r.json()),
         fetch("/api/visibility/alerts", { cache: "no-store" }).then((r) =>
           r.json()
         ),
       ]);
       setDocker(d as DockerResponse);
-      setPods(p as PodsResponse);
       setAlerts(a as AlertsResponse);
       setLastFetch(new Date());
     } catch (e) {
@@ -246,7 +219,7 @@ export function OpsDashboard() {
     } finally {
       setLoading(false);
     }
-  }, [includeStats, k8sAllNamespaces]);
+  }, []);
 
   useEffect(() => {
     fetchAll();
@@ -299,11 +272,9 @@ export function OpsDashboard() {
   }, [docker]);
 
   /** CPU/memory columns: Docker via container stats; Railway via GraphQL metrics. */
-  const showResourceStats = includeStats;
-
   const isRailway = docker?.source === "railway";
   const baseServiceCols = isRailway ? 7 : 6;
-  const serviceTableColCount = baseServiceCols + (showResourceStats ? 2 : 0);
+  const serviceTableColCount = baseServiceCols + 2;
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-8">
@@ -311,7 +282,7 @@ export function OpsDashboard() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Ops</h1>
           <p className="text-muted-foreground text-sm">
-            Compose / Railway, Kubernetes, Alertmanager, and Kafka log stream (
+            Compose / Railway, Alertmanager, and Kafka log stream (
             {mainTab === "logs"
               ? `logs ~${LOG_POLL_MS / 1000}s`
               : `${POLL_MS / 1000}s`}{" "}
@@ -319,24 +290,6 @@ export function OpsDashboard() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <label className="text-muted-foreground flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={includeStats}
-              onChange={(e) => setIncludeStats(e.target.checked)}
-              className="accent-primary rounded border"
-            />
-            Show stats
-          </label>
-          <label className="text-muted-foreground flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={k8sAllNamespaces}
-              onChange={(e) => setK8sAllNamespaces(e.target.checked)}
-              className="accent-primary rounded border"
-            />
-            K8s all namespaces
-          </label>
           <Button
             type="button"
             variant="outline"
@@ -376,7 +329,6 @@ export function OpsDashboard() {
       >
         <TabsList variant="line">
           <TabsTrigger value="containers">Containers</TabsTrigger>
-          <TabsTrigger value="pods">Pods</TabsTrigger>
           <TabsTrigger value="alerts">Alerts</TabsTrigger>
           <TabsTrigger value="logs">Logs</TabsTrigger>
           <TabsTrigger value="loadtest">Load Test</TabsTrigger>
@@ -441,12 +393,8 @@ export function OpsDashboard() {
                     <TableHead>Status</TableHead>
                     {isRailway ? <TableHead>Heartbeat</TableHead> : null}
                     <TableHead className="w-[120px]">App logs</TableHead>
-                    {showResourceStats && (
-                      <>
-                        <TableHead>CPU %</TableHead>
-                        <TableHead>Memory</TableHead>
-                      </>
-                    )}
+                    <TableHead>CPU %</TableHead>
+                    <TableHead>Memory</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -550,19 +498,15 @@ export function OpsDashboard() {
                             );
                           })()}
                         </TableCell>
-                        {showResourceStats && (
-                          <>
-                            <TableCell>
-                              {c.cpuPercent != null
-                                ? `${c.cpuPercent.toFixed(1)}%`
-                                : "—"}
-                            </TableCell>
-                            <TableCell className="text-xs">
-                              {formatBytes(c.memUsage)}
-                              {c.memLimit ? ` / ${formatBytes(c.memLimit)}` : ""}
-                            </TableCell>
-                          </>
-                        )}
+                        <TableCell>
+                          {c.cpuPercent != null
+                            ? `${c.cpuPercent.toFixed(1)}%`
+                            : "—"}
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          {formatBytes(c.memUsage)}
+                          {c.memLimit ? ` / ${formatBytes(c.memLimit)}` : ""}
+                        </TableCell>
                       </TableRow>
                     );
                     if (!pgOpen) return [mainRow];
@@ -706,102 +650,6 @@ export function OpsDashboard() {
                     );
                     return [mainRow, detailRow];
                   })}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="pods">
-          <Card>
-            <CardHeader>
-              <CardTitle>Kubernetes</CardTitle>
-              <CardDescription>
-                {pods?.allNamespaces ? (
-                  <>
-                    All namespaces (<span className="font-mono">*</span>)
-                  </>
-                ) : (
-                  <>
-                    Namespace{" "}
-                    <span className="text-foreground font-mono">
-                      {pods?.namespace ?? "pe-hackathon"}
-                    </span>
-                  </>
-                )}
-                {pods?.enabled === false && (
-                  <span> — {pods.message}</span>
-                )}
-                {pods?.enabled !== false &&
-                  !pods?.error &&
-                  (pods?.pods?.length ?? 0) > 0 && (
-                    <span className="text-muted-foreground">
-                      {" "}
-                      — {(pods?.pods ?? []).length} pod
-                      {(pods?.pods ?? []).length === 1 ? "" : "s"}
-                    </span>
-                  )}
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {pods?.enabled && pods?.error && (
-                <p className="text-destructive mb-4 text-sm" role="alert">
-                  {pods.error}
-                </p>
-              )}
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    {pods?.allNamespaces && (
-                      <TableHead>Namespace</TableHead>
-                    )}
-                    <TableHead>Name</TableHead>
-                    <TableHead>Phase</TableHead>
-                    <TableHead>Ready</TableHead>
-                    <TableHead>Restarts</TableHead>
-                    <TableHead>Age</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {(pods?.pods ?? []).length === 0 && (
-                    <TableRow>
-                      <TableCell
-                        colSpan={pods?.allNamespaces ? 6 : 5}
-                        className="text-muted-foreground"
-                      >
-                        {pods?.enabled === false
-                          ? "Enable VISIBILITY_K8S_ENABLED and mount kubeconfig to list pods. For npm run dev, set dashboard/.env.local (see dashboard/README.md)."
-                          : pods?.error
-                            ? "Could not list pods (see error above)."
-                            : pods?.allNamespaces
-                              ? "No pods in the cluster (or API returned an empty list)."
-                              : "No pods in this namespace. Deploy with kubectl apply -k k8s/, confirm the namespace exists (kubectl get ns), or enable “K8s all namespaces” if workloads run elsewhere."}
-                      </TableCell>
-                    </TableRow>
-                  )}
-                  {(pods?.pods ?? []).map((p) => (
-                    <TableRow key={`${p.namespace}/${p.name}`}>
-                      {pods?.allNamespaces && (
-                        <TableCell className="font-mono text-xs">
-                          {p.namespace}
-                        </TableCell>
-                      )}
-                      <TableCell className="font-mono text-xs">{p.name}</TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={
-                            p.phase === "Running" ? "default" : "secondary"
-                          }
-                          className="capitalize"
-                        >
-                          {p.phase}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>{p.ready}</TableCell>
-                      <TableCell>{p.restarts}</TableCell>
-                      <TableCell>{p.age}</TableCell>
-                    </TableRow>
-                  ))}
                 </TableBody>
               </Table>
             </CardContent>

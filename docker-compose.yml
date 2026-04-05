@@ -264,17 +264,12 @@ services:
       - "3001:3000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      # Kubernetes pod list: host kubeconfig → /kube/config (override path with KUBECONFIG_HOST in .env if needed).
-      - ${KUBECONFIG_HOST:-~/.kube/config}:/kube/config:ro
     environment:
       # Ops → Chaos tab: compose-watchdog status (HTTP). Override for local `next dev` → http://127.0.0.1:8099
       WATCHDOG_STATUS_URL: ${WATCHDOG_STATUS_URL:-http://compose-watchdog:8099}
       # Ops → Chaos tab: docker kill (dashboard mounts docker.sock). Set CHAOS_KILL_ENABLED=0 to disable.
       CHAOS_KILL_ENABLED: ${CHAOS_KILL_ENABLED:-1}
       VISIBILITY_COMPOSE_PROJECT: pe-hackathon-2026
-      VISIBILITY_K8S_ENABLED: "true"
-      KUBECONFIG: /kube/config
-      VISIBILITY_K8S_NAMESPACE: pe-hackathon
       VISIBILITY_ALERTMANAGER_URL: http://alertmanager:9093
       VISIBILITY_PROMETHEUS_URL: http://prometheus:9090
       # FastAPI log cache (Kafka → in-memory → dashboard /api/logs proxy)
