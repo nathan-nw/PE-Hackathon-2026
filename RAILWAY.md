@@ -105,7 +105,7 @@ Older setups used one API service. This repo now expects **`url-shortener-a`**, 
 
 ## Dashboard Ops tab (hosted)
 
-There is no Docker socket on Railway, so the Next.js dashboard cannot use **`dockerode`**. With **`SYNC_VARIABLES=1`**, **`setup-railway.js`** sets **`RAILWAY_PROJECT_ID`**, **`RAILWAY_ENVIRONMENT_ID`**, **`VISIBILITY_ALERTMANAGER_DISABLED=1`**, **`CHAOS_KILL_ENABLED=1`**, and **`RAILWAY_WATCHDOG_AUTO_RECOVER=1`** on the **`dashboard`** service so the **Chaos** tab Kill/Reboot buttons and the Railway watchdog behave like local Compose (see below). You still need a **Railway API token** on that service so server-side routes can call the [GraphQL API](https://docs.railway.com/reference/public-api).
+There is no Docker socket on Railway, so the Next.js dashboard cannot use **`dockerode`**. With **`SYNC_VARIABLES=1`**, **`setup-railway.js`** sets **`RAILWAY_PROJECT_ID`**, **`RAILWAY_ENVIRONMENT_ID`**, **`VISIBILITY_ALERTMANAGER_DISABLED=1`**, **`CHAOS_KILL_ENABLED=1`**, and **`RAILWAY_WATCHDOG_AUTO_RECOVER=1`** on the **`dashboard`** service. The hosted watchdog **auto-redeploys only when a deployment is CRASHED or FAILED** — it does **not** redeploy after **Chaos Kill** (`deploymentStop`), so an intentional kill stays down until you **Reboot** or redeploy in Railway. You still need a **Railway API token** on that service so server-side routes can call the [GraphQL API](https://docs.railway.com/reference/public-api).
 
 ### Where the “watchdog” runs (hosted)
 

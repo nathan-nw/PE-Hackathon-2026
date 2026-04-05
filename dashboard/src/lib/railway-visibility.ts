@@ -437,16 +437,32 @@ const M_SERVICE_INSTANCE_DEPLOY = `
 
 /** Restart the running deployment (graceful reboot), same idea as `docker restart`. */
 export async function railwayDeploymentRestart(deploymentId: string): Promise<void> {
-  await railwayGraphql<{ deploymentRestart: boolean }>(M_DEPLOYMENT_RESTART, {
-    id: deploymentId,
-  });
+  const data = await railwayGraphql<{ deploymentRestart?: boolean | null }>(
+    M_DEPLOYMENT_RESTART,
+    {
+      id: deploymentId,
+    }
+  );
+  if (data.deploymentRestart === false) {
+    throw new Error(
+      "Railway deploymentRestart returned false — check token permissions and deployment state."
+    );
+  }
 }
 
 /** Stop the deployment — service goes down until redeployed (chaos “kill”). */
 export async function railwayDeploymentStop(deploymentId: string): Promise<void> {
-  await railwayGraphql<{ deploymentStop: boolean }>(M_DEPLOYMENT_STOP, {
-    id: deploymentId,
-  });
+  const data = await railwayGraphql<{ deploymentStop?: boolean | null }>(
+    M_DEPLOYMENT_STOP,
+    {
+      id: deploymentId,
+    }
+  );
+  if (data.deploymentStop === false) {
+    throw new Error(
+      "Railway deploymentStop returned false — check token permissions and that the deployment is stoppable."
+    );
+  }
 }
 
 /** Redeploy latest commit — used by the Railway watchdog to recover after stop/crash. */

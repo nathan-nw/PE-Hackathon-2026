@@ -349,7 +349,7 @@ export function ChaosPanel() {
             {!watchdog
               ? "Loading watchdog status…"
               : watchdog.source === "railway"
-                ? "Polling Railway deployment status. When a deployment is CRASHED, FAILED, or REMOVED, the watchdog can trigger serviceInstanceDeploy(latest) to recover (disable with RAILWAY_WATCHDOG_AUTO_RECOVER=0). Toasts fire for recoveries and redeploys; recent poll lines are below."
+                ? "Polling Railway deployment status. The watchdog auto-redeploys only on CRASHED or FAILED (not after Chaos Kill / deploymentStop — that would undo an intentional shutdown). Disable with RAILWAY_WATCHDOG_AUTO_RECOVER=0. Toasts fire for recoveries and redeploys; recent poll lines are below."
                 : "Local stack: the compose-watchdog service scans Compose containers on each interval (starts exited tasks, restarts unhealthy ones). Alerts appear at the top-right when it acts."}
           </CardDescription>
         </CardHeader>

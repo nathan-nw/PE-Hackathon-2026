@@ -69,14 +69,13 @@ function isHealthy(s: string): boolean {
   return u === "SUCCESS" || u === "SLEEPING";
 }
 
+/**
+ * Only involuntary failure states — not REMOVED/STOPPED (those follow Chaos Kill /
+ * deploymentStop or a user stop; auto-redeploy would undo an intentional shutdown).
+ */
 function needsAutoRecoverTrigger(status: string): boolean {
   const u = status.toUpperCase();
-  return (
-    u === "CRASHED" ||
-    u === "FAILED" ||
-    u === "REMOVED" ||
-    u === "STOPPED"
-  );
+  return u === "CRASHED" || u === "FAILED";
 }
 
 function railwayWatchdogAutoRecoverEnabled(): boolean {
@@ -140,8 +139,13 @@ export async function fetchRailwayWatchdogPayload(): Promise<WatchdogPayload> {
       && needsAutoRecoverTrigger(cur)
       && !isDeploying(cur)
     ) {
-      const last = recoverCooldown.get(sid) ?? 0;
-      if (Date.now() - last >= RECOVER_COOLDOWN_MS) {
+      const lastAttempt = recoverCooldown.get(sid);
+      if (
+        lastAttempt != null
+        && Date.now() - lastAttempt < RECOVER_COOLDOWN_MS
+      ) {
+        /* skip — cooldown after last serviceInstanceDeploy */
+      } else {
         try {
           await railwayServiceInstanceDeployLatest(environmentId, sid);
           recoverCooldown.set(sid, Date.now());

@@ -26,7 +26,7 @@ export async function GET() {
     allowedServices: listAllowedServicesForUi(),
     hint: onRailway
       ? chaosActionsAvailable
-        ? "Hosted: Kill stops the active Railway deployment; Reboot runs deploymentRestart. The watchdog can auto-redeploy latest after a stop/crash (RAILWAY_WATCHDOG_AUTO_RECOVER, default on). Set CHAOS_KILL_ENABLED=1 on this service to enable buttons in production."
+        ? "Hosted: Kill runs deploymentStop (service stays down until you Reboot or redeploy in Railway). Watchdog auto-redeploy only on CRASHED/FAILED, not after Kill. Set CHAOS_KILL_ENABLED=1 on this service to enable buttons in production."
         : "Set RAILWAY_PROJECT_TOKEN or RAILWAY_API_TOKEN on the dashboard service so chaos actions and visibility can call the Railway API."
       : chaosKillEnabled()
         ? null
