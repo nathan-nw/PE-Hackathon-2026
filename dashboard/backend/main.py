@@ -14,6 +14,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from cache import LogCache
 from db import (
@@ -24,6 +25,7 @@ from db import (
     introspect_postgres_server,
 )
 from discord_alerter import DiscordAlerter
+from k6_runner import K6Runner
 from kafka_consumer import run_consumer
 
 logging.basicConfig(
@@ -42,11 +44,12 @@ ALLOW_INSECURE_LOG_INGEST = os.environ.get("ALLOW_INSECURE_LOG_INGEST", "").stri
     "true",
     "yes",
 )
-CACHE_MAX_ENTRIES = int(os.environ.get("CACHE_MAX_ENTRIES", "1000"))
+CACHE_MAX_ENTRIES = int(os.environ.get("CACHE_MAX_ENTRIES", "50000"))
 DB_FLUSH_INTERVAL = float(os.environ.get("DB_FLUSH_INTERVAL", "30"))
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
 cache = LogCache(max_entries=CACHE_MAX_ENTRIES)
+k6 = K6Runner()
 
 
 def _log_ingest_token() -> str:
@@ -213,7 +216,7 @@ async def ingest_logs(request: Request):
 
 @app.get("/api/logs")
 def get_logs(
-    limit: int = Query(100, ge=1, le=1000),
+    limit: int = Query(100, ge=1, le=50000),
     level: str | None = Query(None),
     instance_id: str | None = Query(None),
     search: str | None = Query(None, description="Case-insensitive substring in message/logger/path"),
@@ -276,3 +279,104 @@ def force_flush():
     """Manually trigger a flush of cached data to the database."""
     cache.flush_to_db()
     return {"status": "flushed"}
+
+
+@app.get("/api/errors")
+def get_errors(
+    window_minutes: int = Query(60, ge=1, le=1440),
+    log_limit: int = Query(200, ge=1, le=10000),
+):
+    """Return per-minute error buckets and recent error log entries.
+
+    Queries the DB first (has all flushed data), falls back to in-memory cache.
+    """
+    from datetime import datetime, timezone
+    from db import query_error_buckets
+
+    db_result = query_error_buckets(window_minutes=window_minutes, log_limit=log_limit)
+
+    if db_result is not None:
+        buckets_map = db_result["buckets_map"]
+
+        # Fill in empty minute slots for the full window
+        now = __import__("time").time()
+        window_start = now - window_minutes * 60
+        for i in range(window_minutes + 1):
+            t = datetime.fromtimestamp(window_start + i * 60, tz=timezone.utc)
+            key = t.strftime("%H:%M")
+            if key not in buckets_map:
+                buckets_map[key] = {
+                    "minute": key,
+                    "timestamp": (window_start + i * 60) * 1000,
+                    "total": 0,
+                    "errors": 0,
+                    "error_rate": 0.0,
+                    "status_breakdown": {},
+                }
+
+        sorted_buckets = sorted(buckets_map.values(), key=lambda x: x["timestamp"])
+
+        total_errors = sum(b["errors"] for b in sorted_buckets)
+        total_requests = sum(b["total"] for b in sorted_buckets)
+        peak_errors = max((b["errors"] for b in sorted_buckets), default=0)
+
+        recent_buckets = sorted_buckets[-5:]
+        recent_total = sum(b["total"] for b in recent_buckets)
+        recent_errors = sum(b["errors"] for b in recent_buckets)
+        current_rate = round((recent_errors / recent_total) * 100, 2) if recent_total > 0 else 0.0
+
+        return {
+            "buckets": sorted_buckets,
+            "error_logs": db_result["error_logs"],
+            "summary": {
+                "total_errors": total_errors,
+                "total_requests": total_requests,
+                "peak_errors": peak_errors,
+                "current_rate": current_rate,
+            },
+        }
+
+    # Fallback: use in-memory cache
+    return cache.get_error_buckets(window_minutes=window_minutes, log_limit=log_limit)
+
+
+@app.post("/api/errors/clear")
+def clear_errors():
+    """Clear all log data from both DB and in-memory cache."""
+    from db import clear_logs
+    cache.clear()
+    deleted = clear_logs()
+    return {"status": "cleared", "deleted_rows": deleted}
+
+
+# ── k6 Load Testing ─────────────────────────────────────────────────────────
+
+
+class K6RunRequest(BaseModel):
+    preset: str = ""
+    vus: int = 50
+    duration: str = "30s"
+    target_url: str = "http://load-balancer:80"
+
+
+@app.post("/api/k6/run")
+def k6_run(req: K6RunRequest):
+    """Start a k6 load test."""
+    return k6.start(
+        preset=req.preset,
+        vus=req.vus,
+        duration=req.duration,
+        target_url=req.target_url,
+    )
+
+
+@app.get("/api/k6/status")
+def k6_status():
+    """Get live stats from the running k6 test."""
+    return k6.get_status()
+
+
+@app.post("/api/k6/stop")
+def k6_stop():
+    """Stop the running k6 test."""
+    return k6.stop()

@@ -199,6 +199,96 @@ class LogCache:
         except Exception as exc:
             logger.error("Final flush failed: %s", exc)
 
+    def get_error_buckets(self, window_minutes: int = 60, log_limit: int = 200) -> dict[str, Any]:
+        """Server-side per-minute error bucketing over the full cache.
+
+        Returns:
+            buckets: list of {minute, total, errors, error_rate, status_breakdown}
+            error_logs: recent error log entries (newest first, up to log_limit)
+            summary: {total_errors, total_requests, peak_errors, current_rate}
+        """
+        from datetime import datetime, timezone
+
+        now = time.time()
+        window_start = now - window_minutes * 60
+
+        with self._lock:
+            logs = list(self._logs)
+
+        # Build minute buckets
+        buckets: dict[str, dict[str, Any]] = {}
+        for i in range(window_minutes + 1):
+            t = datetime.fromtimestamp(window_start + i * 60, tz=timezone.utc)
+            key = t.strftime("%H:%M")
+            buckets[key] = {
+                "minute": key,
+                "timestamp": (window_start + i * 60) * 1000,
+                "total": 0,
+                "errors": 0,
+                "error_rate": 0.0,
+                "status_breakdown": {},
+            }
+
+        error_logs: list[dict[str, Any]] = []
+
+        for entry in logs:
+            ts_str = entry.get("timestamp")
+            status_code = entry.get("status_code")
+            if not ts_str or status_code is None:
+                continue
+
+            try:
+                ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
+            except (ValueError, AttributeError):
+                continue
+
+            if ts < window_start:
+                continue
+
+            t = datetime.fromtimestamp(ts, tz=timezone.utc)
+            key = t.strftime("%H:%M")
+            bucket = buckets.get(key)
+            if not bucket:
+                continue
+
+            bucket["total"] += 1
+            code = int(status_code)
+            if code >= 400:
+                bucket["errors"] += 1
+                code_str = str(code)
+                bucket["status_breakdown"][code_str] = bucket["status_breakdown"].get(code_str, 0) + 1
+                error_logs.append(entry)
+
+        # Compute error rates
+        for b in buckets.values():
+            b["error_rate"] = round((b["errors"] / b["total"]) * 100, 2) if b["total"] > 0 else 0.0
+
+        sorted_buckets = sorted(buckets.values(), key=lambda x: x["timestamp"])
+
+        total_errors = sum(b["errors"] for b in sorted_buckets)
+        total_requests = sum(b["total"] for b in sorted_buckets)
+        peak_errors = max((b["errors"] for b in sorted_buckets), default=0)
+
+        recent_buckets = sorted_buckets[-5:]
+        recent_total = sum(b["total"] for b in recent_buckets)
+        recent_errors = sum(b["errors"] for b in recent_buckets)
+        current_rate = round((recent_errors / recent_total) * 100, 2) if recent_total > 0 else 0.0
+
+        # Sort error logs newest first, limit
+        error_logs.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
+        error_logs = error_logs[:log_limit]
+
+        return {
+            "buckets": sorted_buckets,
+            "error_logs": error_logs,
+            "summary": {
+                "total_errors": total_errors,
+                "total_requests": total_requests,
+                "peak_errors": peak_errors,
+                "current_rate": current_rate,
+            },
+        }
+
     def clear(self) -> None:
         """Reset all cached data."""
         with self._lock:

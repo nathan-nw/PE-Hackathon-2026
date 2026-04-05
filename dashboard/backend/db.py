@@ -237,6 +237,7 @@ CREATE TABLE IF NOT EXISTS kafka_logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_kafka_logs_timestamp ON kafka_logs (timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_kafka_logs_ts_status ON kafka_logs (timestamp DESC, status_code);
 CREATE INDEX IF NOT EXISTS idx_kafka_logs_instance ON kafka_logs (instance_id);
 CREATE INDEX IF NOT EXISTS idx_kafka_logs_level ON kafka_logs (level);
 
@@ -327,6 +328,103 @@ def flush_logs(logs: list[dict[str, Any]]) -> int:
         return count
     except Exception as exc:
         logger.error("Failed to flush logs to DB: %s", exc)
+        return 0
+
+
+def query_error_buckets(window_minutes: int = 60, log_limit: int = 5000) -> dict[str, Any] | None:
+    """Query per-minute error buckets and recent error logs from the DB.
+
+    Returns None if the query fails (caller should fall back to cache).
+    """
+    try:
+        conn = get_connection()
+        result: dict[str, Any] = {"buckets_map": {}, "error_logs": []}
+        with conn:
+            with conn.cursor() as cur:
+                cutoff = f"{window_minutes} minutes"
+
+                # Query 1: per-minute totals and error counts
+                cur.execute(
+                    """
+                    SELECT
+                        to_char(date_trunc('minute', timestamp) AT TIME ZONE 'UTC', 'HH24:MI') AS minute,
+                        EXTRACT(EPOCH FROM date_trunc('minute', timestamp)) * 1000 AS ts_ms,
+                        COUNT(*) AS total,
+                        COUNT(*) FILTER (WHERE status_code >= 400) AS errors
+                    FROM kafka_logs
+                    WHERE timestamp >= NOW() - %s::interval
+                      AND status_code IS NOT NULL
+                    GROUP BY date_trunc('minute', timestamp)
+                    ORDER BY date_trunc('minute', timestamp)
+                    """,
+                    (cutoff,),
+                )
+                for row in cur.fetchall():
+                    minute_key, ts_ms, total, errors = row
+                    result["buckets_map"][minute_key] = {
+                        "minute": minute_key,
+                        "timestamp": float(ts_ms),
+                        "total": total,
+                        "errors": errors,
+                        "error_rate": round((errors / total) * 100, 2) if total > 0 else 0.0,
+                        "status_breakdown": {},
+                    }
+
+                # Query 2: per-minute status code breakdown for errors only
+                cur.execute(
+                    """
+                    SELECT
+                        to_char(date_trunc('minute', timestamp) AT TIME ZONE 'UTC', 'HH24:MI') AS minute,
+                        status_code::text AS code,
+                        COUNT(*) AS cnt
+                    FROM kafka_logs
+                    WHERE timestamp >= NOW() - %s::interval
+                      AND status_code >= 400
+                    GROUP BY date_trunc('minute', timestamp), status_code
+                    ORDER BY date_trunc('minute', timestamp)
+                    """,
+                    (cutoff,),
+                )
+                for row in cur.fetchall():
+                    minute_key, code, cnt = row
+                    bucket = result["buckets_map"].get(minute_key)
+                    if bucket:
+                        bucket["status_breakdown"][code] = cnt
+
+                # Query 3: recent error log entries
+                cur.execute(
+                    """
+                    SELECT raw_json
+                    FROM kafka_logs
+                    WHERE timestamp >= NOW() - %s::interval
+                      AND status_code >= 400
+                    ORDER BY timestamp DESC
+                    LIMIT %s
+                    """,
+                    (cutoff, log_limit),
+                )
+                result["error_logs"] = [row[0] for row in cur.fetchall()]
+
+        conn.close()
+        return result
+    except Exception as exc:
+        logger.error("query_error_buckets failed: %s", exc)
+        return None
+
+
+def clear_logs() -> int:
+    """Delete all rows from kafka_logs. Returns count deleted."""
+    try:
+        conn = get_connection()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM kafka_logs")
+                count = cur.rowcount
+        conn.close()
+        logger.info("Cleared %d log entries from DB", count)
+        return count
+    except Exception as exc:
+        logger.error("Failed to clear logs from DB: %s", exc)
         return 0
 
 
