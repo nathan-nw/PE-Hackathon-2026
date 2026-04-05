@@ -78,6 +78,30 @@ def _db_config() -> dict[str, Any]:
     return cfg
 
 
+def _kwargs_from_database_url(url: str, dbname: str) -> dict[str, Any]:
+    """Parse a postgres URL and build psycopg2 kwargs for database ``dbname``."""
+    u = url.strip()
+    if u.startswith("postgres://"):
+        u = "postgresql://" + u[len("postgres://") :]
+    parsed = urlparse(u)
+    q = parse_qs(parsed.query)
+    sslmode = (q.get("sslmode") or [None])[0]
+    if not sslmode:
+        sslmode = os.environ.get("PGSSLMODE", "").strip() or None
+    if not sslmode:
+        sslmode = _default_sslmode_for_postgres_host(parsed.hostname)
+    cfg: dict[str, Any] = {
+        "dbname": dbname,
+        "user": unquote(parsed.username or "postgres"),
+        "password": unquote(parsed.password or ""),
+        "host": parsed.hostname or "127.0.0.1",
+        "port": parsed.port or 5432,
+    }
+    if sslmode:
+        cfg["sslmode"] = sslmode
+    return cfg
+
+
 def _connection_kwargs_explicit_db(dbname: str) -> dict[str, Any]:
     """Same host/user/password as the dashboard app, but connect to ``dbname`` (ignores ``DASHBOARD_DB_NAME``)."""
     url = (
@@ -85,25 +109,7 @@ def _connection_kwargs_explicit_db(dbname: str) -> dict[str, Any]:
         or os.environ.get("DATABASE_URL", "").strip()
     )
     if url:
-        if url.startswith("postgres://"):
-            url = "postgresql://" + url[len("postgres://") :]
-        parsed = urlparse(url)
-        q = parse_qs(parsed.query)
-        sslmode = (q.get("sslmode") or [None])[0]
-        if not sslmode:
-            sslmode = os.environ.get("PGSSLMODE", "").strip() or None
-        if not sslmode:
-            sslmode = _default_sslmode_for_postgres_host(parsed.hostname)
-        cfg: dict[str, Any] = {
-            "dbname": dbname,
-            "user": unquote(parsed.username or "postgres"),
-            "password": unquote(parsed.password or ""),
-            "host": parsed.hostname or "127.0.0.1",
-            "port": parsed.port or 5432,
-        }
-        if sslmode:
-            cfg["sslmode"] = sslmode
-        return cfg
+        return _kwargs_from_database_url(url, dbname)
     host = os.environ.get("DASHBOARD_DB_HOST", "dashboard-db")
     cfg = {
         "dbname": dbname,
@@ -118,21 +124,60 @@ def _connection_kwargs_explicit_db(dbname: str) -> dict[str, Any]:
     return cfg
 
 
-def get_connection_for_database(dbname: str):
-    """Open a connection to a named database on the same server as the dashboard tables."""
+def _introspect_base_url_for_profile(profile: str) -> str | None:
+    """Return a connection URL for listing DBs, or None if not configured."""
+    p = (profile or "default").strip().lower()
+    if p in ("main", "app", "hackathon"):
+        return (
+            os.environ.get("INTROSPECT_DB_URL", "").strip()
+            or os.environ.get("HACKATHON_DATABASE_URL", "").strip()
+        ) or None
+    return (
+        os.environ.get("DASHBOARD_DATABASE_URL", "").strip()
+        or os.environ.get("DATABASE_URL", "").strip()
+    ) or None
+
+
+def get_connection_for_database(dbname: str, *, base_url: str | None = None):
+    """Open a connection to ``dbname``. If ``base_url`` is set, use its host/credentials."""
+    if base_url:
+        return psycopg2.connect(**_kwargs_from_database_url(base_url, dbname))
     return psycopg2.connect(**_connection_kwargs_explicit_db(dbname))
 
 
-def introspect_postgres_server() -> dict[str, Any]:
+def introspect_postgres_server(profile: str = "default") -> dict[str, Any]:
     """List non-template databases and public tables per DB (for Ops UI)."""
+    p = (profile or "default").strip().lower()
     result: dict[str, Any] = {
         "databases": [],
         "tables_by_database": {},
         "dashboard_db_present": False,
         "errors": [],
+        "profile": p,
+        "introspect_configured": True,
     }
+
+    base_url = _introspect_base_url_for_profile(p)
+    if p in ("main", "app", "hackathon") and not base_url:
+        result["introspect_configured"] = False
+        result["errors"].append(
+            {
+                "scope": "config",
+                "message": (
+                    "Set INTROSPECT_DB_URL or HACKATHON_DATABASE_URL on dashboard-backend "
+                    "(e.g. postgresql://postgres:postgres@db:5432/hackathon_db for Compose service db)."
+                ),
+            }
+        )
+        return result
+
+    def connect_admin():
+        if base_url:
+            return get_connection_for_database("postgres", base_url=base_url)
+        return get_connection_for_database("postgres")
+
     try:
-        conn = get_connection_for_database("postgres")
+        conn = connect_admin()
         with conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -149,7 +194,10 @@ def introspect_postgres_server() -> dict[str, Any]:
 
     for db in dbs:
         try:
-            c2 = get_connection_for_database(db)
+            if base_url:
+                c2 = get_connection_for_database(db, base_url=base_url)
+            else:
+                c2 = get_connection_for_database(db)
             with c2:
                 with c2.cursor() as cur:
                     cur.execute(

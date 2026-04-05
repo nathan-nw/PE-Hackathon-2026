@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -56,17 +56,37 @@ type PostgresIntrospectResponse = {
   tables_by_database: Record<string, string[]>;
   dashboard_db_present: boolean;
   errors: { scope: string; message: string }[];
+  profile?: string;
+  introspect_configured?: boolean;
 };
 
-/** Rows where introspection matches dashboard-backend DB credentials (same server). */
-function isPostgresIntrospectRow(
+/** Compose / Railway rows that look like a Postgres server (expand for DB + table list). */
+function isPostgresLikeRow(
   source: string | undefined,
-  service: string
+  service: string,
+  image: string
 ): boolean {
+  const img = (image || "").toLowerCase();
+  if (img.includes("postgres")) return true;
   const s = (service || "").toLowerCase();
-  if (source === "railway") return s === "postgres";
-  if (source === "docker") return s === "dashboard-db";
+  if (source === "railway") {
+    return s === "postgres" || s.includes("postgres");
+  }
+  if (source === "docker" || !source) {
+    return s === "db" || s === "dashboard-db" || s.includes("postgres");
+  }
   return false;
+}
+
+/** Which connection profile dashboard-backend should use (see INTROSPECT_DB_URL for ``main``). */
+function introspectProfileForRow(
+  source: string | undefined,
+  service: string,
+  image: string
+): "default" | "main" {
+  const s = (service || "").toLowerCase();
+  if (source === "docker" && s === "db") return "main";
+  return "default";
 }
 
 type DockerResponse = {
@@ -244,8 +264,10 @@ export function OpsDashboard() {
 
   const [pgDetailKey, setPgDetailKey] = useState<string | null>(null);
   const [pgData, setPgData] = useState<PostgresIntrospectResponse | null>(null);
+  const [pgLoadedForId, setPgLoadedForId] = useState<string | null>(null);
   const [pgLoading, setPgLoading] = useState(false);
   const [pgError, setPgError] = useState<string | null>(null);
+  const pgReqGen = useRef(0);
 
   useEffect(() => {
     const t = window.setTimeout(() => setLogSearchDebounced(logSearch), 400);
@@ -326,28 +348,39 @@ export function OpsDashboard() {
     return () => window.clearInterval(id);
   }, [mainTab, pauseLive, fetchLogs]);
 
-  const loadPostgresIntrospect = useCallback(async () => {
-    setPgLoading(true);
-    setPgError(null);
-    try {
-      const res = await fetch("/api/ops/postgres-introspect");
-      const j = (await res.json()) as PostgresIntrospectResponse & {
-        error?: string;
-        hint?: string;
-      };
-      if (!res.ok) {
-        setPgError(j.error ?? `HTTP ${res.status}`);
+  const loadPostgresIntrospect = useCallback(
+    async (c: DockerContainer, source: string | undefined) => {
+      const gen = ++pgReqGen.current;
+      const profile = introspectProfileForRow(source, c.service, c.image);
+      setPgLoading(true);
+      setPgError(null);
+      setPgLoadedForId(null);
+      try {
+        const params = new URLSearchParams();
+        params.set("profile", profile);
+        const res = await fetch(`/api/ops/postgres-introspect?${params.toString()}`);
+        const j = (await res.json()) as PostgresIntrospectResponse & {
+          error?: string;
+          hint?: string;
+        };
+        if (gen !== pgReqGen.current) return;
+        if (!res.ok) {
+          setPgError(j.error ?? `HTTP ${res.status}`);
+          setPgData(null);
+          return;
+        }
+        setPgData(j);
+        setPgLoadedForId(c.id);
+      } catch (e) {
+        if (gen !== pgReqGen.current) return;
+        setPgError(e instanceof Error ? e.message : "Request failed");
         setPgData(null);
-        return;
+      } finally {
+        if (gen === pgReqGen.current) setPgLoading(false);
       }
-      setPgData(j);
-    } catch (e) {
-      setPgError(e instanceof Error ? e.message : "Request failed");
-      setPgData(null);
-    } finally {
-      setPgLoading(false);
-    }
-  }, []);
+    },
+    []
+  );
 
   const sortedContainers = useMemo(() => {
     const list = docker?.containers ?? [];
@@ -514,9 +547,10 @@ export function OpsDashboard() {
                     </TableRow>
                   )}
                   {sortedContainers.flatMap((c) => {
-                    const showPg = isPostgresIntrospectRow(
+                    const showPg = isPostgresLikeRow(
                       docker?.source,
-                      c.service
+                      c.service,
+                      c.image
                     );
                     const pgOpen = showPg && pgDetailKey === c.id;
                     const mainRow = (
@@ -541,7 +575,7 @@ export function OpsDashboard() {
                                     return;
                                   }
                                   setPgDetailKey(c.id);
-                                  void loadPostgresIntrospect();
+                                  void loadPostgresIntrospect(c, docker?.source);
                                 }}
                               >
                                 {pgOpen ? (
@@ -607,13 +641,30 @@ export function OpsDashboard() {
                         >
                           <div className="space-y-3 py-1">
                             <p className="text-muted-foreground text-xs">
-                              Databases and tables on the{" "}
-                              <span className="font-mono">same Postgres server</span> as{" "}
-                              <span className="font-mono">dashboard-backend</span> (
-                              <span className="font-mono">DASHBOARD_DATABASE_URL</span>
-                              ). Railway: usually includes{" "}
-                              <span className="font-mono">dashboard_db</span> alongside the
-                              default DB.
+                              {introspectProfileForRow(
+                                docker?.source,
+                                c.service,
+                                c.image
+                              ) === "main" ? (
+                                <>
+                                  Introspection uses{" "}
+                                  <span className="font-mono">INTROSPECT_DB_URL</span> on{" "}
+                                  <span className="font-mono">dashboard-backend</span> (Compose
+                                  <span className="font-mono"> db</span> service).
+                                </>
+                              ) : (
+                                <>
+                                  Databases and tables on the{" "}
+                                  <span className="font-mono">same Postgres server</span> as{" "}
+                                  <span className="font-mono">dashboard-backend</span> (
+                                  <span className="font-mono">
+                                    DASHBOARD_DATABASE_URL
+                                  </span>{" "}
+                                  / discrete <span className="font-mono">DASHBOARD_DB_*</span>
+                                  ). Hosted Railway: often shows <span className="font-mono">dashboard_db</span>{" "}
+                                  and the default DB on one plugin.
+                                </>
+                              )}
                             </p>
                             {pgLoading && (
                               <div className="text-muted-foreground flex items-center gap-2 text-sm">
@@ -626,7 +677,10 @@ export function OpsDashboard() {
                                 {pgError}
                               </p>
                             )}
-                            {!pgLoading && !pgError && pgData && (
+                            {!pgLoading &&
+                              !pgError &&
+                              pgData &&
+                              pgLoadedForId === c.id && (
                               <>
                                 <div>
                                   <div className="mb-1 text-sm font-medium">
@@ -646,14 +700,19 @@ export function OpsDashboard() {
                                       </Badge>
                                     ))}
                                   </div>
-                                  {!pgData.dashboard_db_present && (
-                                    <p className="text-muted-foreground mt-2 text-xs">
-                                      <span className="font-mono">dashboard_db</span> not
-                                      found — create it on this instance (see RAILWAY.md) or
-                                      check{" "}
-                                      <span className="font-mono">DASHBOARD_DB_NAME</span>.
-                                    </p>
-                                  )}
+                                  {!pgData.dashboard_db_present &&
+                                    introspectProfileForRow(
+                                      docker?.source,
+                                      c.service,
+                                      c.image
+                                    ) === "default" && (
+                                      <p className="text-muted-foreground mt-2 text-xs">
+                                        <span className="font-mono">dashboard_db</span> not
+                                        found — create it on this instance (see RAILWAY.md) or
+                                        check{" "}
+                                        <span className="font-mono">DASHBOARD_DB_NAME</span>.
+                                      </p>
+                                    )}
                                 </div>
                                 {Object.keys(pgData.tables_by_database).length > 0 && (
                                   <div className="space-y-2">

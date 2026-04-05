@@ -281,7 +281,11 @@ services:
       DASHBOARD_DB_PORT: "5432"
       DASHBOARD_DB_USER: postgres
       DASHBOARD_DB_PASSWORD: postgres
+      # Ops tab: expand Compose ``db`` row → profile=main (same DB as url-shortener)
+      INTROSPECT_DB_URL: postgresql://postgres:postgres@db:5432/hackathon_db
     depends_on:
+      db:
+        condition: service_healthy
       kafka:
         condition: service_healthy
       dashboard-db:

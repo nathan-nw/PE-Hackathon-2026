@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 import {
   isDashboardBackendUrlConfigured,
@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 const FETCH_MS = 25_000;
 
 /** Proxies to FastAPI `GET /api/introspect/postgres` (databases + public tables). */
-export async function GET() {
+export async function GET(request: NextRequest) {
   const resolved = resolveDashboardBackendBase();
   if (!resolved.ok) {
     return NextResponse.json(
@@ -25,7 +25,8 @@ export async function GET() {
     );
   }
 
-  const url = `${resolved.base}/api/introspect/postgres`;
+  const qs = request.nextUrl.searchParams.toString();
+  const url = `${resolved.base}/api/introspect/postgres${qs ? `?${qs}` : ""}`;
   let abortTimer: ReturnType<typeof setTimeout> | undefined;
   try {
     const controller = new AbortController();

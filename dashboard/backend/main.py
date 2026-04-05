@@ -146,9 +146,14 @@ def health():
 
 
 @app.get("/api/introspect/postgres")
-def introspect_postgres():
-    """List databases and public tables on the same server as ``DASHBOARD_DATABASE_URL`` (Ops UI)."""
-    return introspect_postgres_server()
+def introspect_postgres(
+    profile: str = Query(
+        "default",
+        description="default = dashboard-backend DB; main = INTROSPECT_DB_URL (Compose db service)",
+    ),
+):
+    """List databases and public tables (Ops UI). ``profile=main`` uses ``INTROSPECT_DB_URL``."""
+    return introspect_postgres_server(profile)
 
 
 @app.post("/api/ingest")
