@@ -97,8 +97,16 @@ Everything lives in [`docs/`](docs/):
 docs/
 ├── ARCHITECTURE.md                # System diagram, health probes, how pieces connect
 ├── DOCUMENTATION.md               # Full setup, API endpoints, architecture deep-dive
-├── TESTING.md                     # How to run unit, integration, and load tests
-├── CONTRIBUTING.md                # Branching strategy, code standards
+├── DEPLOY-GUIDE.md                # How to deploy (Docker + Railway) and how to rollback
+├── TROUBLESHOOTING.md             # If X happens, try Y — real bugs we hit and fixes
+│
+├── reference/                     # Look-up docs (env vars, decisions, capacity, testing)
+│   ├── CONFIGURATION.md           #   All environment variables needed to run
+│   ├── DECISION-LOG.md            #   Why we chose Redis, NGINX, Kafka, etc.
+│   ├── CAPACITY-PLAN.md           #   How many users, where the limit is, scaling levers
+│   ├── DASHBOARD-SETUP.md         #   Dashboard local dev, env vars, Kafka logs, security
+│   ├── TESTING.md                 #   How to run unit, integration, and load tests
+│   └── CONTRIBUTING.md            #   Branching strategy, code standards
 │
 ├── Track1Req/                     # Track 1 — Reliability
 │   ├── FAILURE-MODES.md           #   What breaks, what happens, how to fix it
