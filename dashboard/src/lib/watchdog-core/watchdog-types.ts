@@ -9,6 +9,8 @@ export type WatchdogEventKind =
   | "railway_auto_recover"
   /** Public HTTP heartbeat failed repeatedly while Railway deployment still SUCCESS/SLEEPING. */
   | "heartbeat_recover"
+  /** After lifecycle showed exited, next-tick serviceInstanceDeploy(latest) from exit-redeploy path. */
+  | "heartbeat_exit_redeploy"
   /** Transition to no active deployment, STOPPED, or user stop — was running, now not. */
   | "railway_stopped";
 

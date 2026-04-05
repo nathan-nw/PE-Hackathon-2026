@@ -6,7 +6,13 @@ import {
   railwayIdsConfigured,
   railwayVisibilityConfigured,
 } from "@/lib/railway-visibility";
-import { pingHeartbeatUrl, buildHeartbeatProbeUrl } from "@/lib/service-heartbeat";
+import { getRailwayHeartbeatExitLifecycleState } from "@/lib/railway-heartbeat-exit-state";
+import { effectiveRailwayOnlineStatusAfterProbe } from "@/lib/watchdog-core/heartbeat-lifecycle";
+import {
+  pingHeartbeatUrl,
+  buildHeartbeatProbeUrl,
+  type HeartbeatPingResult,
+} from "@/lib/service-heartbeat";
 import { runtimeEnv } from "@/lib/server-runtime-env";
 
 export const runtime = "nodejs";
@@ -80,17 +86,12 @@ export async function GET(request: NextRequest) {
 
       const ds = row.deploymentStatus;
       const probeUrl = buildHeartbeatProbeUrl(row.railwayPublicUrl, row.service);
-      let heartbeat: {
-        skipped: boolean;
-        ok: boolean | null;
-        probeUrl: string | null;
-        latencyMs?: number;
-        statusCode?: number;
-        error?: string;
-      };
+      let heartbeat: HeartbeatPingResult;
       if (probeUrl) {
         const pr = await pingHeartbeatUrl(probeUrl);
         heartbeat = {
+          railwayServiceId: row.railwayServiceId,
+          service: row.service,
           skipped: false,
           ok: pr.ok,
           probeUrl,
@@ -99,8 +100,23 @@ export async function GET(request: NextRequest) {
           ...(pr.error ? { error: pr.error } : {}),
         };
       } else {
-        heartbeat = { skipped: true, ok: null, probeUrl: null };
+        heartbeat = {
+          railwayServiceId: row.railwayServiceId,
+          service: row.service,
+          skipped: true,
+          ok: null,
+          probeUrl: null,
+        };
       }
+
+      const railwayOnlineStatus = effectiveRailwayOnlineStatusAfterProbe(
+        getRailwayHeartbeatExitLifecycleState(),
+        row.railwayServiceId,
+        row.railwayDeploymentId ?? "",
+        row.railwayOnlineStatus,
+        heartbeat,
+        { scheduleRedeem: false }
+      );
 
       return json({
         found: true,
@@ -116,7 +132,7 @@ export async function GET(request: NextRequest) {
         railwayServiceId: row.railwayServiceId,
         railwayDeploymentId: row.railwayDeploymentId,
         statusLine: row.status,
-        railwayOnlineStatus: row.railwayOnlineStatus,
+        railwayOnlineStatus,
         railwayPublicUrl: row.railwayPublicUrl ?? null,
         heartbeat,
       });

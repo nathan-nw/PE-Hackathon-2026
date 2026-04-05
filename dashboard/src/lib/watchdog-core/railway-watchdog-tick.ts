@@ -14,6 +14,7 @@ import {
   buildHeartbeatProbeUrl,
   pingHeartbeatUrl,
   shouldUsePrivateRailwayHeartbeat,
+  type HeartbeatPingResult,
 } from "./service-heartbeat";
 
 import type {
@@ -21,6 +22,16 @@ import type {
   WatchdogEvent,
   WatchdogPayload,
 } from "./watchdog-types";
+import {
+  clearExitLifecycleForService,
+  clearExitLifecycleRedeemFlag,
+  createHeartbeatExitLifecycleState,
+  effectiveRailwayOnlineStatusAfterProbe,
+  peekExitLifecycleRedeem,
+  railwayHeartbeatExitRedeployEnabled,
+  requeueExitLifecycleRedeem,
+  type HeartbeatExitLifecycleState,
+} from "./heartbeat-lifecycle";
 
 /** Match compose-watchdog `LOG_TAIL_MAX` for parity. */
 const LOG_TAIL_MAX = 40;
@@ -54,6 +65,8 @@ export type WatchdogPersistentState = {
   heartbeatRecoverState: Map<string, HeartbeatRecoverState>;
   heartbeatLastRecoverAt: Map<string, number>;
   apiActivity: WatchdogApiActivityEntry[];
+  /** Consecutive liveness failures → exited lifecycle + next-tick redeploy (hosted). */
+  heartbeatExitLifecycle: HeartbeatExitLifecycleState;
 };
 
 export function createEmptyWatchdogState(): WatchdogPersistentState {
@@ -64,6 +77,7 @@ export function createEmptyWatchdogState(): WatchdogPersistentState {
     heartbeatRecoverState: new Map(),
     heartbeatLastRecoverAt: new Map(),
     apiActivity: [],
+    heartbeatExitLifecycle: createHeartbeatExitLifecycleState(),
   };
 }
 
@@ -260,6 +274,50 @@ export async function runRailwayWatchdogTick(
     const onlineNow = row.railwayOnlineStatus;
     const before = prev.get(sid);
 
+    if (
+      railwayHeartbeatEnabled()
+      && railwayHeartbeatExitRedeployEnabled()
+      && autoRecover
+      && environmentId
+      && peekExitLifecycleRedeem(state.heartbeatExitLifecycle, sid)
+      && isHealthy(cur)
+      && !isDeploying(cur)
+      && depId
+    ) {
+      clearExitLifecycleRedeemFlag(state.heartbeatExitLifecycle, sid);
+      try {
+        const depT0 = performance.now();
+        await railwayServiceInstanceDeployLatest(environmentId, sid);
+        const depMs = Math.round(performance.now() - depT0);
+        pushActivity(state, {
+          kind: "graphql",
+          target: `serviceInstanceDeploy exit-redeploy (${name})`,
+          method: "POST",
+          durationMs: depMs,
+          status: 200,
+        });
+        clearExitLifecycleForService(state.heartbeatExitLifecycle, sid);
+        events.push({
+          id: `${sid}-exit-redeploy-${Date.now()}`,
+          at: now,
+          service: name,
+          kind: "heartbeat_exit_redeploy",
+          message: `Lifecycle was exited (liveness failed); serviceInstanceDeploy(latest) for ${name}.`,
+        });
+        pushLogLine(
+          state,
+          `watchdog: exit-lifecycle redeploy ${name} → serviceInstanceDeploy`
+        );
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        requeueExitLifecycleRedeem(state.heartbeatExitLifecycle, sid);
+        pushLogLine(
+          state,
+          `watchdog: exit-lifecycle redeploy failed ${name}: ${msg}`
+        );
+      }
+    }
+
     let hbSt = hbStateMap.get(sid);
     if (!hbSt || hbSt.deploymentId !== depId) {
       hbSt = {
@@ -296,10 +354,11 @@ export async function runRailwayWatchdogTick(
       } else {
         hbFail++;
         if (
-          railwayHeartbeatRecoverEnabled() &&
-          autoRecover &&
-          isHealthy(cur) &&
-          !isDeploying(cur)
+          !railwayHeartbeatExitRedeployEnabled()
+          && railwayHeartbeatRecoverEnabled()
+          && autoRecover
+          && isHealthy(cur)
+          && !isDeploying(cur)
         ) {
           hbSt.consecutiveMisses += 1;
           const canRecover =
@@ -373,6 +432,24 @@ export async function runRailwayWatchdogTick(
           hbSt.consecutiveMisses = 0;
         }
       }
+      const hbSynth: HeartbeatPingResult = {
+        railwayServiceId: sid,
+        service: name,
+        probeUrl,
+        skipped: false,
+        ok: pr.ok,
+        latencyMs: pr.latencyMs,
+        ...(pr.statusCode !== undefined ? { statusCode: pr.statusCode } : {}),
+        ...(pr.error ? { error: pr.error } : {}),
+      };
+      effectiveRailwayOnlineStatusAfterProbe(
+        state.heartbeatExitLifecycle,
+        sid,
+        depId,
+        onlineNow,
+        hbSynth,
+        { scheduleRedeem: true }
+      );
       hbStateMap.set(sid, hbSt);
     } else if (railwayHeartbeatEnabled()) {
       hbSkipped++;

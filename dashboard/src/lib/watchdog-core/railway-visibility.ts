@@ -24,7 +24,9 @@ export type RailwayOnlineStatus =
   | "deploying"
   | "failed"
   | "skipped"
-  | "unknown";
+  | "unknown"
+  /** Liveness probes failed repeatedly while deployment still reports SUCCESS (wedged); mirrors Docker `exited`. */
+  | "exited";
 
 export type RailwayVisibilityRow = {
   id: string;

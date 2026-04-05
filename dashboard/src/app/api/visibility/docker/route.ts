@@ -11,6 +11,8 @@ import {
   railwayIdsConfigured,
   railwayVisibilityConfigured,
 } from "@/lib/railway-visibility";
+import { getRailwayHeartbeatExitLifecycleState } from "@/lib/railway-heartbeat-exit-state";
+import { effectiveRailwayOnlineStatusAfterProbe } from "@/lib/watchdog-core/heartbeat-lifecycle";
 import { pingRailwayServiceHeartbeats } from "@/lib/service-heartbeat";
 
 export const runtime = "nodejs";
@@ -80,10 +82,23 @@ export async function GET(request: NextRequest) {
 
     const beats = await pingRailwayServiceHeartbeats(r.containers);
     const byId = new Map(beats.map((b) => [b.railwayServiceId, b]));
-    const containers = r.containers.map((c) => ({
-      ...c,
-      heartbeat: byId.get(c.railwayServiceId),
-    }));
+    const exitSt = getRailwayHeartbeatExitLifecycleState();
+    const containers = r.containers.map((c) => {
+      const hb = byId.get(c.railwayServiceId);
+      const railwayOnlineStatus = effectiveRailwayOnlineStatusAfterProbe(
+        exitSt,
+        c.railwayServiceId,
+        c.railwayDeploymentId ?? "",
+        c.railwayOnlineStatus,
+        hb,
+        { scheduleRedeem: false }
+      );
+      return {
+        ...c,
+        railwayOnlineStatus,
+        heartbeat: hb,
+      };
+    });
 
     return NextResponse.json(
       {

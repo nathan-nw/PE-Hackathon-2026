@@ -42,6 +42,12 @@ export function RailwayOnlineStatusBadge({
           Failed
         </Badge>
       );
+    case "exited":
+      return (
+        <Badge variant="destructive" className={className}>
+          Exited
+        </Badge>
+      );
     case "skipped":
       return (
         <Badge variant="outline" className={className}>
