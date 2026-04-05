@@ -9,5 +9,7 @@ If a container's main process crashes—whether due to an Out-Of-Memory exceptio
 
 ### Restart Verification
 Below is visual evidence confirming that the service automatically recovered, resurrected itself, and reset its uptime clock immediately after we brutally forced a failure using `docker stop` / `docker kill` during our Chaos Mode testing pipeline or through our dashboard.
+![image](https://github.com/user-attachments/assets/4bde1bc3-29e4-49bd-972c-89384b7bd95b)
+![image (1)](https://github.com/user-attachments/assets/7567ac1f-4f49-4bfb-b79f-f9469e53c9b6)
+![image (2)](https://github.com/user-attachments/assets/5f60e5c2-22e5-4657-b547-2e35dc02451c)
 
-*[Insert Screenshot Here]*
