@@ -40,6 +40,7 @@
  *   RAILWAY_WATCHDOG_POLL_SEC=15  — optional; with SYNC_VARIABLES=1, sets hosted Ops watchdog poll interval (matches compose-watchdog default)
  *   CHAOS_KILL_ENABLED=1  — optional; default when unset is 1 on dashboard so hosted Ops Chaos Kill/Reboot work (set 0 in .env.railway.setup to disable)
  *   RAILWAY_WATCHDOG_AUTO_RECOVER=1  — optional; default 1; watchdog calls serviceInstanceDeploy(latest) when a deployment is CRASHED/FAILED/etc.
+ *   With SYNC_VARIABLES=1 and a `railway-watchdog` service, sets dashboard WATCHDOG_SERVICE_URL to the private worker URL (single replica recommended).
  */
 
 const crypto = require("crypto");
@@ -206,6 +207,12 @@ const SERVICE_SPECS = [
     rootDirectory: "dashboard/backend",
     railwayConfigFile: "/dashboard/backend/railway.toml",
     watchPatterns: ["/dashboard/backend/**"],
+  },
+  {
+    name: "railway-watchdog",
+    rootDirectory: ".",
+    railwayConfigFile: "/watchdog-service/railway.toml",
+    watchPatterns: ["/watchdog-service/**", "/dashboard/src/lib/watchdog-core/**"],
   },
 ];
 
@@ -644,10 +651,42 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
   };
   await upsert("dashboard-backend", dashboardBackendVars);
 
+  const watchdogPoll = (process.env.RAILWAY_WATCHDOG_POLL_SEC || "").trim();
+  const watchdogAutoRecoverRaw = (
+    process.env.RAILWAY_WATCHDOG_AUTO_RECOVER ?? "1"
+  ).trim();
+  const watchdogAutoRecover =
+    watchdogAutoRecoverRaw === "" ||
+    watchdogAutoRecoverRaw === "1" ||
+    watchdogAutoRecoverRaw.toLowerCase() === "true" ||
+    watchdogAutoRecoverRaw.toLowerCase() === "yes" ||
+    watchdogAutoRecoverRaw.toLowerCase() === "on";
+
+  if (byName.has("railway-watchdog")) {
+    const dashboardPt = (process.env.DASHBOARD_RAILWAY_PROJECT_TOKEN || "").trim();
+    const dashboardAt = (process.env.DASHBOARD_RAILWAY_API_TOKEN || "").trim();
+    const railwayWatchdogVars = {
+      PORT: "8080",
+      RAILWAY_PROJECT_ID: projectId,
+      RAILWAY_ENVIRONMENT_ID: environmentId,
+      RAILWAY_WATCHDOG_AUTO_RECOVER: watchdogAutoRecover ? "1" : "0",
+      ...(watchdogPoll ? { RAILWAY_WATCHDOG_POLL_SEC: watchdogPoll } : {}),
+    };
+    if (dashboardPt) {
+      railwayWatchdogVars.RAILWAY_PROJECT_TOKEN = dashboardPt;
+    } else if (dashboardAt) {
+      railwayWatchdogVars.RAILWAY_API_TOKEN = dashboardAt;
+    } else {
+      console.warn(
+        "(Variable sync) railway-watchdog: no DASHBOARD_RAILWAY_PROJECT_TOKEN or DASHBOARD_RAILWAY_API_TOKEN — set tokens for GraphQL access."
+      );
+    }
+    await upsert("railway-watchdog", railwayWatchdogVars);
+  }
+
   if (byName.has("dashboard")) {
     const dashboardPt = (process.env.DASHBOARD_RAILWAY_PROJECT_TOKEN || "").trim();
     const dashboardAt = (process.env.DASHBOARD_RAILWAY_API_TOKEN || "").trim();
-    const watchdogPoll = (process.env.RAILWAY_WATCHDOG_POLL_SEC || "").trim();
     const chaosKillRaw = (process.env.CHAOS_KILL_ENABLED ?? "1").trim();
     const chaosKillEnabled =
       chaosKillRaw === "" ||
@@ -655,16 +694,6 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
       chaosKillRaw.toLowerCase() === "true" ||
       chaosKillRaw.toLowerCase() === "yes" ||
       chaosKillRaw.toLowerCase() === "on";
-    const watchdogAutoRecoverRaw = (
-      process.env.RAILWAY_WATCHDOG_AUTO_RECOVER ?? "1"
-    ).trim();
-    const watchdogAutoRecover =
-      watchdogAutoRecoverRaw === "" ||
-      watchdogAutoRecoverRaw === "1" ||
-      watchdogAutoRecoverRaw.toLowerCase() === "true" ||
-      watchdogAutoRecoverRaw.toLowerCase() === "yes" ||
-      watchdogAutoRecoverRaw.toLowerCase() === "on";
-
     const dashboardVars = {
       // Private HTTP URL: Next.js server-side fetch to the public HTTPS domain often fails
       // (edge/DNS/hairpin); same pattern as load-balancer → url-shortener via RAILWAY_PRIVATE_DOMAIN.
@@ -673,6 +702,15 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
         varRef("dashboard-backend", "RAILWAY_PRIVATE_DOMAIN") +
         ":" +
         varRef("dashboard-backend", "PORT"),
+      ...(byName.has("railway-watchdog")
+        ? {
+            WATCHDOG_SERVICE_URL:
+              "http://" +
+              varRef("railway-watchdog", "RAILWAY_PRIVATE_DOMAIN") +
+              ":" +
+              varRef("railway-watchdog", "PORT"),
+          }
+        : {}),
       // Ops Load Test tab (client): sane default for custom k6 target (build-time; redeploy if changed).
       ...(byName.has("load-balancer")
         ? {

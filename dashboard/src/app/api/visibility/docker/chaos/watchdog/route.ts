@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { fetchRailwayWatchdogPayload } from "@/lib/railway-watchdog";
 import { runtimeEnv } from "@/lib/server-runtime-env";
+import { watchdogServiceBaseUrl } from "@/lib/watchdog-service-url";
 import {
   railwayIdsConfigured,
   railwayVisibilityConfigured,
@@ -53,6 +54,45 @@ function normalizeDockerWatchdog(data: DockerStatusJson): WatchdogPayload {
 
 export async function GET() {
   if (railwayIdsConfigured() && railwayVisibilityConfigured()) {
+    const remote = watchdogServiceBaseUrl();
+    if (remote) {
+      try {
+        const res = await fetch(`${remote}/v1/status`, {
+          cache: "no-store",
+          signal: AbortSignal.timeout(12_000),
+        });
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          return NextResponse.json(
+            {
+              source: "error" as const,
+              intervalSec: 15,
+              lastTickAt: null,
+              instancesMonitored: 0,
+              events: [],
+              error: `Watchdog service HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ""}`,
+            } satisfies WatchdogPayload,
+            { status: 502 }
+          );
+        }
+        const payload = (await res.json()) as WatchdogPayload;
+        return NextResponse.json(payload);
+      } catch (e) {
+        const message =
+          e instanceof Error ? e.message : "Watchdog service unreachable";
+        return NextResponse.json(
+          {
+            source: "error" as const,
+            intervalSec: 15,
+            lastTickAt: null,
+            instancesMonitored: 0,
+            events: [],
+            error: message,
+          } satisfies WatchdogPayload,
+          { status: 503 }
+        );
+      }
+    }
     try {
       const payload = await fetchRailwayWatchdogPayload();
       return NextResponse.json(payload);

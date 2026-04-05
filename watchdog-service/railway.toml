@@ -1,0 +1,11 @@
+# Repository root is the service root (see setup-railway.js) so Docker can COPY dashboard/src/lib/watchdog-core.
+# Run a single replica: duplicate timers would double GraphQL load and redeploy attempts.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "/watchdog-service/Dockerfile"
+watchPatterns = ["/watchdog-service/**", "/dashboard/src/lib/watchdog-core/**"]
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 60

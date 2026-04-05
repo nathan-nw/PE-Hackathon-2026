@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/table";
 import { Loader2, RefreshCw, RotateCcw, Skull } from "lucide-react";
 
-import type { WatchdogPayload } from "@/lib/watchdog-types";
+import type { WatchdogApiActivityEntry, WatchdogPayload } from "@/lib/watchdog-types";
 import { HeartbeatCell } from "@/components/heartbeat-cell";
 import { RailwayOnlineStatusBadge } from "@/components/railway-online-status-badge";
 import { WatchdogToastStack } from "@/components/watchdog-toast-stack";
@@ -191,32 +191,32 @@ export function ChaosPanel() {
     void fetchDocker();
   }, [fetchDocker]);
 
+  const applyWatchdogPayload = useCallback((j: WatchdogPayload) => {
+    setWatchdog(j);
+
+    if (!watchdogHydrated.current && (j.source === "docker" || j.source === "railway")) {
+      watchdogHydrated.current = true;
+      for (const ev of j.events) {
+        seenWatchdogEventIds.current.add(ev.id);
+      }
+      return;
+    }
+
+    for (const ev of j.events) {
+      if (seenWatchdogEventIds.current.has(ev.id)) continue;
+      seenWatchdogEventIds.current.add(ev.id);
+      setWatchdogToasts((prev) => {
+        const next = [{ id: ev.id, message: ev.message, at: ev.at }, ...prev];
+        return next.slice(0, 6);
+      });
+    }
+  }, []);
+
   const fetchWatchdog = useCallback(async () => {
     try {
       const res = await fetch("/api/visibility/docker/chaos/watchdog");
       const j = (await res.json()) as WatchdogPayload;
-      if (!res.ok) {
-        setWatchdog(j);
-        return;
-      }
-      setWatchdog(j);
-
-      if (!watchdogHydrated.current && (j.source === "docker" || j.source === "railway")) {
-        watchdogHydrated.current = true;
-        for (const ev of j.events) {
-          seenWatchdogEventIds.current.add(ev.id);
-        }
-        return;
-      }
-
-      for (const ev of j.events) {
-        if (seenWatchdogEventIds.current.has(ev.id)) continue;
-        seenWatchdogEventIds.current.add(ev.id);
-        setWatchdogToasts((prev) => {
-          const next = [{ id: ev.id, message: ev.message, at: ev.at }, ...prev];
-          return next.slice(0, 6);
-        });
-      }
+      applyWatchdogPayload(j);
     } catch {
       setWatchdog({
         source: "error",
@@ -227,13 +227,38 @@ export function ChaosPanel() {
         error: "Failed to load watchdog status",
       });
     }
-  }, []);
+  }, [applyWatchdogPayload]);
 
   useEffect(() => {
     void fetchWatchdog();
-    const id = window.setInterval(() => void fetchWatchdog(), 2000);
-    return () => window.clearInterval(id);
-  }, [fetchWatchdog]);
+
+    let pollId: number | null = window.setInterval(
+      () => void fetchWatchdog(),
+      2000
+    );
+
+    const es = new EventSource("/api/visibility/docker/chaos/watchdog/stream");
+    es.addEventListener("tick", (ev) => {
+      try {
+        const j = JSON.parse((ev as MessageEvent).data) as WatchdogPayload;
+        if (pollId) {
+          clearInterval(pollId);
+          pollId = null;
+        }
+        applyWatchdogPayload(j);
+      } catch {
+        /* ignore malformed chunk */
+      }
+    });
+    es.onerror = () => {
+      es.close();
+    };
+
+    return () => {
+      if (pollId) clearInterval(pollId);
+      es.close();
+    };
+  }, [fetchWatchdog, applyWatchdogPayload]);
 
   useEffect(() => {
     if (!watchdog) return;
@@ -461,6 +486,29 @@ export function ChaosPanel() {
                 </summary>
                 <pre className="bg-muted/60 mt-2 max-h-40 overflow-auto rounded-md p-2 font-mono text-xs leading-relaxed whitespace-pre-wrap">
                   {watchdog.logTail.join("\n")}
+                </pre>
+              </details>
+            )}
+          {watchdog?.apiActivity &&
+            watchdog.apiActivity.length > 0 &&
+            watchdog.source === "railway" && (
+              <details className="text-sm">
+                <summary className="text-muted-foreground cursor-pointer select-none">
+                  Recent GraphQL / HTTP calls (hosted worker)
+                </summary>
+                <pre className="bg-muted/60 mt-2 max-h-32 overflow-auto rounded-md p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
+                  {watchdog.apiActivity.map((a: WatchdogApiActivityEntry) => {
+                    const bits = [
+                      a.at,
+                      a.kind,
+                      a.target,
+                      a.method,
+                      a.durationMs != null ? `${a.durationMs}ms` : "",
+                      a.status != null ? String(a.status) : "",
+                      a.detail,
+                    ].filter(Boolean);
+                    return bits.join(" · ");
+                  }).join("\n")}
                 </pre>
               </details>
             )}
