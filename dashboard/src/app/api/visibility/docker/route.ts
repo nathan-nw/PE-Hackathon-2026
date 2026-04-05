@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import type { ContainerStats } from "dockerode";
 import { getDockerConnectionOptions } from "@/lib/docker-options";
 import {
+  debugEnvEnabled,
+  getRailwayEnvDebugSnapshot,
+  runtimeEnv,
+} from "@/lib/server-runtime-env";
+import {
   fetchRailwayVisibilityRows,
   railwayIdsConfigured,
   railwayVisibilityConfigured,
@@ -31,18 +36,22 @@ function cpuPercentFromStats(stats: ContainerStats): number | undefined {
 export async function GET(request: NextRequest) {
   const stats = request.nextUrl.searchParams.get("stats") === "1";
   const project =
-    process.env.VISIBILITY_COMPOSE_PROJECT || "pe-hackathon-2026";
+    runtimeEnv("VISIBILITY_COMPOSE_PROJECT") || "pe-hackathon-2026";
 
   if (railwayIdsConfigured()) {
     if (!railwayVisibilityConfigured()) {
-      const pid = process.env.RAILWAY_PROJECT_ID ?? "";
+      const pid = runtimeEnv("RAILWAY_PROJECT_ID") ?? "";
+      const baseError =
+        "Set RAILWAY_PROJECT_TOKEN or RAILWAY_API_TOKEN on the dashboard service (variable names must not have leading/trailing spaces). Redeploy after fixing.";
       return NextResponse.json({
         source: "railway" as const,
         project: pid,
         projectId: pid,
         containers: [],
-        error:
-          "Set RAILWAY_PROJECT_TOKEN or RAILWAY_API_TOKEN on the dashboard service (exact names), redeploy, and refresh.",
+        error: baseError,
+        ...(debugEnvEnabled()
+          ? { envDebug: getRailwayEnvDebugSnapshot() }
+          : {}),
       });
     }
     const r = await fetchRailwayVisibilityRows();
