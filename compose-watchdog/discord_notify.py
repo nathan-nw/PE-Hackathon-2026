@@ -164,7 +164,7 @@ def notify_exited(service: str, container_short: str) -> None:
     _post_embeds(
         [
             {
-                "title": "Heads up — a container exited",
+                "title": "Exit alert — container exited",
                 "description": (
                     f"I noticed **{service}** (`{container_short}`) is **exited**. "
                     "I'll start it if the restart policy allows."
@@ -193,9 +193,10 @@ def notify_started_after_exit(service: str, container_short: str) -> None:
     _post_embeds(
         [
             {
-                "title": "Back online",
+                "title": "Recovery — running again after exit",
                 "description": (
-                    f"**{service}** (`{container_short}`) is **running** again after being exited."
+                    f"**{service}** (`{container_short}`) is **running** again after exit "
+                    "(restarted / deployed per policy)."
                 ),
                 "color": _EMBED_GREEN,
                 "footer": {"text": "Happy · compose watchdog"},
