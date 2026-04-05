@@ -40,9 +40,12 @@ KAFKA_BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "")
 KAFKA_TOPIC = os.environ.get("KAFKA_LOG_TOPIC", "app-logs")
 # Set empty, omit, or DISABLED for hosts without Kafka (e.g. Railway); logs tab stays empty.
 KAFKA_ENABLED = bool(
-    KAFKA_BOOTSTRAP_SERVERS.strip() and KAFKA_BOOTSTRAP_SERVERS.strip().upper() != "DISABLED"
+    KAFKA_BOOTSTRAP_SERVERS.strip()
+    and KAFKA_BOOTSTRAP_SERVERS.strip().upper() != "DISABLED"
 )
-ALLOW_INSECURE_LOG_INGEST = os.environ.get("ALLOW_INSECURE_LOG_INGEST", "").strip().lower() in (
+ALLOW_INSECURE_LOG_INGEST = os.environ.get(
+    "ALLOW_INSECURE_LOG_INGEST", ""
+).strip().lower() in (
     "1",
     "true",
     "yes",
@@ -53,6 +56,7 @@ DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
 cache = LogCache(max_entries=CACHE_MAX_ENTRIES)
 k6 = K6Runner()
+alerter = DiscordAlerter(webhook_url=DISCORD_WEBHOOK_URL)
 
 
 def _log_ingest_token() -> str:
@@ -102,7 +106,6 @@ async def lifespan(app: FastAPI):
 
     # Kafka log stream (optional — disabled when no broker / DISABLED)
     if KAFKA_ENABLED:
-        alerter = DiscordAlerter(webhook_url=DISCORD_WEBHOOK_URL)
         consumer_thread = threading.Thread(
             target=run_consumer,
             args=(cache, KAFKA_BOOTSTRAP_SERVERS, KAFKA_TOPIC),
@@ -222,7 +225,9 @@ def get_logs(
     limit: int = Query(100, ge=1, le=50000),
     level: str | None = Query(None),
     instance_id: str | None = Query(None),
-    search: str | None = Query(None, description="Case-insensitive substring in message/logger/path"),
+    search: str | None = Query(
+        None, description="Case-insensitive substring in message/logger/path"
+    ),
     source: str = Query(
         "merged",
         description="memory | db | merged — merged combines ring buffer + Postgres kafka_logs",
@@ -326,7 +331,9 @@ def get_errors(
         recent_buckets = sorted_buckets[-5:]
         recent_total = sum(b["total"] for b in recent_buckets)
         recent_errors = sum(b["errors"] for b in recent_buckets)
-        current_rate = round((recent_errors / recent_total) * 100, 2) if recent_total > 0 else 0.0
+        current_rate = (
+            round((recent_errors / recent_total) * 100, 2) if recent_total > 0 else 0.0
+        )
 
         return {
             "buckets": sorted_buckets,
@@ -347,6 +354,7 @@ def get_errors(
 def clear_errors():
     """Clear all log data from both DB and in-memory cache."""
     from db import clear_logs
+
     cache.clear()
     deleted = clear_logs()
     return {"status": "cleared", "deleted_rows": deleted}
@@ -391,22 +399,14 @@ def k6_stop():
 @app.post("/api/alertmanager-webhook")
 async def alertmanager_webhook(request: Request):
     """Receive Alertmanager webhook POSTs, record as incident events, and forward to Discord."""
-    import json
-    import urllib.request
-
     try:
-        body = await request.json()
+        payload = await request.json()
     except Exception:
-        raise HTTPException(status_code=400, detail="JSON body required") from None
+        raise HTTPException(status_code=400, detail="JSON body required")
 
-    alerts = body.get("alerts", [])
-    if not alerts:
-        return {"status": "ok", "forwarded": 0, "recorded": 0}
-
-    webhook_url = DISCORD_WEBHOOK_URL
-    forwarded = 0
+    # Record each alert to the incident timeline (persistent)
+    alerts = payload.get("alerts", [])
     recorded = 0
-
     for alert in alerts:
         status = alert.get("status", "firing")
         labels = alert.get("labels", {})
@@ -414,7 +414,6 @@ async def alertmanager_webhook(request: Request):
         severity = labels.get("severity", "warning")
         alert_name = labels.get("alertname", "Unknown")
 
-        # ── Record to incident timeline ──
         event_type = "alert_resolved" if status == "resolved" else "alert_fired"
         title = f"[{status.upper()}] {alert_name}"
         desc = annotations.get("description", annotations.get("summary", ""))
@@ -430,46 +429,8 @@ async def alertmanager_webhook(request: Request):
         )
         recorded += 1
 
-        # ── Forward to Discord ──
-        if not webhook_url:
-            continue
-
-        color = 15158332 if severity == "critical" else 16776960  # red / yellow
-        if status == "resolved":
-            color = 3066993  # green
-
-        emoji = "🔴" if severity == "critical" else "🟡"
-        if status == "resolved":
-            emoji = "✅"
-
-        payload = json.dumps({
-            "embeds": [{
-                "title": f"{emoji} [{status.upper()}] {alert_name}",
-                "color": color,
-                "description": desc,
-                "fields": [
-                    {"name": "Severity", "value": severity, "inline": True},
-                    {"name": "Source", "value": "Prometheus → Alertmanager", "inline": True},
-                    {"name": "Summary", "value": annotations.get("summary", "—")[:200]},
-                ],
-            }],
-        }).encode("utf-8")
-
-        try:
-            req = urllib.request.Request(
-                webhook_url,
-                data=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "User-Agent": "PE-Hackathon-AlertmanagerBridge/1.0",
-                },
-                method="POST",
-            )
-            urllib.request.urlopen(req, timeout=5)
-            forwarded += 1
-        except Exception as exc:
-            logging.getLogger(__name__).warning("Discord forward failed: %s", exc)
-
+    # Forward to Discord via the alerter
+    forwarded = alerter.send_alertmanager_alerts(payload)
     return {"status": "ok", "forwarded": forwarded, "recorded": recorded}
 
 
