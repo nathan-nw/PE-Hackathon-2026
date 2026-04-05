@@ -153,6 +153,28 @@ Detailed operational runbooks live in `DOCUMENTATION.md → Runbooks` section. K
 
 ---
 
+### Incident Timeline (Dashboard → Incidents Tab)
+
+Chronological record of every alert that fires or resolves, persisted in PostgreSQL:
+
+- **Auto-captured**: Every Alertmanager webhook POST is recorded as an incident event (alert_fired / alert_resolved)
+- **Vertical timeline UI**: Events grouped by date, with animated status dots (pulsing red = firing, solid green = resolved)
+- **Filters**: Time window (1h / 6h / 12h / 24h) and severity (critical / warning / info / all)
+- **Summary stats**: Live count of firing vs resolved alerts
+- **Clear button**: Reset between test runs
+- **Polling**: Auto-refreshes every 10s
+- **API:** `GET /api/incidents?window_hours=24&severity=critical&limit=200`
+
+**Data flow:**
+```
+Prometheus alert fires → Alertmanager POST → /api/alertmanager-webhook
+    → INSERT incident_events table (persistent)
+    → Forward to Discord (if DISCORD_WEBHOOK_URL set)
+    → Incidents tab polls GET /api/incidents → renders timeline
+```
+
+---
+
 ## Infrastructure Summary
 
 | Component | Config File | Purpose |
@@ -163,7 +185,8 @@ Detailed operational runbooks live in `DOCUMENTATION.md → Runbooks` section. K
 | Discord Alerter | `dashboard/backend/discord_alerter.py` | Real-time Kafka-based 5xx/error alerts |
 | Webhook Bridge | `dashboard/backend/main.py` → `/api/alertmanager-webhook` | Translates Alertmanager → Discord embeds |
 | Dashboard Backend | `dashboard/backend/main.py` | FastAPI: logs, errors, stats, k6 runner |
-| Dashboard Frontend | `dashboard/src/components/` | Next.js: Logs, Errors, Telemetry, Load Test tabs |
+| Incident Timeline | `dashboard/src/components/incident-timeline.tsx` | Chronological alert event history |
+| Dashboard Frontend | `dashboard/src/components/` | Next.js: Logs, Errors, Telemetry, Load Test, Incidents tabs |
 
 ### How to Demo
 
@@ -180,6 +203,7 @@ k6 run dashboard/backend/load-test.js -e PRESET=chaos
 # 4. Watch in real-time:
 #    - Errors Tab: error rate spike, status breakdown
 #    - Telemetry Tab: latency/traffic/saturation correlation
+#    - Incidents Tab: alert timeline (fired → resolved)
 #    - Discord: alert notifications arriving
 #    - Alertmanager UI: http://localhost:9093
 

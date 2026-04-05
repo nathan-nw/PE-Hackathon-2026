@@ -18,10 +18,13 @@ from pydantic import BaseModel
 
 from cache import LogCache
 from db import (
+    clear_incident_events,
     count_kafka_logs,
+    fetch_incident_events,
     fetch_logs_from_db,
     get_connection,
     init_db,
+    insert_incident_event,
     introspect_postgres_server,
 )
 from discord_alerter import DiscordAlerter
@@ -387,11 +390,7 @@ def k6_stop():
 
 @app.post("/api/alertmanager-webhook")
 async def alertmanager_webhook(request: Request):
-    """Receive Alertmanager webhook POSTs and forward to Discord as embeds."""
-    webhook_url = DISCORD_WEBHOOK_URL
-    if not webhook_url:
-        return {"status": "skipped", "reason": "no DISCORD_WEBHOOK_URL configured"}
-
+    """Receive Alertmanager webhook POSTs, record as incident events, and forward to Discord."""
     import json
     import urllib.request
 
@@ -402,14 +401,38 @@ async def alertmanager_webhook(request: Request):
 
     alerts = body.get("alerts", [])
     if not alerts:
-        return {"status": "ok", "forwarded": 0}
+        return {"status": "ok", "forwarded": 0, "recorded": 0}
 
+    webhook_url = DISCORD_WEBHOOK_URL
     forwarded = 0
+    recorded = 0
+
     for alert in alerts:
         status = alert.get("status", "firing")
         labels = alert.get("labels", {})
         annotations = alert.get("annotations", {})
         severity = labels.get("severity", "warning")
+        alert_name = labels.get("alertname", "Unknown")
+
+        # ── Record to incident timeline ──
+        event_type = "alert_resolved" if status == "resolved" else "alert_fired"
+        title = f"[{status.upper()}] {alert_name}"
+        desc = annotations.get("description", annotations.get("summary", ""))
+        insert_incident_event(
+            event_type=event_type,
+            severity=severity if status != "resolved" else "info",
+            title=title,
+            description=desc,
+            source="prometheus",
+            alert_name=alert_name,
+            status=status,
+            metadata={"labels": labels, "annotations": annotations},
+        )
+        recorded += 1
+
+        # ── Forward to Discord ──
+        if not webhook_url:
+            continue
 
         color = 15158332 if severity == "critical" else 16776960  # red / yellow
         if status == "resolved":
@@ -421,9 +444,9 @@ async def alertmanager_webhook(request: Request):
 
         payload = json.dumps({
             "embeds": [{
-                "title": f"{emoji} [{status.upper()}] {labels.get('alertname', 'Unknown')}",
+                "title": f"{emoji} [{status.upper()}] {alert_name}",
                 "color": color,
-                "description": annotations.get("description", annotations.get("summary", "")),
+                "description": desc,
                 "fields": [
                     {"name": "Severity", "value": severity, "inline": True},
                     {"name": "Source", "value": "Prometheus → Alertmanager", "inline": True},
@@ -447,4 +470,31 @@ async def alertmanager_webhook(request: Request):
         except Exception as exc:
             logging.getLogger(__name__).warning("Discord forward failed: %s", exc)
 
-    return {"status": "ok", "forwarded": forwarded}
+    return {"status": "ok", "forwarded": forwarded, "recorded": recorded}
+
+
+# ── Incident Timeline ─────────────────────────────────────────────────────────
+
+
+@app.get("/api/incidents")
+def get_incidents(
+    limit: int = Query(100, ge=1, le=1000),
+    event_type: str | None = Query(None),
+    severity: str | None = Query(None),
+    window_hours: int = Query(24, ge=1, le=168),
+):
+    """Return incident timeline events, newest first."""
+    events = fetch_incident_events(
+        limit=limit,
+        event_type=event_type,
+        severity=severity,
+        window_hours=window_hours,
+    )
+    return {"events": events, "count": len(events)}
+
+
+@app.post("/api/incidents/clear")
+def clear_incidents():
+    """Clear all incident timeline events."""
+    deleted = clear_incident_events()
+    return {"status": "cleared", "deleted_rows": deleted}
