@@ -110,7 +110,7 @@ services:
       DB_MAX_CONNECTIONS: "50"
       REDIS_URL: redis://redis:6379/0
       RATE_LIMIT_STORAGE: redis://redis:6379/1
-      RATE_LIMIT_DEFAULT: "5000 per minute"
+      RATE_LIMIT_DEFAULT: "50000 per minute"
       FLASK_DEBUG: "false"
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
@@ -146,7 +146,7 @@ services:
       DB_MAX_CONNECTIONS: "50"
       REDIS_URL: redis://redis:6379/0
       RATE_LIMIT_STORAGE: redis://redis:6379/1
-      RATE_LIMIT_DEFAULT: "5000 per minute"
+      RATE_LIMIT_DEFAULT: "50000 per minute"
       FLASK_DEBUG: "false"
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
