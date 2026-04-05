@@ -23,7 +23,7 @@ testpaths = ["tests"]
 # dashboard/backend before url-shortener so `kafka_consumer` resolves to the dashboard consumer
 # (url-shortener also has a top-level kafka_consumer.py for the compose log-printer).
 pythonpath = ["dashboard/backend", "url-shortener"]
-addopts = "-v --cov=app --cov-report=term-missing"
+addopts = "-v --cov=url-shortener/app --cov=dashboard/backend --cov-report=term-missing"
 markers = [
     "integration: HTTP tests against real URLs (set TEST_LOAD_BALANCER_URL / TEST_NGINX_STUB_STATUS_URL)",
 ]

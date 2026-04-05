@@ -255,6 +255,23 @@ CREATE TABLE IF NOT EXISTS instance_stats_snapshots (
 
 CREATE INDEX IF NOT EXISTS idx_stats_snapshots_instance ON instance_stats_snapshots (instance_id);
 CREATE INDEX IF NOT EXISTS idx_stats_snapshots_time ON instance_stats_snapshots (snapshot_at DESC);
+
+CREATE TABLE IF NOT EXISTS incident_events (
+    id BIGSERIAL PRIMARY KEY,
+    event_type VARCHAR(32) NOT NULL,
+    severity VARCHAR(16) NOT NULL DEFAULT 'warning',
+    title VARCHAR(256) NOT NULL,
+    description TEXT,
+    source VARCHAR(32) NOT NULL DEFAULT 'prometheus',
+    alert_name VARCHAR(128),
+    status VARCHAR(16) NOT NULL DEFAULT 'firing',
+    metadata JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_incident_events_created ON incident_events (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_incident_events_type ON incident_events (event_type);
+CREATE INDEX IF NOT EXISTS idx_incident_events_status ON incident_events (status);
 """
 
 
@@ -292,6 +309,7 @@ def flush_logs(logs: list[dict[str, Any]]) -> int:
     """Bulk-insert log entries into kafka_logs. Returns count inserted."""
     if not logs:
         return 0
+    conn = None
     try:
         conn = get_connection()
         with conn:
@@ -323,12 +341,14 @@ def flush_logs(logs: list[dict[str, Any]]) -> int:
                     template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 )
                 count = len(rows)
-        conn.close()
         logger.info("Flushed %d log entries to DB", count)
         return count
     except Exception as exc:
         logger.error("Failed to flush logs to DB: %s", exc)
         return 0
+    finally:
+        if conn:
+            conn.close()
 
 
 def query_error_buckets(window_minutes: int = 60, log_limit: int = 5000) -> dict[str, Any] | None:
@@ -336,6 +356,7 @@ def query_error_buckets(window_minutes: int = 60, log_limit: int = 5000) -> dict
 
     Returns None if the query fails (caller should fall back to cache).
     """
+    conn = None
     try:
         conn = get_connection()
         result: dict[str, Any] = {"buckets_map": {}, "error_logs": []}
@@ -405,33 +426,39 @@ def query_error_buckets(window_minutes: int = 60, log_limit: int = 5000) -> dict
                 )
                 result["error_logs"] = [row[0] for row in cur.fetchall()]
 
-        conn.close()
         return result
     except Exception as exc:
         logger.error("query_error_buckets failed: %s", exc)
         return None
+    finally:
+        if conn:
+            conn.close()
 
 
 def clear_logs() -> int:
     """Delete all rows from kafka_logs. Returns count deleted."""
+    conn = None
     try:
         conn = get_connection()
         with conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM kafka_logs")
                 count = cur.rowcount
-        conn.close()
         logger.info("Cleared %d log entries from DB", count)
         return count
     except Exception as exc:
         logger.error("Failed to clear logs from DB: %s", exc)
         return 0
+    finally:
+        if conn:
+            conn.close()
 
 
 def flush_stats(stats: dict[str, dict[str, Any]]) -> int:
     """Insert a snapshot of per-instance stats. Returns count inserted."""
     if not stats:
         return 0
+    conn = None
     try:
         conn = get_connection()
         with conn:
@@ -457,27 +484,32 @@ def flush_stats(stats: dict[str, dict[str, Any]]) -> int:
                     template="(%s, %s, %s, %s, %s, %s, %s)",
                 )
                 count = len(rows)
-        conn.close()
         logger.info("Flushed stats snapshot for %d instances to DB", count)
         return count
     except Exception as exc:
         logger.error("Failed to flush stats to DB: %s", exc)
         return 0
+    finally:
+        if conn:
+            conn.close()
 
 
 def count_kafka_logs() -> int | None:
     """Return row count in kafka_logs, or None if the query fails."""
+    conn = None
     try:
         conn = get_connection()
         with conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT COUNT(*) FROM kafka_logs")
                 row = cur.fetchone()
-        conn.close()
         return int(row[0]) if row else 0
     except Exception as exc:
         logger.warning("count_kafka_logs: %s", exc)
         return None
+    finally:
+        if conn:
+            conn.close()
 
 
 def fetch_logs_from_db(
@@ -489,6 +521,7 @@ def fetch_logs_from_db(
     """Load recent rows from kafka_logs (newest first). Payload shape matches Kafka / HTTP ingest."""
     if limit < 1:
         return []
+    conn = None
     try:
         conn = get_connection()
         with conn:
@@ -517,7 +550,6 @@ def fetch_logs_from_db(
                 params.append(limit)
                 cur.execute(sql, params)
                 rows = cur.fetchall()
-        conn.close()
         out: list[dict[str, Any]] = []
         for (rj,) in rows:
             if isinstance(rj, dict):
@@ -528,3 +560,116 @@ def fetch_logs_from_db(
     except Exception as exc:
         logger.error("fetch_logs_from_db failed: %s", exc)
         return []
+    finally:
+        if conn:
+            conn.close()
+
+
+# ── Incident Events ──────────────────────────────────────────────────────────
+
+
+def insert_incident_event(
+    event_type: str,
+    severity: str,
+    title: str,
+    description: str = "",
+    source: str = "prometheus",
+    alert_name: str = "",
+    status: str = "firing",
+    metadata: dict[str, Any] | None = None,
+) -> int | None:
+    """Insert an incident timeline event. Returns the new row id or None on failure."""
+    conn = None
+    try:
+        conn = get_connection()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO incident_events
+                       (event_type, severity, title, description, source, alert_name, status, metadata)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                       RETURNING id""",
+                    (
+                        event_type,
+                        severity,
+                        title,
+                        description,
+                        source,
+                        alert_name,
+                        status,
+                        json.dumps(metadata or {}),
+                    ),
+                )
+                row = cur.fetchone()
+        return int(row[0]) if row else None
+    except Exception as exc:
+        logger.error("insert_incident_event failed: %s", exc)
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
+def fetch_incident_events(
+    limit: int = 100,
+    event_type: str | None = None,
+    severity: str | None = None,
+    window_hours: int = 24,
+) -> list[dict[str, Any]]:
+    """Return recent incident events, newest first."""
+    conn = None
+    try:
+        conn = get_connection()
+        with conn:
+            with conn.cursor() as cur:
+                conditions = ["created_at >= NOW() - (%s || ' hours')::interval"]
+                params: list[Any] = [str(window_hours)]
+                if event_type:
+                    conditions.append("event_type = %s")
+                    params.append(event_type)
+                if severity:
+                    conditions.append("severity = %s")
+                    params.append(severity)
+                where = " WHERE " + " AND ".join(conditions)
+                cur.execute(
+                    f"""SELECT id, event_type, severity, title, description, source,
+                               alert_name, status, metadata, created_at
+                        FROM incident_events
+                        {where}
+                        ORDER BY created_at DESC
+                        LIMIT %s""",
+                    (*params, limit),
+                )
+                cols = [d[0] for d in cur.description]
+                rows = []
+                for row in cur.fetchall():
+                    d = dict(zip(cols, row))
+                    d["created_at"] = d["created_at"].isoformat() if d["created_at"] else None
+                    if isinstance(d["metadata"], str):
+                        d["metadata"] = json.loads(d["metadata"])
+                    rows.append(d)
+        return rows
+    except Exception as exc:
+        logger.error("fetch_incident_events failed: %s", exc)
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+
+def clear_incident_events() -> int:
+    """Delete all incident events. Returns count deleted."""
+    conn = None
+    try:
+        conn = get_connection()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM incident_events")
+                count = cur.rowcount
+        return count
+    except Exception as exc:
+        logger.error("clear_incident_events failed: %s", exc)
+        return 0
+    finally:
+        if conn:
+            conn.close()
