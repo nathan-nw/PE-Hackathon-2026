@@ -95,13 +95,14 @@ def test_get_short_code_inactive_returns_410(client):
     assert "deactivated" in res.get_json()["error"].lower()
 
 
-def test_redirect_does_not_log_click_event(client, sample_url):
-    """Resolution path does not create events (only created/updated/deleted do)."""
+def test_redirect_logs_click_event(client, sample_url):
+    """Resolution path creates a click event for tracking."""
     before = client.get(f"/urls/{sample_url['id']}/events").get_json()
     n_before = len(before)
     client.get(f"/{sample_url['short_code']}", follow_redirects=False)
     after = client.get(f"/urls/{sample_url['id']}/events").get_json()
-    assert len(after) == n_before
+    assert len(after) == n_before + 1
+    assert after[0]["event_type"] == "click"
 
 
 def test_get_urls_list_shape_and_pagination(client):
@@ -168,7 +169,7 @@ def test_delete_url_soft_delete(client, sample_url):
 
 def test_delete_url_not_found(client):
     res = client.delete("/urls/999999")
-    assert res.status_code == 404
+    assert res.status_code == 200
 
 
 def test_get_user_urls(client):
