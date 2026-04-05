@@ -35,20 +35,49 @@ def _with_connect_timeout(url: str, seconds: int) -> str:
 
 
 def _connect() -> PGConnection:
+    """Match app/database.py resolution: DATABASE_URL, or DATABASE_* / Railway PG* vars.
+
+    Railway Postgres often exposes PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE on the
+    plugin; referencing those into this service works if DATABASE_URL is not set.
+    """
     timeout = int(
         os.environ.get("DATABASE_CONNECT_TIMEOUT_SEC", str(_DEFAULT_CONNECT_TIMEOUT_SEC))
     )
     url = os.environ.get("DATABASE_URL", "").strip()
     if url:
         return psycopg2.connect(_with_connect_timeout(url, timeout))
-    return psycopg2.connect(
-        host=os.environ.get("DATABASE_HOST", "127.0.0.1"),
-        port=int(os.environ.get("DATABASE_PORT", "5432")),
-        dbname=os.environ.get("DATABASE_NAME", "hackathon_db"),
-        user=os.environ.get("DATABASE_USER", "postgres"),
-        password=os.environ.get("DATABASE_PASSWORD", "postgres"),
-        connect_timeout=timeout,
+
+    host = os.environ.get("PGHOST") or os.environ.get("DATABASE_HOST")
+    if not host:
+        print(
+            "apply_migrations: DATABASE_URL is unset and PGHOST/DATABASE_HOST is missing.\n"
+            "On Railway: url-shortener → Variables → add DATABASE_URL referencing Postgres, e.g.\n"
+            "  ${{ Postgres.DATABASE_PRIVATE_URL }}  or  ${{ Postgres.DATABASE_URL }}\n"
+            "Or set PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE from the Postgres service.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    port = int(os.environ.get("PGPORT") or os.environ.get("DATABASE_PORT", "5432"))
+    dbname = (
+        os.environ.get("PGDATABASE")
+        or os.environ.get("DATABASE_NAME")
+        or "hackathon_db"
     )
+    user = os.environ.get("PGUSER") or os.environ.get("DATABASE_USER", "postgres")
+    password = os.environ.get("PGPASSWORD") or os.environ.get("DATABASE_PASSWORD", "")
+    kwargs: dict = {
+        "host": host,
+        "port": port,
+        "dbname": dbname,
+        "user": user,
+        "password": password,
+        "connect_timeout": timeout,
+    }
+    sslmode = os.environ.get("PGSSLMODE") or os.environ.get("DATABASE_SSLMODE")
+    if sslmode:
+        kwargs["sslmode"] = sslmode
+    return psycopg2.connect(**kwargs)
 
 
 def main() -> int:
