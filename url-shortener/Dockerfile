@@ -13,21 +13,35 @@ WORKDIR /app
 # Copy dependency files first (better Docker layer caching)
 COPY pyproject.toml uv.lock* ./
 
-# Install dependencies
-RUN uv sync --no-dev --frozen 2>/dev/null || uv sync --no-dev
+# Install dependencies (as root, before switching user)
+RUN uv sync --no-dev --frozen || uv sync --no-dev
 
 # Copy application code
 COPY . .
 
-# Create non-root user for security
-RUN useradd --create-home appuser
+# DB migrations at container start (avoids Railway preDeployCommand schema/UI merge issues).
+RUN chmod +x /app/docker-entrypoint.sh
+
+# Non-root user must own /app: `uv run` at container start syncs the env (and can pull dev groups),
+# which writes under .venv and fails with "Permission denied" if .venv is root-only.
+RUN useradd --create-home appuser \
+    && chown -R appuser:appuser /app
+
 USER appuser
 
+# Invoke via `sh` so CRLF in the script (Windows checkouts) does not break the shebang path.
+ENTRYPOINT ["/bin/sh", "/app/docker-entrypoint.sh"]
+
+# Avoid uv mutating the environment at runtime (no sync → no dev installs into site-packages).
+ENV UV_NO_SYNC=1
+ENV GUNICORN_WORKERS=2
+
 EXPOSE 5000
+ENV PORT=5000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:5000/health || exit 1
+# Liveness only — do not use /ready here (DB can be briefly unavailable without killing the container).
+HEALTHCHECK --interval=15s --timeout=3s --start-period=90s --retries=3 \
+    CMD sh -c 'curl -fsS "http://127.0.0.1:${PORT:-5000}/live" || exit 1'
 
-# Run with gunicorn in production
-CMD ["uv", "run", "gunicorn", "--config", "gunicorn.conf.py", "run:app"]
+# Run gunicorn from the synced venv directly (no `uv run` → no implicit sync in prod).
+CMD ["/app/.venv/bin/gunicorn", "--config", "gunicorn.conf.py", "run:app"]

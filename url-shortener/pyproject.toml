@@ -1,3 +1,11 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
 [project]
 name = "mlh-pe-hackathon"
 version = "0.1.0"
@@ -5,19 +13,29 @@ requires-python = ">=3.13"
 dependencies = [
     "faker>=33.0",
     "flask>=3.1",
-    "flask-limiter>=3.5",
+    "flask-cors>=5.0",
+    "flask-limiter[redis]>=3.5",
     "gunicorn>=22.0",
     "peewee>=3.17",
+    "prometheus-client>=0.21",
+    "psutil>=6.0",
     "psycopg2-binary>=2.9",
     "python-dotenv>=1.0",
+    # Required when RATE_LIMIT_STORAGE uses redis:// (Flask-Limiter → limits.storage.redis)
+    "redis>=5.0",
+    "confluent-kafka>=2.3",
 ]
 
 [dependency-groups]
 dev = [
+    "ruff>=0.9",
     "pytest>=8.0",
     "pytest-cov>=5.0",
-    "ruff>=0.9",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["../tests/url_shortener"]
+pythonpath = ["."]
 
 [tool.ruff]
 target-version = "py313"
@@ -25,8 +43,3 @@ line-length = 120
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP", "B", "SIM"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["."]
-addopts = "-v --cov=app --cov-report=term-missing"

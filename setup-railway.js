@@ -1,0 +1,1048 @@
+#!/usr/bin/env node
+/**
+ * Configure Railway services for this monorepo via the public GraphQL API:
+ * https://docs.railway.com/integrations/api
+ *
+ * - Ensures Git-linked app services exist (same repo, different root directories):
+ *   url-shortener-a, url-shortener-b, load-balancer, user-frontend, dashboard, dashboard-backend.
+ * - Sets the deploy branch (default: staging) on each service's deployment trigger.
+ * - Sets rootDirectory, railwayConfigFile, and watchPatterns on each service instance (matches each
+ *   app folder's railway.toml — same paths as Settings → Root / Config-as-code / Watch paths).
+ *
+ * Auth: use an account API token from https://railway.com/account/tokens
+ * (Authorization: Bearer). Project-scoped tokens often cannot create/link GitHub services.
+ *
+ * Usage (repo root):
+ *   copy .env.railway.setup.example to .env.railway.setup and set RAILWAY_API_TOKEN
+ *   node setup-railway.js
+ *
+ * Or: set RAILWAY_API_TOKEN=...   (or RAILWAY_TOKEN) in the shell.
+ *
+ * Optional env:
+ *   RAILWAY_REPO=nathan-nw/PE-Hackathon-2026
+ *   RAILWAY_BRANCH=staging
+ *   DRY_RUN=1
+ *   SKIP_REDEPLOY=1  — skip serviceInstanceDeploy after configuration
+ *   FORCE_CLEAR_PREDEPLOY=1  — set preDeployCommand to [] even when already empty (rare)
+ *   SYNC_VARIABLES=1  — upsert shared variable references (Postgres private URL, Redis, service URLs)
+ *   SKIP_DEPLOY_ON_VARIABLE_SYNC=1  — pass skipDeploys to variableCollectionUpsert (default: true)
+ *   RAILWAY_POSTGRES_SERVICE_NAME=Postgres  — plugin service name (default: Postgres)
+ *   RAILWAY_REDIS_SERVICE_NAME=Redis  — plugin service name (default: Redis)
+ *   RAILWAY_DASHBOARD_POSTGRES_SERVICE_NAME=…  — optional second Postgres plugin for dashboard_db only (mirrors compose service dashboard-db)
+ *   RAILWAY_KAFKA_SERVICE_NAME=Kafka  — optional Kafka/Redpanda plugin; sets KAFKA_BOOTSTRAP_SERVERS on API + dashboard-backend
+ *   RAILWAY_KAFKA_BOOTSTRAP_VAR=KAFKA_URL  — variable name on the Kafka service for the broker URL (template differs by provider)
+ *   DASHBOARD_RAILWAY_PROJECT_TOKEN=…  — optional; with SYNC_VARIABLES=1, upserts RAILWAY_PROJECT_TOKEN on the dashboard service (Ops tab GraphQL)
+ *   DASHBOARD_RAILWAY_API_TOKEN=…  — optional; same but RAILWAY_API_TOKEN (account token); used only if project token is unset
+ *   USER_FRONTEND_BACKEND_URL=…  — optional; with SYNC_VARIABLES=1, sets user-frontend BACKEND_URL to this literal (e.g. https://load-balancer-….up.railway.app) instead of deriving https://<load-balancer RAILWAY_PUBLIC_DOMAIN> (Next.js reads BACKEND_URL at runtime; browser gets the base URL from GET /api/config)
+ *   LOG_INGEST_TOKEN=…  — shared secret for HTTP log shipping when no Kafka plugin: set the same value on dashboard-backend and url-shortener replicas (required for /api/ingest on hosted)
+ *   SKIP_LOG_INGEST_AUTO_TOKEN=1  — do not auto-generate LOG_INGEST_TOKEN when unset (SYNC_VARIABLES + no Kafka)
+ *   LOG_INGEST_USE_PRIVATE_URL=1  — set LOG_INGEST_URL to http://<private>:PORT/api/ingest (default: https://<RAILWAY_PUBLIC_DOMAIN>/api/ingest — works through Railway edge)
+ *   RAILWAY_WATCHDOG_POLL_SEC=15  — optional; with SYNC_VARIABLES=1, sets hosted Ops watchdog poll interval (matches compose-watchdog default)
+ *   CHAOS_KILL_ENABLED=1  — optional; default when unset is 1 on dashboard so hosted Ops Chaos Kill/Reboot work (set 0 in .env.railway.setup to disable)
+ *   RAILWAY_WATCHDOG_AUTO_RECOVER=1  — optional; default 1; watchdog calls serviceInstanceDeploy(latest) when a deployment is CRASHED/FAILED/etc.
+ *   With SYNC_VARIABLES=1 and a `railway-watchdog` service, sets dashboard WATCHDOG_SERVICE_URL to the private worker URL (single replica recommended).
+ */
+
+const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
+
+/** Load `.env.railway.setup` if present (does not override existing process.env). */
+function loadOptionalEnvFile() {
+  const p = path.join(__dirname, ".env.railway.setup");
+  if (!fs.existsSync(p)) return;
+  const text = fs.readFileSync(p, "utf8");
+  for (let line of text.split(/\r?\n/)) {
+    const s = line.trim();
+    if (!s || s.startsWith("#")) continue;
+    const eq = s.indexOf("=");
+    if (eq <= 0) continue;
+    const key = s.slice(0, eq).trim();
+    let val = s.slice(eq + 1).trim();
+    if (
+      (val.startsWith('"') && val.endsWith('"')) ||
+      (val.startsWith("'") && val.endsWith("'"))
+    ) {
+      val = val.slice(1, -1);
+    }
+    if (process.env[key] === undefined) process.env[key] = val;
+  }
+}
+
+function readLogIngestTokenFromFile(setupPath) {
+  if (!fs.existsSync(setupPath)) return "";
+  const text = fs.readFileSync(setupPath, "utf8");
+  for (const line of text.split(/\r?\n/)) {
+    const s = line.trim();
+    if (!s || s.startsWith("#")) continue;
+    const eq = s.indexOf("=");
+    if (eq <= 0) continue;
+    const key = s.slice(0, eq).trim();
+    if (key !== "LOG_INGEST_TOKEN") continue;
+    let val = s.slice(eq + 1).trim();
+    if (
+      (val.startsWith('"') && val.endsWith('"')) ||
+      (val.startsWith("'") && val.endsWith("'"))
+    ) {
+      val = val.slice(1, -1);
+    }
+    const trimmed = val.trim();
+    if (trimmed) return trimmed;
+  }
+  return "";
+}
+
+/**
+ * When there is no Kafka broker, API replicas ship logs to dashboard-backend via HTTP POST /api/ingest.
+ * That requires the same LOG_INGEST_TOKEN on dashboard-backend and both url-shortener services.
+ * If unset, generate a secret and persist into `.env.railway.setup` (gitignored) so the next sync is stable.
+ */
+function ensureLogIngestTokenForHttpIngest(byName, kafkaService) {
+  if (kafkaService) return;
+  const skip =
+    process.env.SKIP_LOG_INGEST_AUTO_TOKEN === "1" ||
+    process.env.SKIP_LOG_INGEST_AUTO_TOKEN === "true";
+  if (skip) return;
+
+  if (!byName.has("dashboard-backend") || !byName.has("url-shortener-a")) return;
+
+  const setupPath = path.join(__dirname, ".env.railway.setup");
+  const examplePath = path.join(__dirname, ".env.railway.setup.example");
+
+  let t = (process.env.LOG_INGEST_TOKEN || "").trim();
+  if (!t) {
+    t = readLogIngestTokenFromFile(setupPath);
+    if (t) process.env.LOG_INGEST_TOKEN = t;
+  }
+  if ((process.env.LOG_INGEST_TOKEN || "").trim()) return;
+
+  t = crypto.randomBytes(32).toString("hex");
+  process.env.LOG_INGEST_TOKEN = t;
+
+  if (!fs.existsSync(setupPath)) {
+    if (fs.existsSync(examplePath)) {
+      fs.copyFileSync(examplePath, setupPath);
+    } else {
+      fs.writeFileSync(
+        setupPath,
+        "# Railway setup — see RAILWAY.md\nRAILWAY_API_TOKEN=\n",
+        "utf8"
+      );
+    }
+  }
+  let text = fs.readFileSync(setupPath, "utf8");
+  if (/^\s*LOG_INGEST_TOKEN\s*=\s*\S/m.test(text)) {
+    const fromFile = readLogIngestTokenFromFile(setupPath);
+    if (fromFile) {
+      process.env.LOG_INGEST_TOKEN = fromFile;
+    } else {
+      console.warn(
+        "(Variable sync) .env.railway.setup has a LOG_INGEST_TOKEN line that could not be parsed; fix the file or export LOG_INGEST_TOKEN in the shell."
+      );
+    }
+    return;
+  }
+  if (/^\s*LOG_INGEST_TOKEN\s*=/m.test(text)) {
+    text = text.replace(/^(\s*LOG_INGEST_TOKEN\s*=\s*).*$/m, `$1${t}`);
+    fs.writeFileSync(setupPath, text, "utf8");
+  } else {
+    fs.appendFileSync(
+      setupPath,
+      `\n# HTTP log ingest → dashboard-backend /api/ingest (no Kafka)\nLOG_INGEST_TOKEN=${t}\n`,
+      "utf8"
+    );
+  }
+
+  console.log(
+    "\n(Variable sync) Generated LOG_INGEST_TOKEN and saved it to .env.railway.setup (gitignored).\n" +
+      "Redeploy url-shortener-a, url-shortener-b, and dashboard-backend so they pick up variables " +
+      `(e.g. run again with SKIP_DEPLOY_ON_VARIABLE_SYNC=0, or redeploy in the Railway UI).\n`
+  );
+}
+
+const ENDPOINT = "https://backboard.railway.com/graphql/v2";
+
+const DEFAULT_REPO = "nathan-nw/PE-Hackathon-2026";
+const DEFAULT_BRANCH = "staging";
+
+/**
+ * Per-service deploy wiring: Root Directory, config-as-code path (repo-root), and watch patterns
+ * (see each folder's railway.toml). Passed to serviceInstanceUpdate alongside preDeployCommand cleanup.
+ * @type {{ name: string, rootDirectory: string, railwayConfigFile: string, watchPatterns: string[] }[]}
+ */
+const SERVICE_SPECS = [
+  // Same topology as docker-compose.yml: two API replicas + NGINX (least_conn, CORS, rate limit).
+  {
+    name: "url-shortener-a",
+    rootDirectory: "url-shortener",
+    railwayConfigFile: "/url-shortener/railway.toml",
+    watchPatterns: ["/url-shortener/**"],
+  },
+  {
+    name: "url-shortener-b",
+    rootDirectory: "url-shortener",
+    railwayConfigFile: "/url-shortener/railway.toml",
+    watchPatterns: ["/url-shortener/**"],
+  },
+  {
+    name: "load-balancer",
+    rootDirectory: "load-balancer",
+    railwayConfigFile: "/load-balancer/railway.toml",
+    watchPatterns: ["/load-balancer/**"],
+  },
+  {
+    name: "user-frontend",
+    rootDirectory: "user-frontend",
+    railwayConfigFile: "/user-frontend/railway.toml",
+    watchPatterns: ["/user-frontend/**"],
+  },
+  {
+    name: "dashboard",
+    rootDirectory: "dashboard",
+    railwayConfigFile: "/dashboard/railway.toml",
+    watchPatterns: ["/dashboard/**"],
+  },
+  {
+    name: "dashboard-backend",
+    rootDirectory: "dashboard/backend",
+    railwayConfigFile: "/dashboard/backend/railway.toml",
+    watchPatterns: ["/dashboard/backend/**"],
+  },
+  {
+    name: "railway-watchdog",
+    rootDirectory: ".",
+    railwayConfigFile: "/watchdog-service/railway.toml",
+    // Match any repo path so pushes are not SKIPPED when only unrelated paths changed (see railway.toml).
+    watchPatterns: ["/**", "/*", "/.*"],
+  },
+];
+
+/** Normalize Railway "Config as code" path for comparison (leading slash). */
+function normRailwayConfigPath(p) {
+  const s = (p || "").trim();
+  if (!s) return "";
+  return s.startsWith("/") ? s : `/${s}`;
+}
+
+function watchPatternsEqual(current, wanted) {
+  const a = [...(current || [])].map((s) => s.trim()).sort();
+  const b = [...(wanted || [])].map((s) => s.trim()).sort();
+  if (a.length !== b.length) return false;
+  return a.every((v, i) => v === b[i]);
+}
+
+function loadRailwayConfig() {
+  const p = path.join(__dirname, ".railway", "config.json");
+  const raw = fs.readFileSync(p, "utf8");
+  const j = JSON.parse(raw);
+  if (!j.projectId || !j.environmentId) {
+    throw new Error(`${p} must include projectId and environmentId`);
+  }
+  return { projectId: j.projectId, environmentId: j.environmentId };
+}
+
+function getAuthHeaders() {
+  const account = process.env.RAILWAY_API_TOKEN || process.env.RAILWAY_TOKEN;
+  const project = process.env.RAILWAY_PROJECT_TOKEN;
+  if (account) {
+    return { Authorization: `Bearer ${account}` };
+  }
+  if (project) {
+    return { "Project-Access-Token": project };
+  }
+  throw new Error(
+    "Set RAILWAY_API_TOKEN (or RAILWAY_TOKEN) to an account token from https://railway.com/account/tokens"
+  );
+}
+
+async function gql(query, variables) {
+  const res = await fetch(ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    body: JSON.stringify({ query, variables }),
+  });
+  const body = await res.json();
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${JSON.stringify(body)}`);
+  }
+  if (body.errors?.length) {
+    const msg = body.errors.map((e) => e.message).join("; ");
+    throw new Error(msg);
+  }
+  return body.data;
+}
+
+/** @returns {Map<string, { id: string, name: string, triggers: any[] }>} */
+async function fetchServicesMap(projectId) {
+  const data = await gql(Q_PROJECT, { id: projectId });
+  const edges = data.project?.services?.edges || [];
+  const byName = new Map();
+  for (const e of edges) {
+    const n = e.node;
+    if (!n?.name) continue;
+    const triggers = (n.repoTriggers?.edges || []).map((x) => x.node);
+    byName.set(n.name, { id: n.id, name: n.name, triggers });
+  }
+  return byName;
+}
+
+const Q_PROJECT = `
+  query ProjectServices($id: String!) {
+    project(id: $id) {
+      id
+      name
+      services(first: 100) {
+        edges {
+          node {
+            id
+            name
+            repoTriggers(first: 20) {
+              edges {
+                node {
+                  id
+                  branch
+                  repository
+                  provider
+                  environmentId
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+const Q_SERVICE_INSTANCE = `
+  query Si($environmentId: String!, $serviceId: String!) {
+    serviceInstance(environmentId: $environmentId, serviceId: $serviceId) {
+      id
+      rootDirectory
+      preDeployCommand
+      railwayConfigFile
+      watchPatterns
+    }
+  }
+`;
+
+const M_SERVICE_CREATE = `
+  mutation Create($input: ServiceCreateInput!) {
+    serviceCreate(input: $input) {
+      id
+      name
+    }
+  }
+`;
+
+const M_SERVICE_CONNECT = `
+  mutation Connect($id: String!, $input: ServiceConnectInput!) {
+    serviceConnect(id: $id, input: $input) {
+      id
+      name
+    }
+  }
+`;
+
+const M_TRIGGER_UPDATE = `
+  mutation TriggerUpdate($id: String!, $input: DeploymentTriggerUpdateInput!) {
+    deploymentTriggerUpdate(id: $id, input: $input) {
+      id
+      branch
+      repository
+    }
+  }
+`;
+
+const M_INSTANCE_UPDATE = `
+  mutation InstanceUpdate(
+    $environmentId: String!
+    $serviceId: String!
+    $input: ServiceInstanceUpdateInput!
+  ) {
+    serviceInstanceUpdate(
+      environmentId: $environmentId
+      serviceId: $serviceId
+      input: $input
+    )
+  }
+`;
+
+const M_DEPLOY_TRIGGER_CREATE = `
+  mutation DeployTriggerCreate($input: DeploymentTriggerCreateInput!) {
+    deploymentTriggerCreate(input: $input) {
+      id
+      branch
+      repository
+      serviceId
+    }
+  }
+`;
+
+/** Trigger a new deployment from the latest commit on the configured branch. */
+const M_SERVICE_INSTANCE_DEPLOY = `
+  mutation ServiceInstanceDeploy(
+    $environmentId: String!
+    $serviceId: String!
+    $latestCommit: Boolean
+  ) {
+    serviceInstanceDeploy(
+      environmentId: $environmentId
+      serviceId: $serviceId
+      latestCommit: $latestCommit
+    )
+  }
+`;
+
+const M_VARIABLE_COLLECTION_UPSERT = `
+  mutation VariableCollectionUpsert($input: VariableCollectionUpsertInput!) {
+    variableCollectionUpsert(input: $input)
+  }
+`;
+
+/** Railway template: ${{ ServiceName.VARIABLE_NAME }} */
+function varRef(serviceName, variableName) {
+  return "${{ " + serviceName + "." + variableName + " }}";
+}
+
+/** Resolve plugin service names — dashboard may use "Postgres" or "postgresql" etc. */
+function findPostgresServiceName(byName) {
+  const explicit = (process.env.RAILWAY_POSTGRES_SERVICE_NAME || "").trim();
+  if (explicit && byName.has(explicit)) return explicit;
+  for (const c of ["Postgres", "postgres", "PostgreSQL", "postgresql"]) {
+    if (byName.has(c)) return c;
+  }
+  for (const name of byName.keys()) {
+    if (/postgres/i.test(name)) return name;
+  }
+  return null;
+}
+
+function findRedisServiceName(byName) {
+  const explicit = (process.env.RAILWAY_REDIS_SERVICE_NAME || "").trim();
+  if (explicit && byName.has(explicit)) return explicit;
+  for (const c of ["Redis", "redis"]) {
+    if (byName.has(c)) return c;
+  }
+  for (const name of byName.keys()) {
+    if (/^redis$/i.test(name) || /redis/i.test(name)) return name;
+  }
+  return null;
+}
+
+/** Optional Kafka / Redpanda plugin — mirrors compose KAFKA_BOOTSTRAP_SERVERS. */
+function findKafkaServiceName(byName) {
+  const explicit = (process.env.RAILWAY_KAFKA_SERVICE_NAME || "").trim();
+  if (explicit && byName.has(explicit)) return explicit;
+  for (const c of ["Kafka", "kafka", "Redpanda", "redpanda"]) {
+    if (byName.has(c)) return c;
+  }
+  for (const name of byName.keys()) {
+    if (/kafka/i.test(name) || /redpanda/i.test(name)) return name;
+  }
+  return null;
+}
+
+/**
+ * Optional second Postgres plugin for dashboard_db only (compose: service `dashboard-db` vs `db`).
+ * If unset, dashboard-backend uses the same Postgres as url-shortener with DASHBOARD_DB_NAME=dashboard_db.
+ */
+function findDashboardPostgresServiceName(byName, primaryPostgres) {
+  const explicit = (process.env.RAILWAY_DASHBOARD_POSTGRES_SERVICE_NAME || "").trim();
+  if (explicit && byName.has(explicit)) return explicit;
+  for (const name of byName.keys()) {
+    if (name === primaryPostgres) continue;
+    if (/dashboard/i.test(name) && /postgres/i.test(name)) return name;
+  }
+  const others = [...byName.keys()].filter(
+    (n) => /postgres/i.test(n) && n !== primaryPostgres
+  );
+  if (others.length === 1) return others[0];
+  return null;
+}
+
+/** Broker URL reference; variable name depends on the Kafka provider template on Railway. */
+function kafkaBootstrapRef(kafkaServiceName) {
+  const varName = (process.env.RAILWAY_KAFKA_BOOTSTRAP_VAR || "KAFKA_URL").trim() || "KAFKA_URL";
+  return varRef(kafkaServiceName, varName);
+}
+
+/**
+ * Aligns Railway env vars with docker-compose.yml service wiring (same keys / defaults where possible).
+ * See RAILWAY.md → "Parity with Docker Compose".
+ */
+async function syncInternalDatabaseVariables(projectId, environmentId, byName, dry) {
+  const postgresService = findPostgresServiceName(byName);
+  const redisService = findRedisServiceName(byName);
+  const kafkaService = findKafkaServiceName(byName);
+  const usePublicDbUrl =
+    process.env.SYNC_VARIABLES_USE_PUBLIC_DATABASE_URL === "1" ||
+    process.env.SYNC_VARIABLES_USE_PUBLIC_DATABASE_URL === "true";
+  // Railway Postgres plugins expose DATABASE_URL (private host) and DATABASE_PUBLIC_URL (TCP proxy).
+  // DATABASE_PRIVATE_URL is not present on all templates — referencing it yields an empty DATABASE_URL on APIs.
+  const dbUrlKey = usePublicDbUrl ? "DATABASE_PUBLIC_URL" : "DATABASE_URL";
+
+  if (!postgresService) {
+    console.warn(
+      `\n(Variable sync) No Postgres-like service found in this project — add a PostgreSQL plugin or set RAILWAY_POSTGRES_SERVICE_NAME. Skipping DATABASE_* references.`
+    );
+    return;
+  }
+  console.log(`(Variable sync) Primary Postgres service: "${postgresService}"`);
+
+  const dashboardPg = findDashboardPostgresServiceName(byName, postgresService);
+  if (dashboardPg) {
+    console.log(
+      `(Variable sync) Dashboard Postgres (dashboard_db): separate plugin "${dashboardPg}" (compose: dashboard-db)`
+    );
+  } else {
+    console.log(
+      `(Variable sync) Dashboard DB: same Postgres as API + DASHBOARD_DB_NAME=dashboard_db (compose: second database on shared db)`
+    );
+  }
+
+  const skipDeployOnVarSync =
+    process.env.SKIP_DEPLOY_ON_VARIABLE_SYNC !== "0" &&
+    process.env.SKIP_DEPLOY_ON_VARIABLE_SYNC !== "false";
+
+  const upsert = async (serviceName, variables) => {
+    const svc = byName.get(serviceName);
+    if (!svc) {
+      console.warn(`  (Variable sync) Service "${serviceName}" not found; skipping.`);
+      return;
+    }
+    const keys = Object.keys(variables);
+    console.log(`\n(Variable sync) ${serviceName}: ${keys.join(", ")}`);
+    if (dry) return;
+    await gql(M_VARIABLE_COLLECTION_UPSERT, {
+      input: {
+        projectId,
+        environmentId,
+        serviceId: svc.id,
+        replace: false,
+        skipDeploys: skipDeployOnVarSync,
+        variables,
+      },
+    });
+    console.log(`  variableCollectionUpsert OK`);
+  };
+
+  const pg = postgresService;
+  const redis = redisService;
+  const kafka = kafkaService;
+  const pgDashboard = dashboardPg || pg;
+
+  if (!dry) {
+    ensureLogIngestTokenForHttpIngest(byName, kafka);
+  }
+  const logIngestToken = (process.env.LOG_INGEST_TOKEN || "").trim();
+  // Default: public HTTPS (edge terminates TLS and routes to the service). Private
+  // http://*.railway.internal:PORT often fails from other containers (DNS/IPv6/routing).
+  const usePrivateLogIngest =
+    process.env.LOG_INGEST_USE_PRIVATE_URL === "1" ||
+    process.env.LOG_INGEST_USE_PRIVATE_URL === "true";
+  const logIngestUrl =
+    byName.has("dashboard-backend") && !kafka && logIngestToken
+      ? usePrivateLogIngest
+        ? "http://" +
+          varRef("dashboard-backend", "RAILWAY_PRIVATE_DOMAIN") +
+          ":" +
+          varRef("dashboard-backend", "PORT") +
+          "/api/ingest"
+        : "https://" +
+          varRef("dashboard-backend", "RAILWAY_PUBLIC_DOMAIN") +
+          "/api/ingest"
+      : null;
+
+  const loadTestBypass =
+    (process.env.LOAD_TEST_BYPASS_TOKEN || "").trim() ||
+    "pe-hackathon-k6-edge-bypass";
+
+  // url-shortener-a / url-shortener-b: same env as compose replicas (shared DB; distinct INSTANCE_ID).
+  // Explicit PORT so ${{ url-shortener-a.PORT }} resolves on the load-balancer (runtime-only PORT is
+  // not referenceable from other services — see Railway variables docs / Help Station).
+  // Use 8080 to align with Railway’s common web port (Compose/local image default remains 5000 via Dockerfile).
+  const urlShortenerBase = {
+    PORT: "8080",
+    DATABASE_URL: varRef(pg, dbUrlKey),
+    FLASK_DEBUG: "false",
+    KAFKA_LOG_TOPIC: "app-logs",
+    ...(redis
+      ? { RATE_LIMIT_STORAGE: varRef(redis, "REDIS_URL") }
+      : { RATE_LIMIT_STORAGE: "memory://" }),
+    ...(kafka ? { KAFKA_BOOTSTRAP_SERVERS: kafkaBootstrapRef(kafka) } : {}),
+    ...(logIngestUrl
+      ? { LOG_INGEST_URL: logIngestUrl, LOG_INGEST_TOKEN: logIngestToken }
+      : {}),
+    LOAD_TEST_BYPASS_TOKEN: loadTestBypass,
+  };
+  await upsert("url-shortener-a", { ...urlShortenerBase, INSTANCE_ID: "1" });
+  await upsert("url-shortener-b", { ...urlShortenerBase, INSTANCE_ID: "2" });
+
+  if (!redis) {
+    console.warn(
+      `(Variable sync) No Redis plugin — replicas use RATE_LIMIT_STORAGE=memory:// (same default as local url-shortener/.env.example; compose has no Redis).`
+    );
+  } else {
+    console.log(`(Variable sync) Redis service: "${redis}"`);
+  }
+
+  if (!kafka) {
+    console.warn(
+      `(Variable sync) No Kafka-like service — KAFKA_BOOTSTRAP_SERVERS not set (compose uses kafka:9092; add a broker + RAILWAY_KAFKA_SERVICE_NAME if you want log shipping).`
+    );
+    if (byName.has("dashboard-backend") && !logIngestToken) {
+      console.warn(
+        `(Variable sync) No LOG_INGEST_TOKEN in .env.railway.setup — API logs will not reach dashboard-backend over HTTP. Add LOG_INGEST_TOKEN=<secret> and re-run SYNC_VARIABLES=1, or add a Kafka plugin.`
+      );
+    }
+  } else {
+    console.log(
+      `(Variable sync) Kafka service: "${kafka}" (bootstrap var: ${process.env.RAILWAY_KAFKA_BOOTSTRAP_VAR || "KAFKA_URL"})`
+    );
+  }
+
+  // NGINX load balancer: private hostnames for upstream (see load-balancer/docker-entrypoint.sh).
+  if (
+    byName.has("load-balancer") &&
+    byName.has("url-shortener-a") &&
+    byName.has("url-shortener-b")
+  ) {
+    await upsert("load-balancer", {
+      URL_SHORTENER_A_HOST: varRef("url-shortener-a", "RAILWAY_PRIVATE_DOMAIN"),
+      URL_SHORTENER_B_HOST: varRef("url-shortener-b", "RAILWAY_PRIVATE_DOMAIN"),
+      // Gunicorn binds to Railway's PORT (synced above — typically 8080 on Railway).
+      URL_SHORTENER_A_PORT: varRef("url-shortener-a", "PORT"),
+      URL_SHORTENER_B_PORT: varRef("url-shortener-b", "PORT"),
+      LOAD_TEST_BYPASS_TOKEN: loadTestBypass,
+    });
+  } else if (byName.has("load-balancer")) {
+    console.warn(
+      `(Variable sync) load-balancer present but url-shortener-a / url-shortener-b missing — set URL_SHORTENER_*_HOST manually or run provisioning.`
+    );
+  }
+
+  // dashboard-backend: mirrors compose dashboard-backend + dashboard-db
+  // Explicit PORT=8080 (same as url-shortener) so ${{ dashboard-backend.PORT }} resolves when other
+  // services reference it; uvicorn uses Railway's PORT. Without this, cross-service PORT refs can be empty.
+  const dashboardBackendVars = {
+    PORT: "8080",
+    DASHBOARD_DATABASE_URL: varRef(pgDashboard, dbUrlKey),
+    DASHBOARD_DB_NAME: "dashboard_db",
+    KAFKA_LOG_TOPIC: "app-logs",
+    CACHE_MAX_ENTRIES: "1000",
+    DB_FLUSH_INTERVAL: "30",
+    LOAD_TEST_BYPASS_TOKEN: loadTestBypass,
+    ...(byName.has("load-balancer")
+      ? {
+          LOAD_TEST_TARGET_URL:
+            "https://" + varRef("load-balancer", "RAILWAY_PUBLIC_DOMAIN"),
+          // Telemetry tab: aggregate /api/instance-stats (HTTPS edge is reliable between Railway services).
+          TELEMETRY_LOAD_BALANCER_URL:
+            "https://" + varRef("load-balancer", "RAILWAY_PUBLIC_DOMAIN"),
+          LOAD_BALANCER_URL:
+            "https://" + varRef("load-balancer", "RAILWAY_PUBLIC_DOMAIN"),
+        }
+      : byName.has("url-shortener-a")
+        ? {
+            LOAD_TEST_TARGET_URL:
+              "https://" + varRef("url-shortener-a", "RAILWAY_PUBLIC_DOMAIN"),
+          }
+        : {}),
+    ...(kafka ? { KAFKA_BOOTSTRAP_SERVERS: kafkaBootstrapRef(kafka) } : {}),
+    ...(logIngestToken ? { LOG_INGEST_TOKEN: logIngestToken } : {}),
+  };
+  await upsert("dashboard-backend", dashboardBackendVars);
+
+  const watchdogPoll = (process.env.RAILWAY_WATCHDOG_POLL_SEC || "").trim();
+  const watchdogAutoRecoverRaw = (
+    process.env.RAILWAY_WATCHDOG_AUTO_RECOVER ?? "1"
+  ).trim();
+  const watchdogAutoRecover =
+    watchdogAutoRecoverRaw === "" ||
+    watchdogAutoRecoverRaw === "1" ||
+    watchdogAutoRecoverRaw.toLowerCase() === "true" ||
+    watchdogAutoRecoverRaw.toLowerCase() === "yes" ||
+    watchdogAutoRecoverRaw.toLowerCase() === "on";
+
+  if (byName.has("railway-watchdog")) {
+    const dashboardPt = (process.env.DASHBOARD_RAILWAY_PROJECT_TOKEN || "").trim();
+    const dashboardAt = (process.env.DASHBOARD_RAILWAY_API_TOKEN || "").trim();
+    const railwayWatchdogVars = {
+      PORT: "8080",
+      RAILWAY_PROJECT_ID: projectId,
+      RAILWAY_ENVIRONMENT_ID: environmentId,
+      RAILWAY_WATCHDOG_AUTO_RECOVER: watchdogAutoRecover ? "1" : "0",
+      // Heartbeats use private mesh (http://<service>.railway.internal:8080/...) when unset; see service-heartbeat.ts
+      RAILWAY_HEARTBEAT_INTERNAL_PORT: "8080",
+      ...(watchdogPoll ? { RAILWAY_WATCHDOG_POLL_SEC: watchdogPoll } : {}),
+      // Persist watchdog events to dashboard_db via dashboard-backend (same as compose-watchdog).
+      ...(byName.has("dashboard-backend")
+        ? {
+            DASHBOARD_BACKEND_URL:
+              "http://" +
+              varRef("dashboard-backend", "RAILWAY_PRIVATE_DOMAIN") +
+              ":" +
+              varRef("dashboard-backend", "PORT"),
+            ...(logIngestToken
+              ? {
+                  LOG_INGEST_TOKEN: logIngestToken,
+                  WATCHDOG_ALERTS_INGEST_TOKEN: logIngestToken,
+                }
+              : {}),
+          }
+        : {}),
+    };
+    if (dashboardPt) {
+      railwayWatchdogVars.RAILWAY_PROJECT_TOKEN = dashboardPt;
+    } else if (dashboardAt) {
+      railwayWatchdogVars.RAILWAY_API_TOKEN = dashboardAt;
+    } else {
+      console.warn(
+        "(Variable sync) railway-watchdog: no DASHBOARD_RAILWAY_PROJECT_TOKEN or DASHBOARD_RAILWAY_API_TOKEN — set tokens for GraphQL access."
+      );
+    }
+    const wdDiscord = (process.env.WATCHDOG_DISCORD_WEBHOOK_URL || "").trim();
+    const discordShared = (process.env.DISCORD_WEBHOOK_URL || "").trim();
+    if (wdDiscord) {
+      railwayWatchdogVars.WATCHDOG_DISCORD_WEBHOOK_URL = wdDiscord;
+    } else if (discordShared) {
+      railwayWatchdogVars.DISCORD_WEBHOOK_URL = discordShared;
+    }
+    await upsert("railway-watchdog", railwayWatchdogVars);
+  }
+
+  if (byName.has("dashboard")) {
+    const dashboardPt = (process.env.DASHBOARD_RAILWAY_PROJECT_TOKEN || "").trim();
+    const dashboardAt = (process.env.DASHBOARD_RAILWAY_API_TOKEN || "").trim();
+    const chaosKillRaw = (process.env.CHAOS_KILL_ENABLED ?? "1").trim();
+    const chaosKillEnabled =
+      chaosKillRaw === "" ||
+      chaosKillRaw === "1" ||
+      chaosKillRaw.toLowerCase() === "true" ||
+      chaosKillRaw.toLowerCase() === "yes" ||
+      chaosKillRaw.toLowerCase() === "on";
+    const dashboardVars = {
+      // Next.js standalone (Dockerfile EXPOSE 3000). Must match private heartbeat port for
+      // `dashboard` in service-heartbeat.ts (3000), not 8080 like Flask/NGINX services.
+      PORT: "3000",
+      // Private HTTP URL: Next.js server-side fetch to the public HTTPS domain often fails
+      // (edge/DNS/hairpin); same pattern as load-balancer → url-shortener via RAILWAY_PRIVATE_DOMAIN.
+      DASHBOARD_BACKEND_URL:
+        "http://" +
+        varRef("dashboard-backend", "RAILWAY_PRIVATE_DOMAIN") +
+        ":" +
+        varRef("dashboard-backend", "PORT"),
+      ...(byName.has("railway-watchdog")
+        ? {
+            WATCHDOG_SERVICE_URL:
+              "http://" +
+              varRef("railway-watchdog", "RAILWAY_PRIVATE_DOMAIN") +
+              ":" +
+              varRef("railway-watchdog", "PORT"),
+          }
+        : {}),
+      // Ops Load Test tab (client): sane default for custom k6 target (build-time; redeploy if changed).
+      ...(byName.has("load-balancer")
+        ? {
+            NEXT_PUBLIC_LOAD_TEST_TARGET_URL:
+              "https://" + varRef("load-balancer", "RAILWAY_PUBLIC_DOMAIN"),
+          }
+        : byName.has("url-shortener-a")
+          ? {
+              NEXT_PUBLIC_LOAD_TEST_TARGET_URL:
+                "https://" + varRef("url-shortener-a", "RAILWAY_PUBLIC_DOMAIN"),
+            }
+          : {}),
+      VISIBILITY_COMPOSE_PROJECT: "pe-hackathon-2026",
+      // Ops tab: list services via Railway GraphQL (no Docker socket in the cloud).
+      RAILWAY_PROJECT_ID: projectId,
+      RAILWAY_ENVIRONMENT_ID: environmentId,
+      VISIBILITY_ALERTMANAGER_DISABLED: "1",
+      // Hosted Chaos tab: production Next.js defaults chaos off unless explicitly enabled.
+      CHAOS_KILL_ENABLED: chaosKillEnabled ? "1" : "0",
+      RAILWAY_WATCHDOG_AUTO_RECOVER: watchdogAutoRecover ? "1" : "0",
+      ...(watchdogPoll ? { RAILWAY_WATCHDOG_POLL_SEC: watchdogPoll } : {}),
+    };
+    if (dashboardPt) {
+      dashboardVars.RAILWAY_PROJECT_TOKEN = dashboardPt;
+    } else if (dashboardAt) {
+      dashboardVars.RAILWAY_API_TOKEN = dashboardAt;
+    } else {
+      console.warn(
+        "(Variable sync) No DASHBOARD_RAILWAY_PROJECT_TOKEN or DASHBOARD_RAILWAY_API_TOKEN — add RAILWAY_PROJECT_TOKEN or RAILWAY_API_TOKEN on the dashboard service in Railway, or set one of those env vars in .env.railway.setup and re-run."
+      );
+    }
+    const chaosAllowed = (process.env.CHAOS_ALLOWED_SERVICES || "").trim();
+    if (chaosAllowed) {
+      dashboardVars.CHAOS_ALLOWED_SERVICES = chaosAllowed;
+    }
+    await upsert("dashboard", dashboardVars);
+  }
+
+  if (byName.has("user-frontend")) {
+    const explicitUf = (process.env.USER_FRONTEND_BACKEND_URL || "").trim().replace(/\/+$/, "");
+    let apiPublic = null;
+    if (explicitUf) {
+      apiPublic = explicitUf;
+    } else if (byName.has("load-balancer")) {
+      apiPublic = "https://" + varRef("load-balancer", "RAILWAY_PUBLIC_DOMAIN");
+    } else if (byName.has("url-shortener-a")) {
+      apiPublic = "https://" + varRef("url-shortener-a", "RAILWAY_PUBLIC_DOMAIN");
+    } else {
+      console.warn(
+        `(Variable sync) user-frontend: set USER_FRONTEND_BACKEND_URL in .env.railway.setup, or add a load-balancer / url-shortener-a service — skipping BACKEND_URL (Next.js needs it for /api/config → browser API calls).`
+      );
+    }
+    // PORT matches user-frontend/Dockerfile + Next standalone (cross-service ${{ user-frontend.PORT }} refs work).
+    const ufVars = { PORT: "3000", ...(apiPublic ? { BACKEND_URL: apiPublic } : {}) };
+    await upsert("user-frontend", ufVars);
+  }
+}
+
+function normalizeRepo(s) {
+  const t = (s || "").trim();
+  const m = t.match(/github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?$/i);
+  return m ? m[1] : t;
+}
+
+async function main() {
+  loadOptionalEnvFile();
+  getAuthHeaders(); // fail fast if token missing
+  const dry = process.env.DRY_RUN === "1" || process.env.DRY_RUN === "true";
+  const repo = normalizeRepo(process.env.RAILWAY_REPO || DEFAULT_REPO);
+  const branch = (process.env.RAILWAY_BRANCH || DEFAULT_BRANCH).trim();
+  const { projectId, environmentId } = loadRailwayConfig();
+
+  console.log(`Project: ${projectId}`);
+  console.log(`Environment: ${environmentId}`);
+  console.log(`Repo: ${repo}`);
+  console.log(`Branch: ${branch}`);
+  if (dry) console.log("(DRY_RUN: no mutations)");
+
+  let byName = await fetchServicesMap(projectId);
+
+  for (const spec of SERVICE_SPECS) {
+    console.log(`\n--- ${spec.name} (${spec.rootDirectory}) ---`);
+    let svc = byName.get(spec.name);
+
+    if (!svc) {
+      console.log("Service missing; would create + link repo");
+      if (dry) continue;
+      await gql(M_SERVICE_CREATE, {
+        input: {
+          projectId,
+          environmentId,
+          name: spec.name,
+          branch,
+          source: { repo },
+        },
+      });
+      console.log(`Created service ${spec.name}`);
+      byName = await fetchServicesMap(projectId);
+      svc = byName.get(spec.name);
+      if (!svc) throw new Error(`Service ${spec.name} not found after create`);
+    }
+
+    const triggers = svc.triggers.filter(
+      (t) =>
+        normalizeRepo(t.repository) === repo &&
+        (!t.environmentId || t.environmentId === environmentId)
+    );
+    const anyTrigger = svc.triggers[0];
+
+    if (triggers.length === 0) {
+      if (anyTrigger && normalizeRepo(anyTrigger.repository) !== repo) {
+        console.warn(
+          `  Service is linked to a different repo (${anyTrigger.repository}). Skipping trigger branch update.`
+        );
+      } else if (!anyTrigger) {
+        console.log("  No deployment trigger; connecting repo / creating trigger");
+        if (!dry) {
+          try {
+            await gql(M_SERVICE_CONNECT, {
+              id: svc.id,
+              input: { repo, branch },
+            });
+            console.log("  serviceConnect OK");
+          } catch (e) {
+            console.log("  serviceConnect failed, trying deploymentTriggerCreate:", e.message);
+            await gql(M_DEPLOY_TRIGGER_CREATE, {
+              input: {
+                projectId,
+                environmentId,
+                serviceId: svc.id,
+                branch,
+                repository: repo,
+                provider: "GITHUB",
+                rootDirectory: spec.rootDirectory,
+              },
+            });
+            console.log("  deploymentTriggerCreate OK");
+          }
+          byName = await fetchServicesMap(projectId);
+          svc = byName.get(spec.name);
+        }
+      }
+    } else {
+      for (const tr of triggers) {
+        if (tr.branch === branch && normalizeRepo(tr.repository) === repo) {
+          console.log(`  Trigger ${tr.id} already on ${branch}`);
+          continue;
+        }
+        console.log(`  Updating trigger ${tr.id} -> branch ${branch}`);
+        if (!dry) {
+          await gql(M_TRIGGER_UPDATE, {
+            id: tr.id,
+            input: { branch, repository: repo, rootDirectory: spec.rootDirectory },
+          });
+        }
+      }
+    }
+
+    // After create/connect, Railway may still use the repo default branch (e.g. main) until updated.
+    if (!dry) {
+      byName = await fetchServicesMap(projectId);
+      svc = byName.get(spec.name);
+      if (svc) {
+        const trs = (svc.triggers || []).filter(
+          (t) =>
+            normalizeRepo(t.repository) === repo &&
+            (!t.environmentId || t.environmentId === environmentId)
+        );
+        for (const tr of trs) {
+          if (tr.branch !== branch) {
+            console.log(`  Set trigger branch ${tr.id}: ${tr.branch} -> ${branch}`);
+            await gql(M_TRIGGER_UPDATE, {
+              id: tr.id,
+              input: { branch, repository: repo, rootDirectory: spec.rootDirectory },
+            });
+          }
+        }
+      }
+    }
+
+    const si = await gql(Q_SERVICE_INSTANCE, {
+      environmentId,
+      serviceId: svc.id,
+    });
+    const curRoot = si.serviceInstance?.rootDirectory || "";
+    const preRaw = si.serviceInstance?.preDeployCommand;
+    const pre = Array.isArray(preRaw) ? preRaw : [];
+    const forceClearPre =
+      process.env.FORCE_CLEAR_PREDEPLOY === "1" ||
+      process.env.FORCE_CLEAR_PREDEPLOY === "true";
+    // Stale API state can keep a 2+ element list and break snapshot parsing ("at most 1 element")
+    // even when the dashboard shows nothing and railway.toml has no preDeployCommand.
+    const mustClearPre = forceClearPre || pre.length > 0;
+    if (pre.length > 1) {
+      console.warn(
+        `  preDeployCommand has ${pre.length} entries (invalid; max 1). Clearing via API.`
+      );
+    } else if (pre.length === 1) {
+      console.log(
+        `  Clearing preDeployCommand (was ${JSON.stringify(pre)}); migrations run in Docker entrypoint.`
+      );
+    }
+
+    const rootOk = curRoot === spec.rootDirectory;
+    const curConfig = normRailwayConfigPath(si.serviceInstance?.railwayConfigFile);
+    const wantConfig = normRailwayConfigPath(spec.railwayConfigFile);
+    const configOk = curConfig === wantConfig;
+    const curWatch = si.serviceInstance?.watchPatterns;
+    const watchOk = watchPatternsEqual(curWatch, spec.watchPatterns);
+
+    const needsInstanceUpdate =
+      !rootOk || mustClearPre || !configOk || !watchOk;
+
+    if (!needsInstanceUpdate) {
+      console.log(
+        `  rootDirectory, railwayConfigFile, watchPatterns OK (${spec.rootDirectory})`
+      );
+    } else {
+      if (!rootOk) {
+        console.log(`  rootDirectory: "${curRoot}" -> "${spec.rootDirectory}"`);
+      } else {
+        console.log(`  rootDirectory OK (${spec.rootDirectory})`);
+      }
+      if (!configOk) {
+        console.log(
+          `  railwayConfigFile: "${si.serviceInstance?.railwayConfigFile ?? ""}" -> "${spec.railwayConfigFile}"`
+        );
+      }
+      if (!watchOk) {
+        console.log(
+          `  watchPatterns: ${JSON.stringify(curWatch ?? [])} -> ${JSON.stringify(spec.watchPatterns)}`
+        );
+      }
+      const input = {};
+      if (!rootOk) input.rootDirectory = spec.rootDirectory;
+      if (mustClearPre) input.preDeployCommand = [];
+      if (!configOk) input.railwayConfigFile = spec.railwayConfigFile;
+      if (!watchOk) input.watchPatterns = spec.watchPatterns;
+      if (!dry) {
+        await gql(M_INSTANCE_UPDATE, {
+          environmentId,
+          serviceId: svc.id,
+          input,
+        });
+        console.log("  serviceInstanceUpdate OK");
+      } else {
+        console.log("  (DRY_RUN: would serviceInstanceUpdate)");
+      }
+    }
+  }
+
+  const skipRedeploy =
+    process.env.SKIP_REDEPLOY === "1" || process.env.SKIP_REDEPLOY === "true";
+  if (!dry && !skipRedeploy) {
+    console.log("\n--- Redeploy app services (latest commit) ---");
+    byName = await fetchServicesMap(projectId);
+    for (const spec of SERVICE_SPECS) {
+      const svc = byName.get(spec.name);
+      if (!svc) {
+        console.warn(`  Skip ${spec.name}: not in project`);
+        continue;
+      }
+      try {
+        const deployData = await gql(M_SERVICE_INSTANCE_DEPLOY, {
+          environmentId,
+          serviceId: svc.id,
+          latestCommit: true,
+        });
+        console.log(
+          `  ${spec.name}: serviceInstanceDeploy OK (${deployData.serviceInstanceDeploy ?? "ok"})`
+        );
+      } catch (e) {
+        console.warn(`  ${spec.name}: deploy failed — ${e.message}`);
+      }
+    }
+  } else if (skipRedeploy && !dry) {
+    console.log("\n(SKIP_REDEPLOY: not triggering redeploys)");
+  }
+
+  const syncVariables =
+    process.env.SYNC_VARIABLES === "1" || process.env.SYNC_VARIABLES === "true";
+  if (syncVariables) {
+    console.log(
+      "\n--- Variable sync (Docker Compose parity: Postgres, Redis, Kafka, app env) ---"
+    );
+    byName = await fetchServicesMap(projectId);
+    await syncInternalDatabaseVariables(projectId, environmentId, byName, dry);
+    if (!dry) {
+      console.log(
+        "\n(Create database dashboard_db in Postgres once if it does not exist — see RAILWAY.md.)"
+      );
+    }
+  }
+
+  console.log("\nDone. If GitHub linking failed, install the Railway GitHub app for the org/repo and retry.");
+}
+
+main().catch((e) => {
+  console.error(e.message || e);
+  process.exit(1);
+});

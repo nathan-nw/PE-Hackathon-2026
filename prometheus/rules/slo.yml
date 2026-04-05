@@ -1,0 +1,79 @@
+# SLO-style alerts for url-shortener.
+# Requires metrics from /metrics (http_requests_total, http_request_duration_seconds).
+
+groups:
+  - name: slo
+    rules:
+      # --- Service availability ---
+
+      - alert: ServiceDown
+        expr: |
+          sum(up{job="url-shortener"}) == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "All url-shortener instances are down"
+          description: "No url-shortener targets are responding. The service is completely unavailable."
+
+      - alert: APITargetDown
+        expr: up{job="url-shortener"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Prometheus cannot scrape {{ $labels.instance }}"
+          description: "url-shortener instance {{ $labels.instance }} has been unreachable for >2m."
+
+      # --- Error rates ---
+
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status_code=~"5.."}[2m]))
+            /
+            sum(rate(http_requests_total[2m]))
+          ) > 0.1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Error rate exceeds 10%"
+          description: "More than 10% of requests are returning 5xx errors over the last 2 minutes."
+
+      - alert: High5xxRate
+        expr: |
+          sum(rate(http_requests_total{status_code=~"5.."}[2m])) > 0.5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated 5xx response rate from url-shortener"
+          description: "More than 0.5 5xx responses/s (2m rate) across scraped replicas."
+
+      - alert: High429Rate
+        expr: |
+          sum(rate(http_requests_total{status_code="429"}[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated 429 (rate limit) responses"
+          description: "Clients may be hitting NGINX or app rate limits."
+
+      # --- Latency ---
+
+      - alert: HighLatencyP99
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le) (
+              rate(http_request_duration_seconds_bucket{job="url-shortener"}[5m])
+            )
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p99 request latency above 2s"
+          description: "p99 latency has exceeded 2 seconds for 5 minutes."

@@ -73,15 +73,13 @@ jobs:
 
   test:
     # --------------------------------------------------------------------------
-    # Test job: runs the pytest test suite.
+    # Test job: runs the full pytest suite (url-shortener + dashboard backend).
     # Uses a PostgreSQL service container so tests can hit a real database.
+    # Enforces 70% minimum coverage (Gold tier requirement).
     # --------------------------------------------------------------------------
     name: Test
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: url-shortener
 
     # --------------------------------------------------------------------------
     # PostgreSQL service container — spins up a real DB for integration tests.
@@ -102,9 +100,19 @@ jobs:
           --health-timeout=5s
           --health-retries=5
 
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
     # --------------------------------------------------------------------------
-    # Environment variables for the app to connect to the test database.
-    # These match the PostgreSQL service container configuration above.
+    # Environment variables for the app to connect to the test database and Redis.
+    # These match the service container configurations above.
     # --------------------------------------------------------------------------
     env:
       DATABASE_NAME: hackathon_db
@@ -112,6 +120,9 @@ jobs:
       DATABASE_PORT: 5432
       DATABASE_USER: postgres
       DATABASE_PASSWORD: postgres
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      TESTING: "1"
 
     steps:
       - name: Checkout code
@@ -128,6 +139,6 @@ jobs:
       - name: Install dependencies
         run: uv sync --group dev
 
-      # Run pytest with verbose output so failures are easy to diagnose in logs
-      - name: Run tests
-        run: uv run pytest -v
+      # Run pytest with coverage enforcement — deployment fails if coverage < 70%
+      - name: Run tests with coverage
+        run: uv run pytest -v --cov-fail-under=70

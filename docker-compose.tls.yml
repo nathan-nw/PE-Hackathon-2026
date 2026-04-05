@@ -1,0 +1,12 @@
+# Optional TLS edge: add HTTPS on :8443 (self-signed cert baked in Dockerfile.tls).
+# Usage from repo root:
+#   docker compose -f docker-compose.yml -f docker-compose.tls.yml up --build
+# API: http://localhost:8080  |  https://localhost:8443  (browser will warn on self-signed cert)
+
+services:
+  load-balancer:
+    build:
+      context: ./load-balancer
+      dockerfile: Dockerfile.tls
+    ports:
+      - "8443:443"

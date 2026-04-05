@@ -1,0 +1,931 @@
+"use client";
+
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ChaosPanel } from "@/components/chaos-panel";
+import { GoldenSignals } from "@/components/golden-signals";
+import { IncidentTimeline } from "@/components/incident-timeline";
+import { UnifiedLogMonitor } from "@/components/unified-log-monitor";
+import { instanceIdFromComposeService } from "@/lib/compose-instance";
+import { LoadTest } from "@/components/load-test";
+import { HeartbeatCell } from "@/components/heartbeat-cell";
+import { RailwayOnlineStatusBadge } from "@/components/railway-online-status-badge";
+import { cn } from "@/lib/utils";
+import type { RailwayOnlineStatus } from "@/lib/railway-visibility";
+import type { HeartbeatPingResult } from "@/lib/service-heartbeat";
+import { ChevronDown, ChevronRight, Loader2, RefreshCw } from "lucide-react";
+
+const POLL_MS = 12_000;
+const LOG_POLL_MS = 2_500;
+
+type DockerContainer = {
+  id: string;
+  name: string;
+  image: string;
+  state: string;
+  status: string;
+  service: string;
+  health?: string;
+  created: number;
+  cpuPercent?: number;
+  memUsage?: number;
+  memLimit?: number;
+  railwayServiceId?: string;
+  /** Hosted (Railway): Online / Completed / Deploying — from deployment lifecycle. */
+  railwayOnlineStatus?: RailwayOnlineStatus;
+  heartbeat?: HeartbeatPingResult;
+};
+
+/** Response from dashboard-backend GET /api/introspect/postgres (proxied). */
+type PostgresIntrospectResponse = {
+  databases: string[];
+  tables_by_database: Record<string, string[]>;
+  dashboard_db_present: boolean;
+  errors: { scope: string; message: string }[];
+  profile?: string;
+  introspect_configured?: boolean;
+};
+
+/** Compose / Railway rows that look like a Postgres server (expand for DB + table list). */
+function isPostgresLikeRow(
+  source: string | undefined,
+  service: string,
+  image: string
+): boolean {
+  const img = (image || "").toLowerCase();
+  if (img.includes("postgres")) return true;
+  const s = (service || "").toLowerCase();
+  if (source === "railway") {
+    return s === "postgres" || s.includes("postgres");
+  }
+  if (source === "docker" || !source) {
+    return s === "db" || s === "dashboard-db" || s.includes("postgres");
+  }
+  return false;
+}
+
+/** Which connection profile dashboard-backend should use (see INTROSPECT_DB_URL for ``main``). */
+function introspectProfileForRow(
+  source: string | undefined,
+  service: string,
+  image: string
+): "default" | "main" {
+  const s = (service || "").toLowerCase();
+  if (source === "docker" && s === "db") return "main";
+  return "default";
+}
+
+type DockerResponse = {
+  source?: "docker" | "railway";
+  project: string;
+  projectId?: string;
+  containers: DockerContainer[];
+  error?: string;
+};
+
+type AlertRow = {
+  name: string;
+  severity?: string;
+  state?: string;
+  startsAt?: string;
+  summary?: string;
+  description?: string;
+  instance?: string;
+};
+
+type AlertsResponse = {
+  alerts: AlertRow[];
+  error?: string;
+};
+
+type WatchdogAlertRow = {
+  id: number;
+  event_id: string;
+  source: string;
+  kind: string;
+  service: string;
+  message: string;
+  severity: string;
+  raw_json?: Record<string, unknown>;
+  created_at?: string | null;
+};
+
+type WatchdogAlertsResponse = {
+  alerts: WatchdogAlertRow[];
+  count?: number;
+  error?: string;
+  hint?: string;
+};
+
+function formatBytes(n: number | undefined) {
+  if (n == null || Number.isNaN(n)) return "—";
+  const units = ["B", "KB", "MB", "GB"];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+function stateBadge(state: string, health?: string) {
+  const s = state.toLowerCase();
+  if (s === "running") {
+    if (health === "unhealthy")
+      return (
+        <Badge variant="destructive" className="capitalize">
+          unhealthy
+        </Badge>
+      );
+    if (health === "healthy" || health === "starting")
+      return (
+        <Badge variant="secondary" className="capitalize">
+          {health}
+        </Badge>
+      );
+    return (
+      <Badge variant="default" className="capitalize">
+        running
+      </Badge>
+    );
+  }
+  if (s === "exited" || s === "dead")
+    return (
+      <Badge variant="destructive" className="capitalize">
+        {state}
+      </Badge>
+    );
+  return (
+    <Badge variant="outline" className="capitalize">
+      {state}
+    </Badge>
+  );
+}
+
+export function OpsDashboard() {
+  const [docker, setDocker] = useState<DockerResponse | null>(null);
+  const [alerts, setAlerts] = useState<AlertsResponse | null>(null);
+  const [watchdogAlerts, setWatchdogAlerts] =
+    useState<WatchdogAlertsResponse | null>(null);
+  const [watchdogExpandedIds, setWatchdogExpandedIds] = useState<Set<number>>(
+    () => new Set()
+  );
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [lastFetch, setLastFetch] = useState<Date | null>(null);
+
+  const [mainTab, setMainTab] = useState("containers");
+  const [logInstanceJump, setLogInstanceJump] = useState<{
+    instanceId: string;
+    nonce: number;
+  } | null>(null);
+
+  const [pgExpandedIds, setPgExpandedIds] = useState<Set<string>>(() => new Set());
+  const [pgSlots, setPgSlots] = useState<
+    Record<
+      string,
+      {
+        data: PostgresIntrospectResponse | null;
+        error: string | null;
+        loading: boolean;
+      }
+    >
+  >({});
+  /** Per-container fetch generation so stale responses are ignored when re-fetching the same row. */
+  const pgFetchSeq = useRef<Record<string, number>>({});
+
+  const fetchAll = useCallback(async () => {
+    setError(null);
+    const qs = "?heartbeats=1&stats=1";
+    try {
+      const [d, a, w] = await Promise.all([
+        fetch(`/api/visibility/docker${qs}`, { cache: "no-store" }).then((r) =>
+          r.json()
+        ),
+        fetch("/api/visibility/alerts", { cache: "no-store" }).then((r) =>
+          r.json()
+        ),
+        fetch("/api/watchdog-alerts?limit=200&window_hours=720", {
+          cache: "no-store",
+        }).then((r) => r.json()),
+      ]);
+      setDocker(d as DockerResponse);
+      setAlerts(a as AlertsResponse);
+      setWatchdogAlerts(w as WatchdogAlertsResponse);
+      setLastFetch(new Date());
+    } catch (e) {
+      setError(
+        e instanceof Error && e.message.includes("fetch")
+          ? "Hmm, we can't reach the backend right now. Please check that all services are running and try again."
+          : e instanceof Error
+            ? e.message
+            : "Something unexpected happened — please refresh and try again!",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchAll();
+  }, [fetchAll]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => fetchAll(), POLL_MS);
+    return () => window.clearInterval(id);
+  }, [fetchAll]);
+
+  const loadPostgresIntrospect = useCallback(
+    async (c: DockerContainer, source: string | undefined) => {
+      const id = c.id;
+      pgFetchSeq.current[id] = (pgFetchSeq.current[id] ?? 0) + 1;
+      const mySeq = pgFetchSeq.current[id];
+      const profile = introspectProfileForRow(source, c.service, c.image);
+      setPgSlots((prev) => ({
+        ...prev,
+        [id]: {
+          data: prev[id]?.data ?? null,
+          error: null,
+          loading: true,
+        },
+      }));
+      try {
+        const params = new URLSearchParams();
+        params.set("profile", profile);
+        const res = await fetch(`/api/ops/postgres-introspect?${params.toString()}`);
+        const j = (await res.json()) as PostgresIntrospectResponse & {
+          error?: string;
+          hint?: string;
+        };
+        if (pgFetchSeq.current[id] !== mySeq) return;
+        if (!res.ok) {
+          setPgSlots((prev) => ({
+            ...prev,
+            [id]: {
+              data: null,
+              error: j.error ?? `HTTP ${res.status}`,
+              loading: false,
+            },
+          }));
+          return;
+        }
+        setPgSlots((prev) => ({
+          ...prev,
+          [id]: {
+            data: j,
+            error: null,
+            loading: false,
+          },
+        }));
+      } catch (e) {
+        if (pgFetchSeq.current[id] !== mySeq) return;
+        setPgSlots((prev) => ({
+          ...prev,
+          [id]: {
+            data: null,
+            error: e instanceof Error ? e.message : "Request failed",
+            loading: false,
+          },
+        }));
+      }
+    },
+    []
+  );
+
+  const sortedContainers = useMemo(() => {
+    const list = docker?.containers ?? [];
+    return [...list].sort((a, b) =>
+      (a.service || a.name).localeCompare(b.service || b.name)
+    );
+  }, [docker]);
+
+  /** CPU/memory columns: Docker via container stats; Railway via GraphQL metrics. */
+  const isRailway = docker?.source === "railway";
+  const baseServiceCols = isRailway ? 7 : 6;
+  const serviceTableColCount = baseServiceCols + 2;
+
+  return (
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-8">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Ops</h1>
+          <p className="text-muted-foreground text-sm">
+            Compose / Railway, Alertmanager, and Kafka log stream (
+            {mainTab === "logs"
+              ? `logs ~${LOG_POLL_MS / 1000}s`
+              : `${POLL_MS / 1000}s`}{" "}
+            refresh)
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setLoading(true);
+              void fetchAll();
+            }}
+            disabled={loading}
+          >
+            {loading ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <RefreshCw className="size-4" />
+            )}
+            Refresh
+          </Button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-200" role="alert">
+          <p className="font-medium">Heads up!</p>
+          <p>{error}</p>
+        </div>
+      )}
+      {lastFetch && (
+        <p className="text-muted-foreground text-xs">
+          Last updated: {lastFetch.toLocaleTimeString()}
+        </p>
+      )}
+
+      <Tabs
+        value={mainTab}
+        onValueChange={setMainTab}
+        className="gap-4"
+      >
+        <TabsList variant="line">
+          <TabsTrigger value="containers">Containers</TabsTrigger>
+          <TabsTrigger value="alerts">Alerts</TabsTrigger>
+          <TabsTrigger value="logs">Logs</TabsTrigger>
+          <TabsTrigger value="loadtest">Load Test</TabsTrigger>
+          <TabsTrigger value="chaos">Chaos</TabsTrigger>
+          <TabsTrigger value="telemetry">Telemetry</TabsTrigger>
+          <TabsTrigger value="incidents">Incidents</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="containers" className="space-y-2">
+          <Card>
+            <CardHeader>
+              <CardTitle>
+                {docker?.source === "railway" ? "Railway services" : "Docker"}
+              </CardTitle>
+              <CardDescription>
+                {docker?.source === "railway" ? (
+                  <>
+                    Project{" "}
+                    <span className="text-foreground font-mono">
+                      {docker?.project ?? "—"}
+                    </span>
+                    {docker?.projectId && (
+                      <>
+                        {" "}
+                        <span className="text-muted-foreground">·</span>{" "}
+                        <a
+                          className="text-primary hover:underline"
+                          href={`https://railway.com/project/${docker.projectId}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open in Railway
+                        </a>
+                      </>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    Compose project{" "}
+                    <span className="text-foreground font-mono">
+                      {docker?.project ?? "—"}
+                    </span>
+                  </>
+                )}
+                {docker?.error && (
+                  <span className="text-destructive"> — {docker.error}</span>
+                )}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Service</TableHead>
+                    <TableHead>
+                      {docker?.source === "railway" ? "Deployment" : "Container"}
+                    </TableHead>
+                    <TableHead>Image</TableHead>
+                    <TableHead>
+                      {docker?.source === "railway" ? "Lifecycle" : "State"}
+                    </TableHead>
+                    <TableHead>Status</TableHead>
+                    {isRailway ? <TableHead>Heartbeat</TableHead> : null}
+                    <TableHead className="w-[120px]">App logs</TableHead>
+                    <TableHead>CPU %</TableHead>
+                    <TableHead>Memory</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {sortedContainers.length === 0 && (
+                    <TableRow>
+                      <TableCell
+                        colSpan={serviceTableColCount}
+                        className="text-muted-foreground"
+                      >
+                        {docker?.source === "railway"
+                          ? "No Railway services returned, or the Railway API request failed (check dashboard service variables: RAILWAY_PROJECT_ID, RAILWAY_ENVIRONMENT_ID, and a token)."
+                          : "No containers for this Compose project, or Docker API unreachable."}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {sortedContainers.flatMap((c) => {
+                    const showPg = isPostgresLikeRow(
+                      docker?.source,
+                      c.service,
+                      c.image
+                    );
+                    const pgOpen = showPg && pgExpandedIds.has(c.id);
+                    const pgSlot = pgSlots[c.id];
+                    const pgLoading = pgSlot?.loading ?? false;
+                    const pgError = pgSlot?.error ?? null;
+                    const pgData = pgSlot?.data ?? null;
+                    const mainRow = (
+                      <TableRow key={c.id}>
+                        <TableCell className="font-medium">
+                          <div className="flex items-center gap-1">
+                            {showPg ? (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 w-7 shrink-0 p-0"
+                                aria-expanded={pgOpen}
+                                aria-label={
+                                  pgOpen
+                                    ? "Collapse database details"
+                                    : "Expand database list and tables"
+                                }
+                                onClick={() => {
+                                  if (pgOpen) {
+                                    setPgExpandedIds((prev) => {
+                                      const next = new Set(prev);
+                                      next.delete(c.id);
+                                      return next;
+                                    });
+                                    return;
+                                  }
+                                  setPgExpandedIds((prev) => new Set(prev).add(c.id));
+                                  const slot = pgSlots[c.id];
+                                  if (!slot?.data && !slot?.loading) {
+                                    void loadPostgresIntrospect(c, docker?.source);
+                                  }
+                                }}
+                              >
+                                {pgOpen ? (
+                                  <ChevronDown className="h-4 w-4" />
+                                ) : (
+                                  <ChevronRight className="h-4 w-4" />
+                                )}
+                              </Button>
+                            ) : null}
+                            <span>{c.service || "—"}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">{c.name}</TableCell>
+                        <TableCell className="max-w-[200px] truncate text-xs">
+                          {c.image}
+                        </TableCell>
+                        <TableCell>
+                          {docker?.source === "railway" &&
+                          c.railwayOnlineStatus != null ? (
+                            <RailwayOnlineStatusBadge
+                              status={c.railwayOnlineStatus}
+                            />
+                          ) : (
+                            stateBadge(c.state, c.health)
+                          )}
+                        </TableCell>
+                        <TableCell className="max-w-[240px] truncate text-xs">
+                          {c.status}
+                        </TableCell>
+                        {isRailway ? (
+                          <TableCell>
+                            <HeartbeatCell hb={c.heartbeat} />
+                          </TableCell>
+                        ) : null}
+                        <TableCell>
+                          {(() => {
+                            const iid = instanceIdFromComposeService(c.service);
+                            if (!iid)
+                              return <span className="text-muted-foreground">—</span>;
+                            return (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="text-xs"
+                                onClick={() => {
+                                  setLogInstanceJump({
+                                    instanceId: iid,
+                                    nonce: Date.now(),
+                                  });
+                                  setMainTab("logs");
+                                }}
+                              >
+                                Instance {iid}
+                              </Button>
+                            );
+                          })()}
+                        </TableCell>
+                        <TableCell>
+                          {c.cpuPercent != null
+                            ? `${(c.cpuPercent < 1 ? c.cpuPercent.toFixed(2) : c.cpuPercent.toFixed(1))}%`
+                            : "—"}
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          {formatBytes(c.memUsage)}
+                          {c.memLimit ? ` / ${formatBytes(c.memLimit)}` : ""}
+                        </TableCell>
+                      </TableRow>
+                    );
+                    if (!pgOpen) return [mainRow];
+                    const detailRow = (
+                      <TableRow key={`${c.id}-pg-detail`}>
+                        <TableCell
+                          colSpan={serviceTableColCount}
+                          className="bg-muted/40 align-top"
+                        >
+                          <div className="space-y-3 py-1">
+                            <p className="text-muted-foreground text-xs">
+                              {introspectProfileForRow(
+                                docker?.source,
+                                c.service,
+                                c.image
+                              ) === "main" ? (
+                                <>
+                                  Introspection uses{" "}
+                                  <span className="font-mono">INTROSPECT_DB_URL</span> on{" "}
+                                  <span className="font-mono">dashboard-backend</span> (Compose
+                                  <span className="font-mono"> db</span> service).
+                                </>
+                              ) : (
+                                <>
+                                  Databases and tables on the{" "}
+                                  <span className="font-mono">same Postgres server</span> as{" "}
+                                  <span className="font-mono">dashboard-backend</span> (
+                                  <span className="font-mono">
+                                    DASHBOARD_DATABASE_URL
+                                  </span>{" "}
+                                  / discrete <span className="font-mono">DASHBOARD_DB_*</span>
+                                  ). Hosted Railway: often shows <span className="font-mono">dashboard_db</span>{" "}
+                                  and the default DB on one plugin.
+                                </>
+                              )}
+                            </p>
+                            {pgLoading && (
+                              <div className="text-muted-foreground flex items-center gap-2 text-sm">
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                Loading…
+                              </div>
+                            )}
+                            {pgError && (
+                              <p className="text-destructive text-sm" role="alert">
+                                {pgError}
+                              </p>
+                            )}
+                            {!pgLoading && !pgError && pgData && (
+                              <>
+                                <div>
+                                  <div className="mb-1 text-sm font-medium">
+                                    Databases on this server
+                                  </div>
+                                  <div className="flex flex-wrap gap-1">
+                                    {pgData.databases.map((d) => (
+                                      <Badge
+                                        key={d}
+                                        variant={
+                                          d === "dashboard_db" ? "default" : "secondary"
+                                        }
+                                        className="font-mono text-xs"
+                                      >
+                                        {d}
+                                        {d === "dashboard_db" ? " (dashboard)" : ""}
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                  {!pgData.dashboard_db_present &&
+                                    introspectProfileForRow(
+                                      docker?.source,
+                                      c.service,
+                                      c.image
+                                    ) === "default" && (
+                                      <p className="text-muted-foreground mt-2 text-xs">
+                                        <span className="font-mono">dashboard_db</span> not
+                                        found — create it on this instance (see RAILWAY.md) or
+                                        check{" "}
+                                        <span className="font-mono">DASHBOARD_DB_NAME</span>.
+                                      </p>
+                                    )}
+                                </div>
+                                {Object.keys(pgData.tables_by_database).length > 0 && (
+                                  <div className="space-y-2">
+                                    <div className="text-sm font-medium">
+                                      Public tables by database
+                                    </div>
+                                    {Object.entries(pgData.tables_by_database).map(
+                                      ([db, tables]) => (
+                                        <div key={db}>
+                                          <div className="text-muted-foreground font-mono text-xs">
+                                            {db}
+                                          </div>
+                                          {pgData.errors.some(
+                                            (e) => e.scope === `tables:${db}`
+                                          ) ? (
+                                            <p className="text-destructive text-xs">
+                                              Could not list tables (
+                                              {
+                                                pgData.errors.find(
+                                                  (e) => e.scope === `tables:${db}`
+                                                )?.message
+                                              }
+                                              )
+                                            </p>
+                                          ) : tables.length === 0 ? (
+                                            <p className="text-muted-foreground text-xs">
+                                              — no tables in public schema —
+                                            </p>
+                                          ) : (
+                                            <ul className="mt-1 flex list-none flex-wrap gap-x-3 gap-y-0.5 pl-0 text-xs">
+                                              {tables.map((t) => (
+                                                <li key={`${db}.${t}`} className="font-mono">
+                                                  {t}
+                                                </li>
+                                              ))}
+                                            </ul>
+                                          )}
+                                        </div>
+                                      )
+                                    )}
+                                  </div>
+                                )}
+                                {pgData.errors.length > 0 && (
+                                  <div className="text-muted-foreground text-xs">
+                                    {pgData.errors.map((err, idx) => (
+                                      <div key={`${err.scope}-${idx}`}>
+                                        <span className="font-mono">{err.scope}</span>:{" "}
+                                        {err.message}
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                    return [mainRow, detailRow];
+                  })}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="alerts" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Active alerts</CardTitle>
+              <CardDescription>
+                From Alertmanager API (same data as the Incidents strip).
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {alerts?.error && (
+                <p className="text-destructive mb-2 text-sm">{alerts.error}</p>
+              )}
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Alert</TableHead>
+                    <TableHead>Severity</TableHead>
+                    <TableHead>State</TableHead>
+                    <TableHead>Since</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {(alerts?.alerts ?? []).length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={4} className="text-muted-foreground">
+                        No active alerts (or Alertmanager unreachable).
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {(alerts?.alerts ?? []).map((row, i) => (
+                    <TableRow key={`${row.name}-${i}`}>
+                      <TableCell className="max-w-[280px]">
+                        <div className="font-medium">{row.name}</div>
+                        {row.summary && (
+                          <div className="text-muted-foreground text-xs">
+                            {row.summary}
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant={
+                            row.severity === "critical"
+                              ? "destructive"
+                              : "outline"
+                          }
+                          className={cn("capitalize")}
+                        >
+                          {row.severity ?? "—"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>{row.state ?? "—"}</TableCell>
+                      <TableCell className="text-xs whitespace-normal">
+                        {row.startsAt
+                          ? new Date(row.startsAt).toLocaleString()
+                          : "—"}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Watchdog alert history</CardTitle>
+              <CardDescription>
+                Events persisted from the Railway and compose watchdogs (full
+                payload available per row).
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {watchdogAlerts?.error && (
+                <p className="text-destructive mb-1 text-sm">
+                  {watchdogAlerts.error}
+                </p>
+              )}
+              {watchdogAlerts?.hint && (
+                <p className="text-muted-foreground mb-2 text-xs">
+                  {watchdogAlerts.hint}
+                </p>
+              )}
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-8" />
+                    <TableHead>Time</TableHead>
+                    <TableHead>Severity</TableHead>
+                    <TableHead>Source</TableHead>
+                    <TableHead>Kind</TableHead>
+                    <TableHead>Service</TableHead>
+                    <TableHead>Message</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {(watchdogAlerts?.alerts ?? []).length === 0 && (
+                    <TableRow>
+                      <TableCell
+                        colSpan={7}
+                        className="text-muted-foreground"
+                      >
+                        No watchdog alerts recorded yet (or backend unreachable).
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {(watchdogAlerts?.alerts ?? []).map((row) => {
+                    const open = watchdogExpandedIds.has(row.id);
+                    return (
+                      <Fragment key={row.id}>
+                        <TableRow
+                          className="cursor-pointer hover:bg-muted/50"
+                          onClick={() => {
+                            setWatchdogExpandedIds((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(row.id)) next.delete(row.id);
+                              else next.add(row.id);
+                              return next;
+                            });
+                          }}
+                        >
+                          <TableCell className="align-middle">
+                            {open ? (
+                              <ChevronDown className="size-4" />
+                            ) : (
+                              <ChevronRight className="size-4" />
+                            )}
+                          </TableCell>
+                          <TableCell className="whitespace-nowrap text-xs">
+                            {row.created_at
+                              ? new Date(row.created_at).toLocaleString()
+                              : "—"}
+                          </TableCell>
+                          <TableCell>
+                            <Badge
+                              variant={
+                                row.severity === "critical"
+                                  ? "destructive"
+                                  : row.severity === "info"
+                                    ? "secondary"
+                                    : "outline"
+                              }
+                              className="capitalize"
+                            >
+                              {row.severity ?? "—"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="font-mono text-xs">
+                            {row.source}
+                          </TableCell>
+                          <TableCell className="max-w-[140px] font-mono text-xs">
+                            {row.kind}
+                          </TableCell>
+                          <TableCell className="max-w-[160px]">
+                            {row.service}
+                          </TableCell>
+                          <TableCell className="max-w-md text-sm">
+                            {row.message}
+                          </TableCell>
+                        </TableRow>
+                        {open && (
+                          <TableRow>
+                            <TableCell colSpan={7} className="bg-muted/30">
+                              <div className="text-muted-foreground mb-1 text-xs">
+                                event_id:{" "}
+                                <span className="font-mono">{row.event_id}</span>
+                              </div>
+                              <pre className="max-h-64 overflow-auto rounded border bg-background p-3 text-xs">
+                                {JSON.stringify(
+                                  row.raw_json ?? {},
+                                  null,
+                                  2
+                                )}
+                              </pre>
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="logs" className="space-y-4">
+          <UnifiedLogMonitor
+            instanceJump={logInstanceJump}
+            onInstanceJumpApplied={() => setLogInstanceJump(null)}
+          />
+        </TabsContent>
+
+        <TabsContent value="loadtest" keepMounted>
+          <LoadTest />
+        </TabsContent>
+
+        <TabsContent value="chaos" className="space-y-4">
+          <ChaosPanel />
+        </TabsContent>
+
+        <TabsContent value="telemetry" keepMounted>
+          <GoldenSignals />
+        </TabsContent>
+
+        <TabsContent value="incidents" keepMounted>
+          <IncidentTimeline />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}

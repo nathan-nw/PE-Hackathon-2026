@@ -11,12 +11,20 @@ Tuned for reliability under load:
 import multiprocessing
 import os
 
-# Server socket
-bind = f"0.0.0.0:{os.environ.get('PORT', '5000')}"
+# Server socket (Railway sets PORT at runtime; must not be empty)
+_port = (os.environ.get("PORT") or "5000").strip() or "5000"
+bind = f"0.0.0.0:{_port}"
 
 # Worker processes
-# Rule of thumb: 2-4 workers per CPU core
-workers = int(os.environ.get("GUNICORN_WORKERS", multiprocessing.cpu_count() * 2 + 1))
+# Rule of thumb: 2-4 workers per CPU core. On Railway, default to a small pool so the
+# container stays under memory limits and binds to PORT quickly unless overridden.
+_default_workers = multiprocessing.cpu_count() * 2 + 1
+if "GUNICORN_WORKERS" in os.environ:
+    workers = int(os.environ["GUNICORN_WORKERS"])
+elif os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY"):
+    workers = min(_default_workers, int(os.environ.get("RAILWAY_GUNICORN_WORKERS_MAX", "4")))
+else:
+    workers = _default_workers
 worker_class = "sync"
 
 # Timeouts
@@ -38,3 +46,10 @@ proc_name = "url-shortener"
 
 # Must be False when using DB pools: preloading forks workers with broken inherited connections.
 preload_app = False
+
+
+def post_worker_init(worker):
+    """Re-attach Kafka (and root) logging after Gunicorn finishes worker setup."""
+    from app.logging_config import configure_logging
+
+    configure_logging()

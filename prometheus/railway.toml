@@ -1,0 +1,14 @@
+# Root Directory: prometheus (repo root folder). Pair with Git-linked **prometheus** service on Railway.
+#
+# Watch paths are from repo root. A narrow `/prometheus/**` list caused SKIPPED deployments
+# ("No changes to watched files") when commits only touched other paths — leaving **no active
+# deployment** and Telemetry broken. Match broadly (same idea as watchdog-service/railway.toml).
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+watchPatterns = ["/**", "/*", "/.*"]
+
+[deploy]
+healthcheckPath = "/-/ready"
+healthcheckTimeout = 30

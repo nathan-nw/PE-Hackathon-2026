@@ -12,6 +12,7 @@ You need to work with around the seed files that you can find in [MLH PE Hackath
 
 - **uv** — a fast Python package manager that handles Python versions, virtual environments, and dependencies automatically.
   Install it with:
+
   ```bash
   # macOS / Linux
   curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -19,19 +20,21 @@ You need to work with around the seed files that you can find in [MLH PE Hackath
   # Windows (PowerShell)
   powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
   ```
+
   For other methods see the [uv installation docs](https://docs.astral.sh/uv/getting-started/installation/).
+
 - PostgreSQL running locally (you can use Docker or a local instance)
 
 ## uv Basics
 
 `uv` manages your Python version, virtual environment, and dependencies automatically — no manual `python -m venv` needed.
 
-| Command | What it does |
-|---------|--------------|
-| `uv sync` | Install all dependencies (creates `.venv` automatically) |
-| `uv run <script>` | Run a script using the project's virtual environment |
-| `uv add <package>` | Add a new dependency |
-| `uv remove <package>` | Remove a dependency |
+| Command               | What it does                                             |
+| --------------------- | -------------------------------------------------------- |
+| `uv sync`             | Install all dependencies (creates `.venv` automatically) |
+| `uv run <script>`     | Run a script using the project's virtual environment     |
+| `uv add <package>`    | Add a new dependency                                     |
+| `uv remove <package>` | Remove a dependency                                      |
 
 ## Quick Start
 
@@ -43,61 +46,70 @@ git clone <repo-url> && cd mlh-pe-hackathon
 cd url-shortener
 uv sync
 
-# 3. Create the database
+# 3. Create the database (tables are auto-created on app startup)
 createdb hackathon_db
 
 # 4. Configure environment
 cp .env.example .env   # edit if your DB credentials differ
 
-# 5. Run the server
+# 5. Run the server (tables + default user are created automatically)
 uv run run.py
 
 # 6. Verify
 curl http://localhost:5000/health
 ```
 
-**Full stack with Docker** (Postgres, two API replicas, NGINX load balancer, dashboard, user frontend):
+**Full stack with Docker** (Postgres, Kafka, two API replicas, NGINX load balancer, Prometheus, dashboard, user frontend):
 
 ```bash
-docker compose up --build
-# API via LB:  http://localhost:8080/health
-# Dashboard:   http://localhost:3001/
-# User UI:     http://localhost:3002/
-# Postgres:    localhost:15432
+docker compose up -d --build
+# Everything starts automatically — tables are created and a default user is seeded on first boot.
+# API via LB:        http://localhost:8080/health
+# Liveness / ready:  GET http://localhost:8080/live   GET http://localhost:8080/ready
+# Prometheus UI:     http://localhost:9090  (scrapes replicas directly on the Docker network)
+# NGINX stub_status: http://localhost:8081/nginx_status  (LB-level; allow rules in load-balancer/nginx.conf.template)
+# Per-replica metrics: GET http://localhost:8080/metrics  (Prometheus; per Gunicorn worker unless multiprocess mode)
+# Dashboard:         http://localhost:3001/
+# User UI:           http://localhost:3002/
+# Postgres:          localhost:15432
 ```
+
+**Prometheus `GET /metrics`:** the app exposes standard Prometheus text (including `http_requests_total` with an **`instance_id`** label, plus `app_instance` info). With **multiple Gunicorn workers**, each worker has its own in-memory registry unless you configure Prometheus **multiprocess** mode (`PROMETHEUS_MULTIPROC_DIR` plus Gunicorn hooks); behind the NGINX load balancer, each replica has its own `/metrics` as well.
+
+**Replica label:** set **`INSTANCE_ID`** (e.g. `1`, `2`, …) in the environment. Docker Compose sets `INSTANCE_ID` for `url-shortener-a` / `url-shortener-b`. The web UI (`/`) shows a small **instance HUD** (top-right) fed by **`GET /api/instance-stats`** (CPU%, RSS memory, rolling average request latency, uptime, request count, thread count; load average on Linux).
+
+**Autoscaling:** Docker Compose can **scale replicas statically** (e.g. duplicate services or `docker compose up --scale …` if you model workers that way), but it does **not** scale automatically from CPU or queue depth. For **demand-based autoscaling**, use a platform that supports it (e.g. **Kubernetes Horizontal Pod Autoscaler**, AWS ECS/Application Auto Scaling, Google Cloud Run, Railway, etc.) and point it at health/metrics from your app.
 
 ## Testing
 
-Install dev dependencies (includes **pytest** and **pytest-cov**), then run the suite from the repo root:
+Pytest is configured at the **repository root** (not inside this folder): see root `pyproject.toml` and **`tests/`**. From the repo root:
 
 ```bash
-cd url-shortener
 uv sync --group dev
 uv run pytest
 ```
 
-`url-shortener/pyproject.toml` configures pytest to collect from `tests/`, print a **coverage summary** for the `app/` package, and show missing lines in the terminal. No PostgreSQL is required for tests: the test harness swaps in a temporary **SQLite** database so your development database is never touched.
+That prints a **coverage summary** for the `app/` package. No PostgreSQL is required for unit-style tests: fixtures swap in **SQLite**. Optional integration tests hit the real load balancer when you set `TEST_LOAD_BALANCER_URL`; see [`TESTING.md`](../TESTING.md).
 
-To run pytest **without** coverage (faster feedback):
+Faster feedback (no coverage):
 
 ```bash
-cd url-shortener
 uv run pytest --no-cov
 ```
 
-**GitHub Actions:** the workflow `.github/workflows/tests.yml` runs on every **push** and **pull request**. It installs Python via `uv`, runs `uv sync --group dev`, then `uv run pytest` with the same coverage settings.
+**GitHub Actions:** `.github/workflows/tests.yml` runs `uv sync --group dev` and `uv run pytest` from the repo root.
 
 ## Project Structure
 
 ```
 mlh-pe-hackathon/
+├── tests/                   # Pytest (repo root; see ../TESTING.md)
 ├── url-shortener/           # Flask API (Peewee + PostgreSQL)
 │   ├── app/
 │   │   ├── __init__.py      # App factory (create_app)
 │   │   ├── database.py      # DatabaseProxy, BaseModel, connection hooks
 │   │   ├── models/
 │   │   └── routes/
-│   ├── tests/               # pytest suite (SQLite test DB)
 │   ├── csv_data/            # Seed CSVs
 │   ├── pyproject.toml
 │   ├── run.py               # uv run run.py
@@ -106,6 +118,7 @@ mlh-pe-hackathon/
 ├── dashboard/               # Admin / ops UI (static placeholder; add a framework as needed)
 ├── user-frontend/           # Public shortening UI (static placeholder)
 ├── docker-compose.yml       # db + API replicas + LB + frontends
+├── pyproject.toml           # Monorepo dev + pytest (depends on url-shortener)
 ├── .gitignore
 └── README.md
 ```

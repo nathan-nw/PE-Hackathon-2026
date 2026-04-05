@@ -1,0 +1,11 @@
+# Set Root Directory to `dashboard` and config path `/dashboard/railway.toml`.
+# Point DASHBOARD_BACKEND_URL at your deployed dashboard-backend public URL (or private URL on Railway network).
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+watchPatterns = ["/dashboard/**"]
+
+[deploy]
+healthcheckPath = "/"
+healthcheckTimeout = 120

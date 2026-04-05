@@ -1,0 +1,167 @@
+# Reverse proxy for url-shortener replicas. Tuned for API + HTML behind Docker Compose or Railway.
+# Placeholders @UPSTREAM_A@, @UPSTREAM_B@, @NGINX_LISTEN_PORT@ are substituted at container start (docker-entrypoint.sh).
+# See ../ARCHITECTURE.md for how this fits the stack.
+
+worker_processes auto;
+error_log /var/log/nginx/error.log warn;
+pid /var/run/nginx.pid;
+
+events {
+    worker_connections 2048;
+    multi_accept on;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65s;
+
+    # Structured-ish log line for troubleshooting latency (LB vs upstream vs total).
+    log_format main_timed '$remote_addr - $remote_user [$time_local] '
+        '"$request" $status $body_bytes_sent '
+        '"$http_referer" "$http_user_agent" '
+        'rt=$request_time urt=$upstream_response_time uaddr=$upstream_addr '
+        'ust=$upstream_status rid=$trace_id';
+
+    access_log /var/log/nginx/access.log main_timed;
+
+    # Prefer client-provided correlation id; otherwise generate (requires ngx_http_request_id or $request_id).
+    map $http_x_request_id $trace_id {
+        ~.+ $http_x_request_id;
+        default $request_id;
+    }
+
+    # CORS: browsers (e.g. Live Server on :5500) call the API on another origin (:8080 / :18080).
+    # Reflect Request Origin so preflight + real responses always include Access-Control-Allow-Origin
+    # (including nginx-generated 429/502; add_header ... always).
+    map $http_origin $cors_allow_origin {
+        "" "*";
+        default $http_origin;
+    }
+
+    # Soft edge protection (per-IP). When X-Load-Test-Bypass matches LOAD_TEST_BYPASS_TOKEN (set at
+    # container start), the limit key is empty so limit_req does not apply — used by dashboard k6 only.
+    map $http_x_load_test_bypass $limit_req_key {
+        default $binary_remote_addr;
+        @LOAD_TEST_BYPASS_TOKEN@ "";
+    }
+    limit_req_zone $limit_req_key zone=api_limit:16m rate=100r/s;
+    limit_req_status 429;
+
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 256;
+    gzip_types application/json text/plain text/css application/javascript text/xml application/xml;
+
+    # Static `upstream { server name:port }` resolves each hostname once at nginx start. On Railway,
+    # private service IPs change when replicas redeploy → cached upstream addresses time out (504 while
+    # connecting). `resolver` + variable `proxy_pass` re-resolves hostnames every `valid=` interval.
+    # split_clients + map approximate two-replica load spread (Compose service DNS is stable; re-resolve is harmless).
+    resolver @NGINX_RESOLVER@ valid=10s;
+    split_clients "${remote_addr}${msec}${request_uri}" $url_shortener_pool {
+        50%     a;
+        *       b;
+    }
+    map $url_shortener_pool $url_shortener_backend {
+        a       http://@UPSTREAM_A@;
+        b       http://@UPSTREAM_B@;
+    }
+
+    server {
+        listen @NGINX_LISTEN_PORT@;
+        server_name _;
+
+        # Browsers request /favicon.ico on every load; avoid proxying to the API (noise + avoids
+        # proxy_next_upstream interactions when replicas return application 503s).
+        location = /favicon.ico {
+            access_log off;
+            log_not_found off;
+            return 204;
+        }
+
+        # Security headers at the edge (defense in depth; app may repeat).
+        add_header X-Frame-Options "DENY" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+        proxy_http_version 1.1;
+
+        location / {
+            # CORS preflight before rate limiting / upstream. Chrome may require
+            # Access-Control-Allow-Private-Network when Origin is localhost but the API is 127.0.0.1.
+            if ($request_method = OPTIONS) {
+                add_header X-Frame-Options "DENY" always;
+                add_header X-Content-Type-Options "nosniff" always;
+                add_header Access-Control-Allow-Origin $cors_allow_origin always;
+                add_header Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS" always;
+                add_header Access-Control-Allow-Headers "Authorization, Content-Type, X-Request-ID, X-Load-Test-Bypass, Accept" always;
+                add_header Access-Control-Max-Age "86400" always;
+                add_header Access-Control-Allow-Private-Network "true" always;
+                add_header Vary "Origin, Access-Control-Request-Private-Network" always;
+                return 204;
+            }
+
+            limit_req zone=api_limit burst=200 nodelay;
+
+            # Re-stated here: if any add_header exists in this block, server-level add_header is not inherited.
+            add_header X-Frame-Options "DENY" always;
+            add_header X-Content-Type-Options "nosniff" always;
+            add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+            add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+
+            proxy_pass $url_shortener_backend;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Request-ID $trace_id;
+            proxy_set_header Connection "";
+
+            # Single CORS surface at the edge (hide Flask duplicates).
+            proxy_hide_header Access-Control-Allow-Origin;
+            proxy_hide_header Access-Control-Allow-Credentials;
+            proxy_hide_header Access-Control-Allow-Methods;
+            proxy_hide_header Access-Control-Allow-Headers;
+            proxy_hide_header Access-Control-Max-Age;
+            proxy_hide_header Access-Control-Expose-Headers;
+            proxy_hide_header Access-Control-Allow-Private-Network;
+            add_header Access-Control-Allow-Origin $cors_allow_origin always;
+            add_header Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS" always;
+            add_header Access-Control-Allow-Headers "Authorization, Content-Type, X-Request-ID, X-Load-Test-Bypass, Accept" always;
+            add_header Access-Control-Max-Age "86400" always;
+            add_header Access-Control-Allow-Private-Network "true" always;
+            add_header Vary "Origin, Access-Control-Request-Private-Network" always;
+
+            # Retry on connection errors and bad gateways. Do not retry on upstream 503 — both replicas
+            # usually share the same DB; retrying can hit a dead peer and nginx returns 502 instead of 503.
+            proxy_next_upstream error timeout http_502 http_504;
+            proxy_next_upstream_tries 3;
+
+            # Hide upstream Server header from clients (optional hygiene).
+            proxy_hide_header Server;
+        }
+    }
+
+    # NGINX stub_status (host :8081). LB-level only — not a substitute for app /ready.
+    server {
+        listen 8081;
+        server_name _;
+
+        location /nginx_status {
+            stub_status on;
+            allow 127.0.0.1;
+            allow 172.16.0.0/12;
+            allow 10.0.0.0/8;
+            allow 192.168.0.0/16;
+            deny all;
+        }
+    }
+}

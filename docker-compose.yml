@@ -1,13 +1,17 @@
+# Stable project name (Compose v2.20+) — helps consistent container/network naming on Windows.
+name: pe-hackathon-2026
+
 services:
   db:
     image: postgres:16-alpine
     container_name: hackathon_db
     restart: always
+    networks:
+      - app_net
     environment:
       POSTGRES_DB: hackathon_db
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-    # Host 15432 avoids clashing with a local PostgreSQL on 5432 (common on Windows).
     ports:
       - "15432:5432"
     volumes:
@@ -18,61 +22,341 @@ services:
       timeout: 3s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    container_name: hackathon_redis
+    restart: always
+    networks:
+      - app_net
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: hackathon_zookeeper
+    restart: unless-stopped
+    networks:
+      - app_net
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: hackathon_kafka
+    restart: unless-stopped
+    networks:
+      - app_net
+    ports:
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    depends_on:
+      - zookeeper
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # Prints app-logs to container stdout only (debug). DB persistence is dashboard-backend → dashboard_db.kafka_logs.
+  kafka-log-consumer:
+    build:
+      context: ./url-shortener
+      dockerfile: Dockerfile.kafka-consumer
+    container_name: hackathon_kafka_log_consumer
+    restart: unless-stopped
+    networks:
+      - app_net
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_LOG_TOPIC: app-logs
+    depends_on:
+      kafka:
+        condition: service_healthy
+
   url-shortener-a:
     build:
       context: ./url-shortener
-    restart: unless-stopped
+    # `init` gives PID 1 to Docker’s tini — better signal handling than raw gunicorn as PID 1.
+    init: true
+    # `always`: stateless replicas should come back after kill/crash/OOM. (`unless-stopped`
+    # often leaves replicas dead after `docker kill` — bad for chaos tests.)
+    # Docker inspect: `State.Restarting` is only true *during* a restart; exited containers
+    # always show `Restarting: false`. See ARCHITECTURE.md → "Docker inspect".
+    restart: always
+    networks:
+      - app_net
     environment:
+      INSTANCE_ID: "1"
       DATABASE_NAME: hackathon_db
       DATABASE_HOST: db
       DATABASE_PORT: "5432"
       DATABASE_USER: postgres
       DATABASE_PASSWORD: postgres
+      DB_MAX_CONNECTIONS: "50"
+      REDIS_URL: redis://redis:6379/0
+      RATE_LIMIT_STORAGE: redis://redis:6379/1
+      RATE_LIMIT_DEFAULT: "50000 per minute"
+      # Must match load-balancer + dashboard-backend so k6 X-Load-Test-Bypass skips app IP ban + Flask-Limiter.
+      LOAD_TEST_BYPASS_TOKEN: ${LOAD_TEST_BYPASS_TOKEN:-pe-hackathon-k6-edge-bypass}
       FLASK_DEBUG: "false"
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
     expose:
       - "5000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5000/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
 
   url-shortener-b:
     build:
       context: ./url-shortener
-    restart: unless-stopped
+    init: true
+    restart: always
+    networks:
+      - app_net
     environment:
+      INSTANCE_ID: "2"
       DATABASE_NAME: hackathon_db
       DATABASE_HOST: db
       DATABASE_PORT: "5432"
       DATABASE_USER: postgres
       DATABASE_PASSWORD: postgres
+      DB_MAX_CONNECTIONS: "50"
+      REDIS_URL: redis://redis:6379/0
+      RATE_LIMIT_STORAGE: redis://redis:6379/1
+      RATE_LIMIT_DEFAULT: "50000 per minute"
+      LOAD_TEST_BYPASS_TOKEN: ${LOAD_TEST_BYPASS_TOKEN:-pe-hackathon-k6-edge-bypass}
       FLASK_DEBUG: "false"
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
     expose:
       - "5000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5000/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
 
+  # Published ports: override in `.env` if 8080/8081 are already in use on the host (e.g. LB_HTTP_PORT=18080).
   load-balancer:
-    image: nginx:alpine
+    build:
+      context: ./load-balancer
+      dockerfile: Dockerfile
+    restart: always
+    networks:
+      - app_net
     ports:
-      - "8080:80"
-    volumes:
-      - ./load-balancer/nginx.conf:/etc/nginx/nginx.conf:ro
+      - "${LB_HTTP_PORT:-8080}:80"
+      - "${LB_STUB_STATUS_PORT:-8081}:8081"
+    environment:
+      # Same value must be on dashboard-backend so k6 sends X-Load-Test-Bypass (skips NGINX limit_req).
+      LOAD_TEST_BYPASS_TOKEN: ${LOAD_TEST_BYPASS_TOKEN:-pe-hackathon-k6-edge-bypass}
     depends_on:
-      - url-shortener-a
-      - url-shortener-b
+      url-shortener-a:
+        condition: service_healthy
+      url-shortener-b:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  db-backup:
+    image: prodrigestivill/postgres-backup-local:16
+    restart: unless-stopped
+    networks:
+      - app_net
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_DB: hackathon_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      SCHEDULE: "@daily"
+      BACKUP_DIR: /backups
+      BACKUP_KEEP_DAYS: "7"
+    volumes:
+      - pg_backups:/backups
+    depends_on:
+      db:
+        condition: service_healthy
 
   dashboard:
     build:
       context: ./dashboard
+    restart: always
+    networks:
+      - app_net
+    depends_on:
+      dashboard-backend:
+        condition: service_started
     ports:
-      - "3001:80"
+      - "3001:3000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      # Ops → Chaos tab: compose-watchdog status (HTTP). Override for local `next dev` → http://127.0.0.1:8099
+      WATCHDOG_STATUS_URL: ${WATCHDOG_STATUS_URL:-http://compose-watchdog:8099}
+      # Ops → Chaos tab: docker kill (dashboard mounts docker.sock). Set CHAOS_KILL_ENABLED=0 to disable.
+      CHAOS_KILL_ENABLED: ${CHAOS_KILL_ENABLED:-1}
+      VISIBILITY_COMPOSE_PROJECT: pe-hackathon-2026
+      VISIBILITY_ALERTMANAGER_DISABLED: "1"
+      # FastAPI log cache (Kafka → in-memory → dashboard /api/logs proxy)
+      DASHBOARD_BACKEND_URL: http://dashboard-backend:8000
+      # Chaos kill → POST /api/watchdog-alerts/ingest (same token as dashboard-backend; or ALLOW_INSECURE_LOG_INGEST on backend)
+      LOG_INGEST_TOKEN: ${LOG_INGEST_TOKEN:-}
+      WATCHDOG_ALERTS_INGEST_TOKEN: ${WATCHDOG_ALERTS_INGEST_TOKEN:-}
+      # Red Discord embed on chaos kill (same webhook as backend / watchdog)
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      WATCHDOG_DISCORD_WEBHOOK_URL: ${WATCHDOG_DISCORD_WEBHOOK_URL:-}
+      # Happy AI chat (OpenAI). Set in repo root .env or compose env.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # Optional override (default gpt-4o-mini in API route)
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      # Happy chat: run pytest on host (optional; mount repo + set cwd for local dev)
+      HAPPY_PYTEST_ENABLED: ${HAPPY_PYTEST_ENABLED:-}
+      HAPPY_PYTEST_CWD: ${HAPPY_PYTEST_CWD:-}
+
+  dashboard-db:
+    image: postgres:16-alpine
+    container_name: hackathon_dashboard_db
+    restart: always
+    networks:
+      - app_net
+    environment:
+      POSTGRES_DB: dashboard_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "15433:5432"
+    volumes:
+      - dashboard_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  dashboard-backend:
+    build:
+      context: ./dashboard/backend
+    restart: unless-stopped
+    networks:
+      - app_net
+    ports:
+      - "8000:8000"
+    environment:
+      # k6 load-test.js sends this as X-Load-Test-Bypass — must match load-balancer (edge limit off for k6 only).
+      LOAD_TEST_BYPASS_TOKEN: ${LOAD_TEST_BYPASS_TOKEN:-pe-hackathon-k6-edge-bypass}
+      # k6 hits this API base (Compose: private LB). On Railway, sync sets https://<load-balancer public domain>.
+      LOAD_TEST_TARGET_URL: ${LOAD_TEST_TARGET_URL:-http://load-balancer:80}
+      # Override image default (8080) so published port 8000 matches the process (local dev).
+      PORT: "8000"
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_LOG_TOPIC: app-logs
+      CACHE_MAX_ENTRIES: "1000"
+      DB_FLUSH_INTERVAL: "30"
+      DASHBOARD_DB_NAME: dashboard_db
+      DASHBOARD_DB_HOST: dashboard-db
+      DASHBOARD_DB_PORT: "5432"
+      DASHBOARD_DB_USER: postgres
+      DASHBOARD_DB_PASSWORD: postgres
+      # Ops tab: expand Compose ``db`` row → profile=main (same DB as url-shortener)
+      INTROSPECT_DB_URL: postgresql://postgres:postgres@db:5432/hackathon_db
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      # Watchdog alert ingest (compose-watchdog / railway-watchdog POST). Optional: set in .env or use ALLOW_INSECURE_LOG_INGEST=1 for local only.
+      LOG_INGEST_TOKEN: ${LOG_INGEST_TOKEN:-}
+      WATCHDOG_ALERTS_INGEST_TOKEN: ${WATCHDOG_ALERTS_INGEST_TOKEN:-}
+      ALLOW_INSECURE_LOG_INGEST: ${ALLOW_INSECURE_LOG_INGEST:-}
+      # Ops Telemetry tab: golden signals from HTTP logs + instance-stats via load balancer (see telemetry_agg.py).
+      TELEMETRY_LOAD_BALANCER_URL: http://load-balancer:80
+    depends_on:
+      db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      dashboard-db:
+        condition: service_healthy
 
   user-frontend:
     build:
       context: ./user-frontend
+    environment:
+      # URL the *browser* uses to reach the NGINX load balancer (host port from LB_HTTP_PORT / compose).
+      BACKEND_URL: ${USER_FRONTEND_BACKEND_URL:-http://localhost:18080}
+    restart: always
+    networks:
+      - app_net
     ports:
-      - "3002:80"
+      - "3002:3000"
+
+  # Polls the Docker API for this Compose project: starts exited containers (honors restart policy
+  # unless WATCHDOG_ONLY_ALWAYS=1) and restarts persistently unhealthy ones. Skips itself.
+  # See compose-watchdog/watchdog.py for env vars.
+  compose-watchdog:
+    build:
+      context: ./compose-watchdog
+    restart: always
+    networks:
+      - app_net
+    ports:
+      - "${WATCHDOG_HTTP_PUBLISH:-8099}:8099"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      COMPOSE_PROJECT: pe-hackathon-2026
+      WATCHDOG_INTERVAL_SEC: ${WATCHDOG_INTERVAL_SEC:-15}
+      WATCHDOG_HTTP_PORT: "8099"
+      WATCHDOG_SELF_SERVICE: compose-watchdog
+      # Optional: comma-separated compose service names to ignore.
+      WATCHDOG_EXCLUDE_SERVICES: ${WATCHDOG_EXCLUDE_SERVICES:-}
+      # Optional: Discord notifications (exited / started / unhealthy restart). Same as dashboard-backend if unset.
+      WATCHDOG_DISCORD_WEBHOOK_URL: ${WATCHDOG_DISCORD_WEBHOOK_URL:-}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      # Persist compose watchdog events to dashboard_db (same auth as dashboard-backend ingest).
+      DASHBOARD_BACKEND_URL: http://dashboard-backend:8000
+      LOG_INGEST_TOKEN: ${LOG_INGEST_TOKEN:-}
+      WATCHDOG_ALERTS_INGEST_TOKEN: ${WATCHDOG_ALERTS_INGEST_TOKEN:-}
+
+networks:
+  app_net:
+    driver: bridge
 
 volumes:
   pgdata:
+  redisdata:
+  pg_backups:
+  dashboard_pgdata:
