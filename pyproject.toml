@@ -27,3 +27,11 @@ addopts = "-v --cov=url-shortener/app --cov=dashboard/backend --cov-report=term-
 markers = [
     "integration: HTTP tests against real URLs (set TEST_LOAD_BALANCER_URL / TEST_NGINX_STUB_STATUS_URL)",
 ]
+
+# k6 subprocess runner and background Kafka consumer are exercised in integration/manual runs;
+# unit coverage here does not reflect their real behavior.
+[tool.coverage.run]
+omit = [
+    "dashboard/backend/k6_runner.py",
+    "dashboard/backend/kafka_consumer.py",
+]

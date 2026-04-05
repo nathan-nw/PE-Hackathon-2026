@@ -1,16 +1,36 @@
 import http from "k6/http";
 import { check, sleep } from "k6";
-import { Rate, Trend } from "k6/metrics";
+import { Counter, Rate, Trend } from "k6/metrics";
 
 const errorRate = new Rate("errors");
+// Counter: one sample per failed check — k6_runner parses this reliably (Rate JSON can be aggregate snapshots).
+const errorChecks = new Counter("load_test_error_checks");
+
+function recordError(isError) {
+  errorRate.add(isError);
+  if (isError) {
+    errorChecks.add(1);
+  }
+}
 const shortenDuration = new Trend("shorten_duration");
 const listDuration = new Trend("list_duration");
 const redirectDuration = new Trend("redirect_duration");
 
-const BASE_URL = __ENV.K6_TARGET_URL || "http://load-balancer:80";
+// Strip trailing slash so `${BASE_URL}/health` is never `//health` (breaks on some hosts).
+const BASE_URL = (
+  __ENV.K6_TARGET_URL ||
+  __ENV.LOAD_TEST_TARGET_URL ||
+  "http://load-balancer:80"
+).replace(/\/+$/, "");
 const VUS = parseInt(__ENV.K6_VUS || "50", 10);
 const DURATION = __ENV.K6_DURATION || "30s";
 const PRESET = __ENV.K6_PRESET || "";
+
+// NGINX edge limit bypass (must match load-balancer LOAD_TEST_BYPASS_TOKEN).
+const BYPASS = __ENV.LOAD_TEST_BYPASS_TOKEN || "";
+const edgeHeaders = (extra = {}) =>
+  BYPASS ? { ...extra, "X-Load-Test-Bypass": BYPASS } : extra;
+const jsonPostHeaders = edgeHeaders({ "Content-Type": "application/json" });
 
 // Preset stage configs
 const PRESETS = {
@@ -82,29 +102,64 @@ export const options = preset
       },
     };
 
-export default function () {
+/** Resolve a real user id once per test (hosted DB may not have id=1). */
+export function setup() {
+  const h = edgeHeaders();
+  const listRes = http.get(`${BASE_URL}/users?page=1&per_page=1`, { headers: h });
+  if (listRes.status === 200) {
+    try {
+      const users = JSON.parse(listRes.body);
+      if (Array.isArray(users) && users.length > 0 && users[0].id != null) {
+        return { userId: users[0].id };
+      }
+    } catch {
+      // fall through
+    }
+  }
+  const suffix = `${Date.now()}`;
+  const createRes = http.post(
+    `${BASE_URL}/users`,
+    JSON.stringify({
+      username: `k6-${suffix}`,
+      email: `k6-${suffix}@load-test.local`,
+    }),
+    { headers: { ...h, "Content-Type": "application/json" } },
+  );
+  if (createRes.status === 201) {
+    try {
+      const u = JSON.parse(createRes.body);
+      if (u.id != null) {
+        return { userId: u.id };
+      }
+    } catch {
+      // fall through
+    }
+  }
+  return { userId: 1 };
+}
+
+export default function (data) {
+  const userId = data && data.userId != null ? data.userId : 1;
   const isChaos = PRESET === "chaos";
 
   // 1. Health check
-  const healthRes = http.get(`${BASE_URL}/health`);
+  const healthRes = http.get(`${BASE_URL}/health`, { headers: edgeHeaders() });
   check(healthRes, { "health ok": (r) => r.status === 200 });
-  errorRate.add(healthRes.status !== 200);
+  recordError(healthRes.status !== 200);
 
   // Chaos: hit non-existent endpoints (~40% of iterations)
   if (isChaos && Math.random() < 0.4) {
-    const badRes = http.get(`${BASE_URL}/nonexistent-${__VU}-${__ITER}`);
-    errorRate.add(badRes.status >= 400);
+    const badRes = http.get(`${BASE_URL}/nonexistent-${__VU}-${__ITER}`, { headers: edgeHeaders() });
+    recordError(badRes.status >= 400);
     sleep(0.3);
     return;
   }
 
   // Chaos: send malformed JSON (~20% of iterations)
   if (isChaos && Math.random() < 0.3) {
-    const badPost = http.post(`${BASE_URL}/shorten`, "not json", {
-      headers: { "Content-Type": "application/json" },
-    });
+    const badPost = http.post(`${BASE_URL}/shorten`, "not json", jsonPostHeaders);
     shortenDuration.add(badPost.timings.duration);
-    errorRate.add(badPost.status >= 400);
+    recordError(badPost.status >= 400);
     sleep(0.3);
     return;
   }
@@ -112,32 +167,31 @@ export default function () {
   // 2. Create a short URL
   const payload = JSON.stringify({
     original_url: `https://example.com/test/${__VU}-${__ITER}`,
-    user_id: 1,
+    user_id: userId,
     title: `Load test ${__VU}-${__ITER}`,
   });
 
-  const shortenRes = http.post(`${BASE_URL}/shorten`, payload, {
-    headers: { "Content-Type": "application/json" },
-  });
+  const shortenRes = http.post(`${BASE_URL}/shorten`, payload, { headers: jsonPostHeaders });
   shortenDuration.add(shortenRes.timings.duration);
   check(shortenRes, { "shorten ok": (r) => r.status === 201 });
-  errorRate.add(shortenRes.status !== 201);
+  recordError(shortenRes.status !== 201);
 
   // 3. List URLs
-  const listRes = http.get(`${BASE_URL}/urls?page=1&per_page=10`);
+  const listRes = http.get(`${BASE_URL}/urls?page=1&per_page=10`, { headers: edgeHeaders() });
   listDuration.add(listRes.timings.duration);
   check(listRes, { "list ok": (r) => r.status === 200 });
-  errorRate.add(listRes.status !== 200);
+  recordError(listRes.status !== 200);
 
   // 4. Redirect
   if (shortenRes.status === 201) {
     const body = JSON.parse(shortenRes.body);
     const redirectRes = http.get(`${BASE_URL}/${body.short_code}`, {
       redirects: 0,
+      headers: edgeHeaders(),
     });
     redirectDuration.add(redirectRes.timings.duration);
     check(redirectRes, { "redirect ok": (r) => r.status === 302 });
-    errorRate.add(redirectRes.status !== 302);
+    recordError(redirectRes.status !== 302);
   }
 
   sleep(0.5);

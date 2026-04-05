@@ -17,6 +17,22 @@ logger = logging.getLogger(__name__)
 
 LOAD_TEST_SCRIPT = os.path.join(os.path.dirname(__file__), "load-test.js")
 
+# Must match docker-compose.yml `${LOAD_TEST_BYPASS_TOKEN:-…}` and setup-railway.js default so k6
+# always sends X-Load-Test-Bypass when the host env omits the variable (hosted misconfigs).
+DEFAULT_LOAD_TEST_BYPASS_TOKEN = "pe-hackathon-k6-edge-bypass"
+
+
+# Compose: http://load-balancer:80. Hosted: set LOAD_TEST_TARGET_URL to the public API base (https://…).
+def _default_target_url() -> str:
+    return os.environ.get("LOAD_TEST_TARGET_URL", "http://load-balancer:80").strip()
+
+
+def _effective_load_test_bypass_token() -> str:
+    return (
+        os.environ.get("LOAD_TEST_BYPASS_TOKEN") or ""
+    ).strip() or DEFAULT_LOAD_TEST_BYPASS_TOKEN
+
+
 # Max VUs for each preset (must match stages in load-test.js)
 PRESET_MAX_VUS = {
     "bronze": 50,
@@ -54,7 +70,9 @@ class K6Stats:
             "duration": self.duration,
             "target_url": self.target_url,
             "started_at": self.started_at,
-            "elapsed_s": round(time.time() - self.started_at, 1) if self.running else self.elapsed_s,
+            "elapsed_s": round(time.time() - self.started_at, 1)
+            if self.running
+            else self.elapsed_s,
             "requests": self.requests,
             "errors": self.errors,
             "error_rate": round(self.error_rate, 4),
@@ -75,20 +93,27 @@ class K6Runner:
         self._lock = threading.Lock()
         self._reader_thread: threading.Thread | None = None
         self._durations: list[float] = []
+        # Time series for dashboard chart: elapsed_s, active VUs, avg latency (ms)
+        self._series: list[dict[str, float | int]] = []
+        self._last_series_sample_at: float = 0.0
 
     def start(
         self,
         preset: str = "",
         vus: int = 50,
         duration: str = "30s",
-        target_url: str = "http://load-balancer:80",
+        target_url: str = "",
     ) -> dict:
         with self._lock:
             if self._proc and self._proc.poll() is None:
                 return {"error": "A test is already running. Stop it first."}
 
+        resolved_url = (target_url or "").strip() or _default_target_url()
+
         env = os.environ.copy()
-        env["K6_TARGET_URL"] = target_url
+        env["K6_TARGET_URL"] = resolved_url
+        # k6 load-test.js reads __ENV.LOAD_TEST_BYPASS_TOKEN; without it, edge + app treat all VUs as one IP.
+        env["LOAD_TEST_BYPASS_TOKEN"] = _effective_load_test_bypass_token()
 
         if preset:
             env["K6_PRESET"] = preset.lower()
@@ -107,7 +132,9 @@ class K6Runner:
                 stderr=subprocess.PIPE,
             )
         except FileNotFoundError:
-            return {"error": "k6 binary not found. Rebuild the container with k6 installed."}
+            return {
+                "error": "k6 binary not found. Rebuild the container with k6 installed."
+            }
 
         # Resolve the correct max VUs for presets
         max_vus = PRESET_MAX_VUS.get(preset.lower(), vus) if preset else vus
@@ -115,12 +142,14 @@ class K6Runner:
         with self._lock:
             self._proc = proc
             self._durations = []
+            self._series = []
+            self._last_series_sample_at = 0.0
             self._stats = K6Stats(
                 running=True,
                 preset=preset,
                 vus=max_vus,
                 duration=duration,
-                target_url=target_url,
+                target_url=resolved_url,
                 started_at=time.time(),
             )
 
@@ -128,7 +157,16 @@ class K6Runner:
         self._reader_thread = threading.Thread(target=self._read_output, daemon=True)
         self._reader_thread.start()
 
-        logger.info("k6 started: preset=%s vus=%d duration=%s target=%s", preset, vus, duration, target_url)
+        logger.info(
+            "k6 started: preset=%s vus=%d duration=%s target=%s bypass=%s",
+            preset,
+            vus,
+            duration,
+            resolved_url,
+            "env"
+            if (os.environ.get("LOAD_TEST_BYPASS_TOKEN") or "").strip()
+            else "default",
+        )
         return {"status": "started", "preset": preset, "vus": vus, "duration": duration}
 
     def stop(self) -> dict:
@@ -143,14 +181,40 @@ class K6Runner:
                 return {"error": str(e)}
         return {"status": "stopping"}
 
+    def _append_series_sample(self, *, force: bool = False) -> None:
+        """Record one chart sample (caller must hold lock)."""
+        if self._stats.started_at <= 0:
+            return
+        if not force and not self._stats.running:
+            return
+        now = time.time()
+        if not force and now - self._last_series_sample_at < 0.75:
+            return
+        self._last_series_sample_at = now
+        elapsed = round(now - self._stats.started_at, 1)
+        self._series.append(
+            {
+                "t": elapsed,
+                "vus": int(self._stats.current_vus),
+                "avg_ms": round(self._stats.avg_duration_ms, 2),
+            }
+        )
+        if len(self._series) > 2500:
+            self._series = self._series[-2500:]
+
     def get_status(self) -> dict:
         with self._lock:
             # Check if process ended
             if self._proc and self._proc.poll() is not None and self._stats.running:
+                self._stats.elapsed_s = round(time.time() - self._stats.started_at, 1)
+                self._append_series_sample(force=True)
                 self._stats.running = False
                 self._stats.finished = True
-                self._stats.elapsed_s = round(time.time() - self._stats.started_at, 1)
-            return self._stats.to_dict()
+            elif self._stats.running:
+                self._append_series_sample()
+            out = self._stats.to_dict()
+            out["series"] = list(self._series)
+            return out
 
     def _read_output(self):
         """Parse k6 JSON output lines from stderr to update live stats."""
@@ -178,11 +242,16 @@ class K6Runner:
             with self._lock:
                 if metric == "http_reqs":
                     self._stats.requests += 1
-                elif metric == "errors":
-                    if value == 1:
-                        self._stats.errors += 1
-                    total = self._stats.requests or 1
-                    self._stats.error_rate = self._stats.errors / total
+                elif metric == "load_test_error_checks":
+                    self._stats.errors += (
+                        int(value) if isinstance(value, (int, float)) else 0
+                    )
+                    # Never use `requests or 1`: JSON Points can reorder so errors arrive
+                    # before http_reqs — that falsely shows 100% until requests catch up.
+                    if self._stats.requests > 0:
+                        self._stats.error_rate = min(
+                            1.0, self._stats.errors / self._stats.requests
+                        )
                 elif metric == "http_req_duration":
                     self._durations.append(value)
                     n = len(self._durations)
@@ -202,8 +271,15 @@ class K6Runner:
                     self._stats.summary["stdout"] = stdout.strip()
 
         with self._lock:
-            self._stats.running = False
-            self._stats.finished = True
-            self._stats.elapsed_s = round(time.time() - self._stats.started_at, 1)
+            # Avoid duplicating the final sample if get_status() already observed proc exit.
+            if self._stats.running:
+                self._stats.elapsed_s = round(time.time() - self._stats.started_at, 1)
+                self._append_series_sample(force=True)
+                self._stats.running = False
+                self._stats.finished = True
 
-        logger.info("k6 finished: requests=%d errors=%d", self._stats.requests, self._stats.errors)
+        logger.info(
+            "k6 finished: requests=%d errors=%d",
+            self._stats.requests,
+            self._stats.errors,
+        )

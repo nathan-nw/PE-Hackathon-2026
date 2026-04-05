@@ -15,6 +15,8 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 import psycopg2
+
+from log_filters import sql_status_condition
 from psycopg2.extras import execute_values
 
 logger = logging.getLogger(__name__)
@@ -435,6 +437,101 @@ def query_error_buckets(window_minutes: int = 60, log_limit: int = 5000) -> dict
             conn.close()
 
 
+def query_log_insights(
+    window_minutes: int = 60,
+    level: str | None = None,
+    instance_id: str | None = None,
+    search: str | None = None,
+    status_code: str | None = None,
+) -> dict[str, Any] | None:
+    """Per-minute buckets with the same filters (DB path).
+
+    Buckets only include rows with ``status_code IS NOT NULL`` (HTTP request lines).
+    """
+    try:
+        conn = get_connection()
+        result: dict[str, Any] = {"buckets_map": {}}
+        cutoff = f"{window_minutes} minutes"
+
+        def base_params(*, http_only: bool) -> tuple[str, list[Any]]:
+            conditions: list[str] = ["timestamp >= NOW() - %s::interval"]
+            params: list[Any] = [cutoff]
+            if http_only:
+                conditions.append("status_code IS NOT NULL")
+            if level:
+                conditions.append("UPPER(TRIM(level)) = UPPER(TRIM(%s))")
+                params.append(level)
+            if instance_id:
+                conditions.append("instance_id = %s")
+                params.append(instance_id)
+            if search and search.strip():
+                q = f"%{search.strip()}%"
+                conditions.append(
+                    "(message ILIKE %s OR logger ILIKE %s OR COALESCE(path, '') ILIKE %s)"
+                )
+                params.extend([q, q, q])
+            st_sql, st_params = sql_status_condition(status_code)
+            if st_sql:
+                conditions.append(f"({st_sql})")
+                params.extend(st_params)
+            return " AND ".join(conditions), params
+
+        with conn:
+            with conn.cursor() as cur:
+                where_http, params_http = base_params(http_only=True)
+                cur.execute(
+                    f"""
+                    SELECT
+                        to_char(date_trunc('minute', timestamp) AT TIME ZONE 'UTC', 'HH24:MI') AS minute,
+                        EXTRACT(EPOCH FROM date_trunc('minute', timestamp)) * 1000 AS ts_ms,
+                        COUNT(*) AS total,
+                        COUNT(*) FILTER (WHERE status_code >= 400) AS errors
+                    FROM kafka_logs
+                    WHERE {where_http}
+                    GROUP BY date_trunc('minute', timestamp)
+                    ORDER BY date_trunc('minute', timestamp)
+                    """,
+                    params_http,
+                )
+                for row in cur.fetchall():
+                    minute_key, ts_ms, total, errors = row
+                    result["buckets_map"][minute_key] = {
+                        "minute": minute_key,
+                        "timestamp": float(ts_ms),
+                        "total": total,
+                        "errors": errors,
+                        "error_rate": round((errors / total) * 100, 2) if total > 0 else 0.0,
+                        "status_breakdown": {},
+                    }
+
+                where_err, params_err = base_params(http_only=True)
+                cur.execute(
+                    f"""
+                    SELECT
+                        to_char(date_trunc('minute', timestamp) AT TIME ZONE 'UTC', 'HH24:MI') AS minute,
+                        status_code::text AS code,
+                        COUNT(*) AS cnt
+                    FROM kafka_logs
+                    WHERE {where_err}
+                      AND status_code >= 400
+                    GROUP BY date_trunc('minute', timestamp), status_code
+                    ORDER BY date_trunc('minute', timestamp)
+                    """,
+                    params_err,
+                )
+                for row in cur.fetchall():
+                    minute_key, code, cnt = row
+                    bucket = result["buckets_map"].get(minute_key)
+                    if bucket:
+                        bucket["status_breakdown"][code] = cnt
+
+        conn.close()
+        return result
+    except Exception as exc:
+        logger.error("query_log_insights failed: %s", exc)
+        return None
+
+
 def clear_logs() -> int:
     """Delete all rows from kafka_logs. Returns count deleted."""
     conn = None
@@ -517,6 +614,7 @@ def fetch_logs_from_db(
     level: str | None = None,
     instance_id: str | None = None,
     search: str | None = None,
+    status_code: str | None = None,
 ) -> list[dict[str, Any]]:
     """Load recent rows from kafka_logs (newest first). Payload shape matches Kafka / HTTP ingest."""
     if limit < 1:
@@ -540,6 +638,10 @@ def fetch_logs_from_db(
                         "(message ILIKE %s OR logger ILIKE %s OR COALESCE(path, '') ILIKE %s)"
                     )
                     params.extend([q, q, q])
+                st_sql, st_params = sql_status_condition(status_code)
+                if st_sql:
+                    conditions.append(f"({st_sql})")
+                    params.extend(st_params)
                 where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
                 sql = f"""
                     SELECT raw_json FROM kafka_logs

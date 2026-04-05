@@ -90,25 +90,29 @@ def sync_postgres_serial_sequences() -> None:
     """Align SERIAL sequences with MAX(id) after bulk loads that used explicit ids (CSV seed).
 
     Without this, ``nextval`` can return an id that already exists → ``urls_pkey`` duplicate key.
+    Uses ``setval(seq, value, is_called)`` so empty tables still get the next id correct (1) and
+    seeded rows with explicit ids bump the sequence past ``MAX(id)``.
+
     Safe to call repeatedly; only runs meaningful work on PostgreSQL.
     """
     underlying = getattr(db, "obj", db)
     if not isinstance(underlying, PostgresqlDatabase):
         return
-    for table in ("users", "urls", "events"):
-        db.execute_sql(
-            """
-            SELECT setval(
-                seq::regclass,
-                COALESCE((SELECT MAX(id) FROM """
-            + table
-            + """), 0)
+    # Table names only — not user input (ORM / migrations own these).
+    for table in ("users", "urls", "events", "load_test_results"):
+        try:
+            db.execute_sql(
+                f"""
+                SELECT setval(
+                    pg_get_serial_sequence('{table}', 'id')::regclass,
+                    COALESCE((SELECT MAX(id) FROM {table}), 1),
+                    (SELECT MAX(id) FROM {table}) IS NOT NULL
+                )
+                WHERE pg_get_serial_sequence('{table}', 'id') IS NOT NULL
+                """
             )
-            FROM (SELECT pg_get_serial_sequence(%s, 'id') AS seq) t
-            WHERE seq IS NOT NULL
-            """,
-            [table],
-        )
+        except Exception as e:
+            logger.warning("PostgreSQL serial sequence sync failed for %s: %s", table, e)
 
 
 def init_db(app):

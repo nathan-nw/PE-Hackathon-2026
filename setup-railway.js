@@ -6,7 +6,8 @@
  * - Ensures Git-linked app services exist (same repo, different root directories):
  *   url-shortener-a, url-shortener-b, load-balancer, user-frontend, dashboard, dashboard-backend.
  * - Sets the deploy branch (default: staging) on each service's deployment trigger.
- * - Sets rootDirectory on each service instance for the environment in .railway/config.json.
+ * - Sets rootDirectory, railwayConfigFile, and watchPatterns on each service instance (matches each
+ *   app folder's railway.toml — same paths as Settings → Root / Config-as-code / Watch paths).
  *
  * Auth: use an account API token from https://railway.com/account/tokens
  * (Authorization: Bearer). Project-scoped tokens often cannot create/link GitHub services.
@@ -36,6 +37,10 @@
  *   LOG_INGEST_TOKEN=…  — shared secret for HTTP log shipping when no Kafka plugin: set the same value on dashboard-backend and url-shortener replicas (required for /api/ingest on hosted)
  *   SKIP_LOG_INGEST_AUTO_TOKEN=1  — do not auto-generate LOG_INGEST_TOKEN when unset (SYNC_VARIABLES + no Kafka)
  *   LOG_INGEST_USE_PRIVATE_URL=1  — set LOG_INGEST_URL to http://<private>:PORT/api/ingest (default: https://<RAILWAY_PUBLIC_DOMAIN>/api/ingest — works through Railway edge)
+ *   RAILWAY_WATCHDOG_POLL_SEC=15  — optional; with SYNC_VARIABLES=1, sets hosted Ops watchdog poll interval (matches compose-watchdog default)
+ *   CHAOS_KILL_ENABLED=1  — optional; default when unset is 1 on dashboard so hosted Ops Chaos Kill/Reboot work (set 0 in .env.railway.setup to disable)
+ *   RAILWAY_WATCHDOG_AUTO_RECOVER=1  — optional; default 1; watchdog calls serviceInstanceDeploy(latest) when a deployment is CRASHED/FAILED/etc.
+ *   With SYNC_VARIABLES=1 and a `railway-watchdog` service, sets dashboard WATCHDOG_SERVICE_URL to the private worker URL (single replica recommended).
  */
 
 const crypto = require("crypto");
@@ -160,16 +165,71 @@ const ENDPOINT = "https://backboard.railway.com/graphql/v2";
 const DEFAULT_REPO = "nathan-nw/PE-Hackathon-2026";
 const DEFAULT_BRANCH = "staging";
 
-/** @type {{ name: string, rootDirectory: string }[]} */
-const APP_SERVICES = [
+/**
+ * Per-service deploy wiring: Root Directory, config-as-code path (repo-root), and watch patterns
+ * (see each folder's railway.toml). Passed to serviceInstanceUpdate alongside preDeployCommand cleanup.
+ * @type {{ name: string, rootDirectory: string, railwayConfigFile: string, watchPatterns: string[] }[]}
+ */
+const SERVICE_SPECS = [
   // Same topology as docker-compose.yml: two API replicas + NGINX (least_conn, CORS, rate limit).
-  { name: "url-shortener-a", rootDirectory: "url-shortener" },
-  { name: "url-shortener-b", rootDirectory: "url-shortener" },
-  { name: "load-balancer", rootDirectory: "load-balancer" },
-  { name: "user-frontend", rootDirectory: "user-frontend" },
-  { name: "dashboard", rootDirectory: "dashboard" },
-  { name: "dashboard-backend", rootDirectory: "dashboard/backend" },
+  {
+    name: "url-shortener-a",
+    rootDirectory: "url-shortener",
+    railwayConfigFile: "/url-shortener/railway.toml",
+    watchPatterns: ["/url-shortener/**"],
+  },
+  {
+    name: "url-shortener-b",
+    rootDirectory: "url-shortener",
+    railwayConfigFile: "/url-shortener/railway.toml",
+    watchPatterns: ["/url-shortener/**"],
+  },
+  {
+    name: "load-balancer",
+    rootDirectory: "load-balancer",
+    railwayConfigFile: "/load-balancer/railway.toml",
+    watchPatterns: ["/load-balancer/**"],
+  },
+  {
+    name: "user-frontend",
+    rootDirectory: "user-frontend",
+    railwayConfigFile: "/user-frontend/railway.toml",
+    watchPatterns: ["/user-frontend/**"],
+  },
+  {
+    name: "dashboard",
+    rootDirectory: "dashboard",
+    railwayConfigFile: "/dashboard/railway.toml",
+    watchPatterns: ["/dashboard/**"],
+  },
+  {
+    name: "dashboard-backend",
+    rootDirectory: "dashboard/backend",
+    railwayConfigFile: "/dashboard/backend/railway.toml",
+    watchPatterns: ["/dashboard/backend/**"],
+  },
+  {
+    name: "railway-watchdog",
+    rootDirectory: ".",
+    railwayConfigFile: "/watchdog-service/railway.toml",
+    // Match any repo path so pushes are not SKIPPED when only unrelated paths changed (see railway.toml).
+    watchPatterns: ["/**", "/*", "/.*"],
+  },
 ];
+
+/** Normalize Railway "Config as code" path for comparison (leading slash). */
+function normRailwayConfigPath(p) {
+  const s = (p || "").trim();
+  if (!s) return "";
+  return s.startsWith("/") ? s : `/${s}`;
+}
+
+function watchPatternsEqual(current, wanted) {
+  const a = [...(current || [])].map((s) => s.trim()).sort();
+  const b = [...(wanted || [])].map((s) => s.trim()).sort();
+  if (a.length !== b.length) return false;
+  return a.every((v, i) => v === b[i]);
+}
 
 function loadRailwayConfig() {
   const p = path.join(__dirname, ".railway", "config.json");
@@ -263,6 +323,8 @@ const Q_SERVICE_INSTANCE = `
       id
       rootDirectory
       preDeployCommand
+      railwayConfigFile
+      watchPatterns
     }
   }
 `;
@@ -495,6 +557,10 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
           "/api/ingest"
       : null;
 
+  const loadTestBypass =
+    (process.env.LOAD_TEST_BYPASS_TOKEN || "").trim() ||
+    "pe-hackathon-k6-edge-bypass";
+
   // url-shortener-a / url-shortener-b: same env as compose replicas (shared DB; distinct INSTANCE_ID).
   // Explicit PORT so ${{ url-shortener-a.PORT }} resolves on the load-balancer (runtime-only PORT is
   // not referenceable from other services — see Railway variables docs / Help Station).
@@ -511,6 +577,7 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
     ...(logIngestUrl
       ? { LOG_INGEST_URL: logIngestUrl, LOG_INGEST_TOKEN: logIngestToken }
       : {}),
+    LOAD_TEST_BYPASS_TOKEN: loadTestBypass,
   };
   await upsert("url-shortener-a", { ...urlShortenerBase, INSTANCE_ID: "1" });
   await upsert("url-shortener-b", { ...urlShortenerBase, INSTANCE_ID: "2" });
@@ -550,6 +617,7 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
       // Gunicorn binds to Railway's PORT (synced above — typically 8080 on Railway).
       URL_SHORTENER_A_PORT: varRef("url-shortener-a", "PORT"),
       URL_SHORTENER_B_PORT: varRef("url-shortener-b", "PORT"),
+      LOAD_TEST_BYPASS_TOKEN: loadTestBypass,
     });
   } else if (byName.has("load-balancer")) {
     console.warn(
@@ -567,14 +635,68 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
     KAFKA_LOG_TOPIC: "app-logs",
     CACHE_MAX_ENTRIES: "1000",
     DB_FLUSH_INTERVAL: "30",
+    LOAD_TEST_BYPASS_TOKEN: loadTestBypass,
+    ...(byName.has("load-balancer")
+      ? {
+          LOAD_TEST_TARGET_URL:
+            "https://" + varRef("load-balancer", "RAILWAY_PUBLIC_DOMAIN"),
+        }
+      : byName.has("url-shortener-a")
+        ? {
+            LOAD_TEST_TARGET_URL:
+              "https://" + varRef("url-shortener-a", "RAILWAY_PUBLIC_DOMAIN"),
+          }
+        : {}),
     ...(kafka ? { KAFKA_BOOTSTRAP_SERVERS: kafkaBootstrapRef(kafka) } : {}),
     ...(logIngestToken ? { LOG_INGEST_TOKEN: logIngestToken } : {}),
   };
   await upsert("dashboard-backend", dashboardBackendVars);
 
+  const watchdogPoll = (process.env.RAILWAY_WATCHDOG_POLL_SEC || "").trim();
+  const watchdogAutoRecoverRaw = (
+    process.env.RAILWAY_WATCHDOG_AUTO_RECOVER ?? "1"
+  ).trim();
+  const watchdogAutoRecover =
+    watchdogAutoRecoverRaw === "" ||
+    watchdogAutoRecoverRaw === "1" ||
+    watchdogAutoRecoverRaw.toLowerCase() === "true" ||
+    watchdogAutoRecoverRaw.toLowerCase() === "yes" ||
+    watchdogAutoRecoverRaw.toLowerCase() === "on";
+
+  if (byName.has("railway-watchdog")) {
+    const dashboardPt = (process.env.DASHBOARD_RAILWAY_PROJECT_TOKEN || "").trim();
+    const dashboardAt = (process.env.DASHBOARD_RAILWAY_API_TOKEN || "").trim();
+    const railwayWatchdogVars = {
+      PORT: "8080",
+      RAILWAY_PROJECT_ID: projectId,
+      RAILWAY_ENVIRONMENT_ID: environmentId,
+      RAILWAY_WATCHDOG_AUTO_RECOVER: watchdogAutoRecover ? "1" : "0",
+      // Heartbeats use private mesh (http://<service>.railway.internal:8080/...) when unset; see service-heartbeat.ts
+      RAILWAY_HEARTBEAT_INTERNAL_PORT: "8080",
+      ...(watchdogPoll ? { RAILWAY_WATCHDOG_POLL_SEC: watchdogPoll } : {}),
+    };
+    if (dashboardPt) {
+      railwayWatchdogVars.RAILWAY_PROJECT_TOKEN = dashboardPt;
+    } else if (dashboardAt) {
+      railwayWatchdogVars.RAILWAY_API_TOKEN = dashboardAt;
+    } else {
+      console.warn(
+        "(Variable sync) railway-watchdog: no DASHBOARD_RAILWAY_PROJECT_TOKEN or DASHBOARD_RAILWAY_API_TOKEN — set tokens for GraphQL access."
+      );
+    }
+    await upsert("railway-watchdog", railwayWatchdogVars);
+  }
+
   if (byName.has("dashboard")) {
     const dashboardPt = (process.env.DASHBOARD_RAILWAY_PROJECT_TOKEN || "").trim();
     const dashboardAt = (process.env.DASHBOARD_RAILWAY_API_TOKEN || "").trim();
+    const chaosKillRaw = (process.env.CHAOS_KILL_ENABLED ?? "1").trim();
+    const chaosKillEnabled =
+      chaosKillRaw === "" ||
+      chaosKillRaw === "1" ||
+      chaosKillRaw.toLowerCase() === "true" ||
+      chaosKillRaw.toLowerCase() === "yes" ||
+      chaosKillRaw.toLowerCase() === "on";
     const dashboardVars = {
       // Private HTTP URL: Next.js server-side fetch to the public HTTPS domain often fails
       // (edge/DNS/hairpin); same pattern as load-balancer → url-shortener via RAILWAY_PRIVATE_DOMAIN.
@@ -583,12 +705,36 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
         varRef("dashboard-backend", "RAILWAY_PRIVATE_DOMAIN") +
         ":" +
         varRef("dashboard-backend", "PORT"),
-      VISIBILITY_K8S_ENABLED: "false",
+      ...(byName.has("railway-watchdog")
+        ? {
+            WATCHDOG_SERVICE_URL:
+              "http://" +
+              varRef("railway-watchdog", "RAILWAY_PRIVATE_DOMAIN") +
+              ":" +
+              varRef("railway-watchdog", "PORT"),
+          }
+        : {}),
+      // Ops Load Test tab (client): sane default for custom k6 target (build-time; redeploy if changed).
+      ...(byName.has("load-balancer")
+        ? {
+            NEXT_PUBLIC_LOAD_TEST_TARGET_URL:
+              "https://" + varRef("load-balancer", "RAILWAY_PUBLIC_DOMAIN"),
+          }
+        : byName.has("url-shortener-a")
+          ? {
+              NEXT_PUBLIC_LOAD_TEST_TARGET_URL:
+                "https://" + varRef("url-shortener-a", "RAILWAY_PUBLIC_DOMAIN"),
+            }
+          : {}),
       VISIBILITY_COMPOSE_PROJECT: "pe-hackathon-2026",
       // Ops tab: list services via Railway GraphQL (no Docker socket in the cloud).
       RAILWAY_PROJECT_ID: projectId,
       RAILWAY_ENVIRONMENT_ID: environmentId,
       VISIBILITY_ALERTMANAGER_DISABLED: "1",
+      // Hosted Chaos tab: production Next.js defaults chaos off unless explicitly enabled.
+      CHAOS_KILL_ENABLED: chaosKillEnabled ? "1" : "0",
+      RAILWAY_WATCHDOG_AUTO_RECOVER: watchdogAutoRecover ? "1" : "0",
+      ...(watchdogPoll ? { RAILWAY_WATCHDOG_POLL_SEC: watchdogPoll } : {}),
     };
     if (dashboardPt) {
       dashboardVars.RAILWAY_PROJECT_TOKEN = dashboardPt;
@@ -598,6 +744,10 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
       console.warn(
         "(Variable sync) No DASHBOARD_RAILWAY_PROJECT_TOKEN or DASHBOARD_RAILWAY_API_TOKEN — add RAILWAY_PROJECT_TOKEN or RAILWAY_API_TOKEN on the dashboard service in Railway, or set one of those env vars in .env.railway.setup and re-run."
       );
+    }
+    const chaosAllowed = (process.env.CHAOS_ALLOWED_SERVICES || "").trim();
+    if (chaosAllowed) {
+      dashboardVars.CHAOS_ALLOWED_SERVICES = chaosAllowed;
     }
     await upsert("dashboard", dashboardVars);
   }
@@ -637,7 +787,7 @@ async function main() {
 
   let byName = await fetchServicesMap(projectId);
 
-  for (const spec of APP_SERVICES) {
+  for (const spec of SERVICE_SPECS) {
     console.log(`\n--- ${spec.name} (${spec.rootDirectory}) ---`);
     let svc = byName.get(spec.name);
 
@@ -761,17 +911,40 @@ async function main() {
     }
 
     const rootOk = curRoot === spec.rootDirectory;
-    if (rootOk && !mustClearPre) {
-      console.log(`  rootDirectory OK (${spec.rootDirectory})`);
+    const curConfig = normRailwayConfigPath(si.serviceInstance?.railwayConfigFile);
+    const wantConfig = normRailwayConfigPath(spec.railwayConfigFile);
+    const configOk = curConfig === wantConfig;
+    const curWatch = si.serviceInstance?.watchPatterns;
+    const watchOk = watchPatternsEqual(curWatch, spec.watchPatterns);
+
+    const needsInstanceUpdate =
+      !rootOk || mustClearPre || !configOk || !watchOk;
+
+    if (!needsInstanceUpdate) {
+      console.log(
+        `  rootDirectory, railwayConfigFile, watchPatterns OK (${spec.rootDirectory})`
+      );
     } else {
-      if (rootOk) {
-        console.log(`  rootDirectory OK (${spec.rootDirectory})`);
-      } else {
+      if (!rootOk) {
         console.log(`  rootDirectory: "${curRoot}" -> "${spec.rootDirectory}"`);
+      } else {
+        console.log(`  rootDirectory OK (${spec.rootDirectory})`);
+      }
+      if (!configOk) {
+        console.log(
+          `  railwayConfigFile: "${si.serviceInstance?.railwayConfigFile ?? ""}" -> "${spec.railwayConfigFile}"`
+        );
+      }
+      if (!watchOk) {
+        console.log(
+          `  watchPatterns: ${JSON.stringify(curWatch ?? [])} -> ${JSON.stringify(spec.watchPatterns)}`
+        );
       }
       const input = {};
       if (!rootOk) input.rootDirectory = spec.rootDirectory;
       if (mustClearPre) input.preDeployCommand = [];
+      if (!configOk) input.railwayConfigFile = spec.railwayConfigFile;
+      if (!watchOk) input.watchPatterns = spec.watchPatterns;
       if (!dry) {
         await gql(M_INSTANCE_UPDATE, {
           environmentId,
@@ -779,6 +952,8 @@ async function main() {
           input,
         });
         console.log("  serviceInstanceUpdate OK");
+      } else {
+        console.log("  (DRY_RUN: would serviceInstanceUpdate)");
       }
     }
   }
@@ -788,7 +963,7 @@ async function main() {
   if (!dry && !skipRedeploy) {
     console.log("\n--- Redeploy app services (latest commit) ---");
     byName = await fetchServicesMap(projectId);
-    for (const spec of APP_SERVICES) {
+    for (const spec of SERVICE_SPECS) {
       const svc = byName.get(spec.name);
       if (!svc) {
         console.warn(`  Skip ${spec.name}: not in project`);
