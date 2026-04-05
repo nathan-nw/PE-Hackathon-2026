@@ -12,6 +12,7 @@ You need to work with around the seed files that you can find in [MLH PE Hackath
 
 - **uv** — a fast Python package manager that handles Python versions, virtual environments, and dependencies automatically.
   Install it with:
+
   ```bash
   # macOS / Linux
   curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -19,19 +20,21 @@ You need to work with around the seed files that you can find in [MLH PE Hackath
   # Windows (PowerShell)
   powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
   ```
+
   For other methods see the [uv installation docs](https://docs.astral.sh/uv/getting-started/installation/).
+
 - PostgreSQL running locally (you can use Docker or a local instance)
 
 ## uv Basics
 
 `uv` manages your Python version, virtual environment, and dependencies automatically — no manual `python -m venv` needed.
 
-| Command | What it does |
-|---------|--------------|
-| `uv sync` | Install all dependencies (creates `.venv` automatically) |
-| `uv run <script>` | Run a script using the project's virtual environment |
-| `uv add <package>` | Add a new dependency |
-| `uv remove <package>` | Remove a dependency |
+| Command               | What it does                                             |
+| --------------------- | -------------------------------------------------------- |
+| `uv sync`             | Install all dependencies (creates `.venv` automatically) |
+| `uv run <script>`     | Run a script using the project's virtual environment     |
+| `uv add <package>`    | Add a new dependency                                     |
+| `uv remove <package>` | Remove a dependency                                      |
 
 ## Quick Start
 
@@ -43,23 +46,24 @@ git clone <repo-url> && cd mlh-pe-hackathon
 cd url-shortener
 uv sync
 
-# 3. Create the database
+# 3. Create the database (tables are auto-created on app startup)
 createdb hackathon_db
 
 # 4. Configure environment
 cp .env.example .env   # edit if your DB credentials differ
 
-# 5. Run the server
+# 5. Run the server (tables + default user are created automatically)
 uv run run.py
 
 # 6. Verify
 curl http://localhost:5000/health
 ```
 
-**Full stack with Docker** (Postgres, two API replicas, NGINX load balancer, dashboard, user frontend):
+**Full stack with Docker** (Postgres, Kafka, two API replicas, NGINX load balancer, Prometheus, dashboard, user frontend):
 
 ```bash
-docker compose up --build
+docker compose up -d --build
+# Everything starts automatically — tables are created and a default user is seeded on first boot.
 # API via LB:        http://localhost:8080/health
 # Liveness / ready:  GET http://localhost:8080/live   GET http://localhost:8080/ready
 # Prometheus UI:     http://localhost:9090  (scrapes replicas directly on the Docker network)

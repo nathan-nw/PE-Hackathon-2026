@@ -23,6 +23,7 @@ from db import (
     init_db,
     introspect_postgres_server,
 )
+from discord_alerter import DiscordAlerter
 from kafka_consumer import run_consumer
 
 logging.basicConfig(
@@ -43,6 +44,7 @@ ALLOW_INSECURE_LOG_INGEST = os.environ.get("ALLOW_INSECURE_LOG_INGEST", "").stri
 )
 CACHE_MAX_ENTRIES = int(os.environ.get("CACHE_MAX_ENTRIES", "1000"))
 DB_FLUSH_INTERVAL = float(os.environ.get("DB_FLUSH_INTERVAL", "30"))
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
 cache = LogCache(max_entries=CACHE_MAX_ENTRIES)
 
@@ -94,9 +96,11 @@ async def lifespan(app: FastAPI):
 
     # Kafka log stream (optional — disabled when no broker / DISABLED)
     if KAFKA_ENABLED:
+        alerter = DiscordAlerter(webhook_url=DISCORD_WEBHOOK_URL)
         consumer_thread = threading.Thread(
             target=run_consumer,
             args=(cache, KAFKA_BOOTSTRAP_SERVERS, KAFKA_TOPIC),
+            kwargs={"alerter": alerter},
             daemon=True,
         )
         consumer_thread.start()

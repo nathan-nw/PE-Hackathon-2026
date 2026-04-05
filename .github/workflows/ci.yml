@@ -13,6 +13,7 @@ name: CI
 # This ensures every PR is validated before merge.
 # ------------------------------------------------------------------------------
 on:
+  push:
   pull_request:
     branches: [main, staging]
 
@@ -78,6 +79,9 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: url-shortener
 
     # --------------------------------------------------------------------------
     # PostgreSQL service container — spins up a real DB for integration tests.
@@ -98,9 +102,19 @@ jobs:
           --health-timeout=5s
           --health-retries=5
 
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
     # --------------------------------------------------------------------------
-    # Environment variables for the app to connect to the test database.
-    # These match the PostgreSQL service container configuration above.
+    # Environment variables for the app to connect to the test database and Redis.
+    # These match the service container configurations above.
     # --------------------------------------------------------------------------
     env:
       DATABASE_NAME: hackathon_db
@@ -108,6 +122,8 @@ jobs:
       DATABASE_PORT: 5432
       DATABASE_USER: postgres
       DATABASE_PASSWORD: postgres
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
 
     steps:
       - name: Checkout code

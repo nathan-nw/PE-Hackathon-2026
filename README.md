@@ -14,7 +14,7 @@ Monorepo layout:
 
 **Local API:** see [`url-shortener/README.md`](url-shortener/README.md).
 
-**Docker (Postgres + two API replicas + LB + static sites):**
+**Docker (full stack — Postgres, Kafka, two API replicas, LB, dashboard, monitoring):**
 
 From the repo root (folder that contains `docker-compose.yml`):
 
@@ -22,6 +22,8 @@ From the repo root (folder that contains `docker-compose.yml`):
 docker compose up -d --build
 docker compose logs -f
 ```
+
+That single command starts **everything** — no separate database or backend setup is needed. The Flask app automatically creates the database tables (`users`, `urls`, `events`) and seeds a default user on first startup.
 
 **One command (same as `docker compose up -d --build`):** from repo root:
 

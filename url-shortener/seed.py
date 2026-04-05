@@ -27,6 +27,7 @@ from peewee import PostgresqlDatabase, chunked
 from app import create_app
 from app.database import db, sync_postgres_serial_sequences
 from app.models.event import Event
+from app.models.load_test_result import LoadTestResult
 from app.models.url import Url
 from app.models.user import User
 
@@ -88,7 +89,7 @@ def load_events(csv_dir, merge: bool = False):
 
 
 def seed(csv_dir, drop=False, merge: bool = False, if_empty: bool = False):
-    tables = [User, Url, Event]
+    tables = [User, Url, Event, LoadTestResult]
 
     if drop:
         print("Dropping existing tables...")

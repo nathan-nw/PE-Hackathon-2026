@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc -l \"CSV files\"/*.csv)",
+      "Bash(docker compose:*)",
+      "Bash(docker-compose ps:*)",
+      "Bash(uv run:*)",
+      "Bash(curl -s http://localhost:5000/health)",
+      "Bash(pkill -f \"flask run\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5000/)",
+      "Bash(curl:*)",
+      "Bash(PGPASSWORD=postgres psql:*)",
+      "Bash(docker exec hackathon_db:*)",
+      "Bash(k6 version:*)",
+      "Bash(ls docker-compose*)",
+      "Bash(ls nginx*)",
+      "Bash(ls -la *.yml *.yaml)",
+      "Bash(cmd.exe:*)",
+      "Bash(python -m json.tool)",
+      "Bash(docker exec hackathon_redis:*)",
+      "Bash(python -m ruff check .)"
+    ]
+  }
+}

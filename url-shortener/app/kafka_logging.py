@@ -52,11 +52,13 @@ class KafkaLogHandler(logging.Handler):
             try:
                 from confluent_kafka import Producer
 
-                self._producer = Producer({
-                    "bootstrap.servers": self._bootstrap_servers,
-                    "queue.buffering.max.ms": 100,
-                    "batch.num.messages": 50,
-                })
+                self._producer = Producer(
+                    {
+                        "bootstrap.servers": self._bootstrap_servers,
+                        "queue.buffering.max.ms": 100,
+                        "batch.num.messages": 50,
+                    }
+                )
             except Exception as exc:
                 self._failed = True
                 print(f"[KafkaLogHandler] Failed to create producer: {exc}", file=sys.stderr)

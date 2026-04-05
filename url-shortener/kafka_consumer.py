@@ -12,10 +12,10 @@ TOPIC = os.environ.get("KAFKA_LOG_TOPIC", "app-logs")
 GROUP_ID = os.environ.get("KAFKA_CONSUMER_GROUP", "log-printer")
 
 LEVEL_COLORS = {
-    "DEBUG": "\033[36m",     # cyan
-    "INFO": "\033[32m",      # green
-    "WARNING": "\033[33m",   # yellow
-    "ERROR": "\033[31m",     # red
+    "DEBUG": "\033[36m",  # cyan
+    "INFO": "\033[32m",  # green
+    "WARNING": "\033[33m",  # yellow
+    "ERROR": "\033[31m",  # red
     "CRITICAL": "\033[35m",  # magenta
 }
 RESET = "\033[0m"
@@ -51,12 +51,14 @@ def main():
     consumer = None
     for attempt in range(30):
         try:
-            consumer = Consumer({
-                "bootstrap.servers": BOOTSTRAP_SERVERS,
-                "group.id": GROUP_ID,
-                "auto.offset.reset": "latest",
-                "enable.auto.commit": True,
-            })
+            consumer = Consumer(
+                {
+                    "bootstrap.servers": BOOTSTRAP_SERVERS,
+                    "group.id": GROUP_ID,
+                    "auto.offset.reset": "latest",
+                    "enable.auto.commit": True,
+                }
+            )
             consumer.subscribe([TOPIC])
             print(f"[kafka-consumer] Subscribed to {TOPIC}. Waiting for logs...", flush=True)
             break
