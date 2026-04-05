@@ -17,4 +17,5 @@ Below is visual confirmation from our terminal proving that the comprehensive te
 
 *(Once the team writes the final tests to hit 70% coverage, run `uv run pytest` at the root of the repo to print out the coverage matrix and pop that screenshot right here!)*
 
-*[Insert Screenshot Here]*
+<img width="897" height="254" alt="Screenshot 2026-04-05 at 9 48 24 AM" src="https://github.com/user-attachments/assets/a5290314-abb5-4cd1-948f-d541bda8908f" />
+
