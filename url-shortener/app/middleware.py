@@ -83,9 +83,19 @@ def register_middleware(app):
             503,
         )
 
+    @app.errorhandler(400)
+    def _bad_request(e):
+        detail = str(e.description) if hasattr(e, "description") else str(e)
+        return jsonify({"error": "Bad request", "detail": detail}), 400
+
     @app.errorhandler(404)
     def _not_found(e):
         return jsonify({"error": "Not found"}), 404
+
+    @app.errorhandler(405)
+    def _method_not_allowed(e):
+        detail = str(e.description) if hasattr(e, "description") else str(e)
+        return jsonify({"error": "Method not allowed", "detail": detail}), 405
 
     @app.errorhandler(429)
     def _rate_limited(e):
@@ -99,3 +109,11 @@ def register_middleware(app):
     @app.errorhandler(503)
     def _service_unavailable(e):
         return jsonify({"error": "Service temporarily unavailable"}), 503
+
+    @app.errorhandler(Exception)
+    def _unhandled_error(e):
+        logger.exception("Unhandled exception: %s", e)
+        return jsonify({
+            "error": "Internal server error",
+            "detail": "An unexpected error occurred. Please try again.",
+        }), 500

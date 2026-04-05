@@ -505,6 +505,16 @@
           const shortCode = document.getElementById("short_code").value.trim();
           if (shortCode) body.short_code = shortCode;
 
+          /* Friendly messages — never show raw stack traces to users */
+          const FRIENDLY_ERRORS = {
+            400: "Hmm, that doesn't look quite right. Please double-check your URL and try again!",
+            404: "We couldn't find what you were looking for. Please make sure everything is correct.",
+            409: "That custom short code is already taken! Try a different one or leave it blank for a random code.",
+            429: "Whoa, slow down! You're making requests a bit too fast. Please wait a moment and try again.",
+            500: "Oh no! Something went wrong on our end \u2014 nothing on your side. Please refresh and try again :)",
+            503: "Our service is temporarily taking a breather. Please try again in a few seconds!",
+          };
+
           try {
             const res = await fetch(`${BASE}/shorten`, {
               method: "POST",
@@ -516,12 +526,17 @@
             resultContainer.classList.remove("hidden");
 
             if (!res.ok) {
+              const friendly = FRIENDLY_ERRORS[res.status] || "Something unexpected happened. Please try again!";
+              const detail = data.error || "";
               resultDiv.className =
                 "bg-error-container/20 rounded-xl p-6 border border-error/20";
               resultDiv.innerHTML = `
-                        <div class="flex items-center gap-3">
-                            <span class="material-symbols-outlined text-error">error</span>
-                            <p class="text-error font-headline font-semibold">${data.error}</p>
+                        <div class="flex items-start gap-3">
+                            <span class="material-symbols-outlined text-error mt-0.5">sentiment_sad</span>
+                            <div>
+                                <p class="text-error font-headline font-semibold">${friendly}</p>
+                                ${detail ? `<p class="text-error/60 text-sm mt-1">Details: ${detail}</p>` : ""}
+                            </div>
                         </div>`;
               return;
             }
@@ -549,9 +564,12 @@
             resultDiv.className =
               "bg-error-container/20 rounded-xl p-6 border border-error/20";
             resultDiv.innerHTML = `
-                    <div class="flex items-center gap-3">
-                        <span class="material-symbols-outlined text-error">error</span>
-                        <p class="text-error font-headline font-semibold">Failed to connect to server</p>
+                    <div class="flex items-start gap-3">
+                        <span class="material-symbols-outlined text-error mt-0.5">cloud_off</span>
+                        <div>
+                            <p class="text-error font-headline font-semibold">Looks like we can't reach the server right now.</p>
+                            <p class="text-error/60 text-sm mt-1">Please check your connection and try again in a moment!</p>
+                        </div>
                     </div>`;
           }
         });
@@ -609,7 +627,7 @@
             currentPage >= totalPages;
         } catch (err) {
           container.innerHTML =
-            '<div class="text-center text-on-surface-variant py-8">Failed to load URLs</div>';
+            '<div class="text-center text-on-surface-variant py-8">Oops! We had trouble loading your URLs. Please refresh to try again.</div>';
         }
       }
 

@@ -241,7 +241,13 @@ export function OpsDashboard() {
       setAlerts(a as AlertsResponse);
       setLastFetch(new Date());
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Request failed");
+      setError(
+        e instanceof Error && e.message.includes("fetch")
+          ? "Hmm, we can't reach the backend right now. Please check that all services are running and try again."
+          : e instanceof Error
+            ? e.message
+            : "Something unexpected happened — please refresh and try again!",
+      );
     } finally {
       setLoading(false);
     }
@@ -274,7 +280,10 @@ export function OpsDashboard() {
     } catch (e) {
       setLogData({
         logs: [],
-        error: e instanceof Error ? e.message : "Failed to load logs",
+        error:
+          e instanceof Error && e.message.includes("fetch")
+            ? "Can't reach the log service right now — the dashboard-backend might still be starting up. Hang tight!"
+            : "Oops! We had trouble loading logs. Please try refreshing in a moment.",
       });
     } finally {
       setLogLoading(false);
@@ -352,9 +361,10 @@ export function OpsDashboard() {
       </div>
 
       {error && (
-        <p className="text-destructive text-sm" role="alert">
-          {error}
-        </p>
+        <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-200" role="alert">
+          <p className="font-medium">Heads up!</p>
+          <p>{error}</p>
+        </div>
       )}
       {lastFetch && (
         <p className="text-muted-foreground text-xs">
