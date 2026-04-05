@@ -27,3 +27,7 @@ Load test results showing 500 users with < 5% errors.
 
 ## Summary
 The system sustained 500 concurrent users with 0.00% errors, exceeding the Gold requirement of < 5%. Every VU completed successfully. The Redis caching layer prevented database saturation under this load.
+![Uploading Screenshot 2026-04-04 234026.png…]()
+
+<img width="1240" height="573" alt="Screenshot 2026-04-04 234037" src="https://github.com/user-attachments/assets/2a18b2dc-83f0-485a-a708-32f2a77f9a56" />
+
