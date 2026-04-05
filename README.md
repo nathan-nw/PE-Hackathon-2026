@@ -1,49 +1,209 @@
-# PE Hackathon 2026
+# Brief — URL Shortener Platform
 
-Monorepo layout:
+A production-grade URL shortener with load balancing, observability, event streaming, and a real-time ops dashboard. Built for the PE Hackathon 2026.
 
-| Path | Purpose |
-|------|---------|
-| [`tests/`](tests/) | Pytest suite (API unit tests, optional LB / NGINX integration) |
-| [`url-shortener/`](url-shortener/) | Flask API, `uv run run.py` |
-| [`load-balancer/`](load-balancer/) | NGINX config for API replicas |
-| [`prometheus/`](prometheus/) | Prometheus scrape config (optional Compose service) |
-| [`ARCHITECTURE.md`](ARCHITECTURE.md) | System diagram, health probes, production notes |
-| [`dashboard/`](dashboard/) | Admin UI placeholder |
-| [`user-frontend/`](user-frontend/) | Public UI placeholder |
-
-**Local API:** see [`url-shortener/README.md`](url-shortener/README.md).
-
-**Docker (full stack — Postgres, Kafka, two API replicas, LB, dashboard, monitoring):**
-
-From the repo root (folder that contains `docker-compose.yml`):
+## Quick Start
 
 ```bash
+# Start everything (Postgres, Kafka, two API replicas, NGINX LB, dashboard, monitoring)
 docker compose up -d --build
+
+# Follow logs
 docker compose logs -f
+
+# Stop
+docker compose down
 ```
 
-That single command starts **everything** — no separate database or backend setup is needed. The Flask app automatically creates the database tables (`users`, `urls`, `events`) and seeds a default user on first startup.
+That's it. The app auto-creates tables and seeds a default user on first boot.
 
-**One command (same as `docker compose up -d --build`):** from repo root:
+**One-command scripts:** `./scripts/start.sh` (Mac/Linux/WSL) or `.\scripts\start.ps1` (Windows PowerShell).
 
-- **Windows (PowerShell or CMD):** `.\scripts\start.ps1` or `.\scripts\start.cmd` — do **not** use `./scripts/start.sh` in PowerShell; it will not run the stack.
-- **Git Bash / WSL / macOS / Linux:** `./scripts/start.sh`
+### Access Points
 
-Use **`-d`** (detached) so Compose is not holding the stack in a foreground session (foreground `docker compose up` can be flaky on some Docker Desktop builds). Stop following logs with **Ctrl+C** — that does **not** stop the stack when you only ran `logs -f`.
+| Service | URL |
+|---------|-----|
+| App (via load balancer) | http://localhost:8080 |
+| Ops Dashboard | http://localhost:3001 |
+| Prometheus | http://localhost:9090 |
+| Alertmanager | http://localhost:9093 |
 
-**If a replica stays `Exited` after `docker kill`:** Docker Desktop on Windows often **does not** auto-restart even with `restart: always` — that is a known engine/Desktop limitation. Run **`docker compose up -d url-shortener-a url-shortener-b`** (or **`.\scripts\ensure-api-replicas.ps1`**) to reconcile; see [`ARCHITECTURE.md`](ARCHITECTURE.md) (section *If a replica stays Exited*).
+## Architecture at a Glance
 
-**API via load balancer:** `http://localhost:8080` · **Prometheus UI:** `http://localhost:9090` (scrapes both API replicas) · **NGINX stub_status (LB-level):** `http://localhost:8081/nginx_status` (restricted to local/private ranges; not a substitute for app health checks) · Dashboard: `http://localhost:3001` · User UI: `http://localhost:3002`. See [`ARCHITECTURE.md`](ARCHITECTURE.md) for probes (`/live`, `/ready`), metrics, and how the pieces fit together.
+```
+                            ┌──────────────────┐
+                            │  Browser / curl   │
+                            └────────┬─────────┘
+                                     │
+                         ┌───────────▼───────────┐
+                         │  NGINX Load Balancer   │
+                         │       :8080            │
+                         └─────┬───────────┬─────┘
+                               │           │
+                    ┌──────────▼──┐   ┌────▼──────────┐
+                    │ shortener-a │   │  shortener-b   │
+                    │  (Flask)    │   │   (Flask)      │
+                    └──┬───┬──┬──┘   └──┬───┬──┬──────┘
+                       │   │  │         │   │  │
+              ┌────────▼┐ ┌▼──▼─────┐ ┌─▼───▼┐ │
+              │PostgreSQL│ │  Redis  │ │      │ │
+              │  :15432  │ │  :6379  │ │      │ │
+              └──────────┘ └────────┘  │ Kafka│◄┘
+                                       │:29092│
+                         ┌─────────────┼──────┤
+                         │             │      │
+                   ┌─────▼─────┐ ┌─────▼────┐ │
+                   │  log-     │ │dashboard-│ │
+                   │  consumer │ │ backend  │ │
+                   │ (stdout)  │ │ (FastAPI)│ │
+                   └───────────┘ └──┬────┬──┘ │
+                                    │    │    │
+                              ┌─────▼┐ ┌─▼────▼──────┐
+                              │Dash  │ │   Discord    │
+                              │DB    │ │   Webhooks   │
+                              └──────┘ └─────────────┘
 
-**If the terminal stays blank or seems to do nothing**
+  Observability: Prometheus :9090 ──► Alertmanager :9093 ──► Discord
+  Infra: compose-watchdog (auto-restart) · db-backup (daily pg_dump)
+  Frontends: Dashboard :3001 · User UI :3002
+```
 
-1. **Docker Engine must be running** — open Docker Desktop and wait until it says **Engine running**. Then run `docker info`. If that hangs or errors, Compose will too.
-2. **First build can be quiet for a long time** (downloading layers). For step-by-step build output:  
-   `docker compose build --progress=plain`  
-   then  
-   `docker compose up -d`
-3. **Detached mode hides logs** — if you used `docker compose up -d`, the shell returns almost immediately. Follow logs with:  
-   `docker compose logs -f`
-4. **Windows (PowerShell)** — use `docker compose` (with a space). If an old `docker-compose.exe` shadows the plugin, prefer:  
-   `& 'C:\Program Files\Docker\Docker\resources\bin\docker.exe' compose up --build`
+Two stateless Flask replicas behind NGINX (`least_conn`). Every HTTP request streams to Kafka, consumed independently by the log consumer and dashboard-backend. Redis handles caching and rate limiting. Full Mermaid diagram in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Project Structure
+
+```
+.
+├── url-shortener/       # Flask API (app factory, Peewee ORM, circuit breaker)
+├── load-balancer/       # NGINX config (load balancing, rate limiting)
+├── dashboard/           # Ops dashboard — Next.js frontend + FastAPI backend
+├── user-frontend/       # Public URL shortening UI (Next.js)
+├── prometheus/          # Prometheus scrape config + alert rules
+├── alertmanager/        # Alertmanager routing config
+├── tests/               # Pytest suite (unit + integration)
+├── load-tests/          # k6 load testing scripts
+├── scripts/             # Start scripts, replica recovery, Railway deploy
+├── k8s/                 # Kubernetes manifests
+├── infra/               # Infrastructure configs
+├── docs/                # All documentation (see below)
+└── docker-compose.yml   # Full stack orchestration
+```
+
+## Documentation
+
+Everything lives in [`docs/`](docs/):
+
+```
+docs/
+├── ARCHITECTURE.md                # System diagram, health probes, how pieces connect
+├── DOCUMENTATION.md               # Full setup, API endpoints, architecture deep-dive
+├── DEPLOY-GUIDE.md                # How to deploy (Docker + Railway) and how to rollback
+├── TROUBLESHOOTING.md             # If X happens, try Y — real bugs we hit and fixes
+│
+├── reference/                     # Look-up docs (env vars, decisions, capacity, testing)
+│   ├── CONFIGURATION.md           #   All environment variables needed to run
+│   ├── DECISION-LOG.md            #   Why we chose Redis, NGINX, Kafka, etc.
+│   ├── CAPACITY-PLAN.md           #   How many users, where the limit is, scaling levers
+│   ├── DASHBOARD-SETUP.md         #   Dashboard local dev, env vars, Kafka logs, security
+│   ├── TESTING.md                 #   How to run unit, integration, and load tests
+│   └── CONTRIBUTING.md            #   Branching strategy, code standards
+│
+├── Track1Req/                     # Track 1 — Reliability
+│   ├── FAILURE-MODES.md           #   What breaks, what happens, how to fix it
+│   ├── error_handling.md          #   Graceful failure design
+│   └── verification/              #   Bronze/Silver/Gold proof artifacts
+│       ├── bronze/                #     CI, health checks, unit tests
+│       ├── silver/                #     Integration tests, 50% coverage
+│       └── gold/                  #     70% coverage, chaos testing, graceful fail
+│
+├── Track2Req/                     # Track 2 — Scalability
+│   ├── bottleneck_analysis.md     #   Performance limits and capacity planning
+│   ├── bronze_users.md            #   50-user load test results
+│   ├── silver_users.md            #   200-user load test results
+│   ├── gold_users.md              #   500-user load test results
+│   ├── testing.md                 #   Load testing methodology
+│   └── Verification/              #   Bronze/Silver/Gold proof artifacts
+│       ├── Bronze/                #     50 users, latency/error baselines
+│       ├── Silver/                #     200 users, load balancer, multi-instance
+│       └── Gold/                  #     500 users, caching, <5% error rate
+│
+├── Track3Req/                     # Track 3 — Incident Response
+│   ├── runbook.md                 #   Step-by-step incident response guide
+│   ├── notifications_overview.md  #   Alerting pipeline overview
+│   └── verification/              #   Bronze/Silver/Gold proof artifacts
+│       ├── bronze/                #     Logs, metrics, dashboard
+│       ├── silver/                #     Alert config, latency alerts, notifications
+│       └── gold/                  #     Dashboard UI, root cause analysis
+│
+├── discord_alerting/              # Discord alert system
+│   ├── alert_rules.md             #   What triggers alerts and why
+│   ├── architecture_overview.md   #   Alerting pipeline architecture
+│   ├── configuration_map.md       #   Config reference for alerting
+│   └── live_demo.md               #   How to demo alerting live
+│
+├── url-shortener/                 # URL shortener internals
+│   ├── architecture_overview.md   #   Service architecture
+│   └── app/
+│       ├── app_core_logic.md      #   App factory, middleware, circuit breaker
+│       ├── models/
+│       │   └── database_schema.md #   User, Url, Event models
+│       └── routes/
+│           └── api_endpoints.md   #   Full API endpoint reference
+│
+├── dashboard/                     # Ops dashboard docs
+│   ├── dashboard_overview.md      #   Dashboard features and layout
+│   ├── backend/
+│   │   └── python_engine.md       #   FastAPI backend, Kafka consumer, cache
+│   └── src/
+│       └── nextjs_frontend.md     #   Next.js frontend components
+│
+├── infra/                         # Infrastructure
+│   ├── RAILWAY.md                 #   Railway deployment guide
+│   └── postgres/
+│       └── replication-notes.md   #   Postgres replication setup
+│
+├── kafka/
+│   └── kafka-streams.md           #   Event streaming pipeline docs
+│
+├── scripts/
+│   └── scripts.md                 #   What each helper script does
+│
+└── user-frontend/
+    └── user-frontend.md           #   Public UI docs
+```
+
+## Running Tests
+
+```bash
+# Install dev dependencies
+uv sync --group dev
+
+# Run all tests
+uv run pytest -v
+
+# Integration tests (requires docker compose up)
+export TEST_LOAD_BALANCER_URL=http://127.0.0.1:8080
+uv run pytest tests/integration -m integration -v
+```
+
+## Environment Variables
+
+Key variables are configured in `docker-compose.yml` and `.env`:
+
+| Variable | Purpose |
+|----------|---------|
+| `DATABASE_URL` | PostgreSQL connection string |
+| `KAFKA_BOOTSTRAP_SERVERS` | Kafka broker address |
+| `DISCORD_WEBHOOK_URL` | Discord alerts (set in `.env` at repo root) |
+| `FLASK_ENV` | `production` or `development` |
+| `INSTANCE_ID` | Replica identifier (`1` or `2`) |
+
+## Variant Compose Files
+
+```bash
+# TLS mode (self-signed certs, HSTS)
+docker compose -f docker-compose.yml -f docker-compose.tls.yml up --build
+
+# HA edge (second NGINX on :8082)
+docker compose -f docker-compose.yml -f docker-compose.ha.yml up --build
+```
