@@ -447,7 +447,13 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
     const dashboardPt = (process.env.DASHBOARD_RAILWAY_PROJECT_TOKEN || "").trim();
     const dashboardAt = (process.env.DASHBOARD_RAILWAY_API_TOKEN || "").trim();
     const dashboardVars = {
-      DASHBOARD_BACKEND_URL: "https://" + varRef("dashboard-backend", "RAILWAY_PUBLIC_DOMAIN"),
+      // Private HTTP URL: Next.js server-side fetch to the public HTTPS domain often fails
+      // (edge/DNS/hairpin); same pattern as load-balancer → url-shortener via RAILWAY_PRIVATE_DOMAIN.
+      DASHBOARD_BACKEND_URL:
+        "http://" +
+        varRef("dashboard-backend", "RAILWAY_PRIVATE_DOMAIN") +
+        ":" +
+        varRef("dashboard-backend", "PORT"),
       VISIBILITY_K8S_ENABLED: "false",
       VISIBILITY_COMPOSE_PROJECT: "pe-hackathon-2026",
       // Ops tab: list services via Railway GraphQL (no Docker socket in the cloud).

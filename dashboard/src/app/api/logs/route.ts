@@ -1,22 +1,38 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import {
-  dashboardBackendBase,
   isDashboardBackendUrlConfigured,
+  resolveDashboardBackendBase,
 } from "@/lib/dashboard-backend-url";
+import { formatFetchError } from "@/lib/fetch-error-detail";
 import { runtimeEnv } from "@/lib/server-runtime-env";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/** Cold start / TLS can exceed 10s on some hosts. */
+const FETCH_MS = 25_000;
+
 export async function GET(request: NextRequest) {
+  const resolved = resolveDashboardBackendBase();
+  if (!resolved.ok) {
+    return NextResponse.json(
+      {
+        logs: [],
+        error: resolved.error,
+        hint: "Fix DASHBOARD_BACKEND_URL on the dashboard service, redeploy, or run SYNC_VARIABLES=1 node setup-railway.js from the repo root.",
+      },
+      { status: 503 }
+    );
+  }
+
   const qs = request.nextUrl.searchParams.toString();
-  const url = `${dashboardBackendBase()}/api/logs${qs ? `?${qs}` : ""}`;
+  const url = `${resolved.base}/api/logs${qs ? `?${qs}` : ""}`;
 
   let abortTimer: ReturnType<typeof setTimeout> | undefined;
   try {
     const controller = new AbortController();
-    abortTimer = setTimeout(() => controller.abort(), 10_000);
+    abortTimer = setTimeout(() => controller.abort(), FETCH_MS);
     const res = await fetch(url, {
       signal: controller.signal,
       next: { revalidate: 0 },
@@ -25,22 +41,22 @@ export async function GET(request: NextRequest) {
     const body = (await res.json()) as unknown;
     return NextResponse.json(body, { status: res.status });
   } catch (e) {
-    const message = e instanceof Error ? e.message : "Request failed";
+    const detail = formatFetchError(e);
     const onRailway = Boolean(runtimeEnv("RAILWAY_PROJECT_ID"));
     const configured = isDashboardBackendUrlConfigured();
     let hint =
       "Ensure dashboard-backend (FastAPI) is running and reachable. Local dev: start it on port 8000.";
-    if (onRailway && !configured) {
+    if (onRailway && resolved.usedDefaultLocalhost) {
       hint =
-        "Set DASHBOARD_BACKEND_URL on the **dashboard** service to your **dashboard-backend** public HTTPS URL (e.g. from Railway Variables or `SYNC_VARIABLES=1 node setup-railway.js`), then redeploy the dashboard.";
+        "DASHBOARD_BACKEND_URL is unset — set it on the **dashboard** service (run `SYNC_VARIABLES=1 node setup-railway.js` for private URL), then redeploy.";
     } else if (onRailway && configured) {
       hint =
-        "dashboard-backend may be sleeping, crashed, or unreachable from this service. Check the dashboard-backend deploy logs and health (`/api/health`).";
+        "If the error is ENOTFOUND or connection refused, confirm the **dashboard** service can reach **dashboard-backend** on the private network (same Railway project). Re-run variable sync so DASHBOARD_BACKEND_URL uses RAILWAY_PRIVATE_DOMAIN + PORT.";
     }
     return NextResponse.json(
       {
         logs: [],
-        error: message,
+        error: detail,
         hint,
       },
       { status: 503 }
