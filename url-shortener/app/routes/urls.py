@@ -86,7 +86,9 @@ def list_urls():
     # Check Redis cache first
     cached = get_cached_url_list(page, per_page)
     if cached is not None:
-        return jsonify(cached)
+        resp = jsonify(cached)
+        resp.headers["Cache-Control"] = "public, max-age=30"
+        return resp
 
     query = Url.select().order_by(Url.created_at.desc())
     total = query.count()
@@ -101,7 +103,9 @@ def list_urls():
 
     cache_url_list(page, per_page, result)
 
-    return jsonify(result)
+    resp = jsonify(result)
+    resp.headers["Cache-Control"] = "public, max-age=30"
+    return resp
 
 
 @urls_bp.route("/urls/<int:url_id>", methods=["GET"])
@@ -111,7 +115,9 @@ def get_url(url_id):
     except Url.DoesNotExist:
         return jsonify({"error": "URL not found"}), 404
 
-    return jsonify(model_to_dict(url, backrefs=False))
+    resp = jsonify(model_to_dict(url, backrefs=False))
+    resp.headers["Cache-Control"] = "public, max-age=60"
+    return resp
 
 
 @urls_bp.route("/urls/<int:url_id>", methods=["PUT"])
@@ -190,7 +196,9 @@ def list_user_urls(user_id):
         return jsonify({"error": "User not found"}), 404
 
     urls = Url.select().where(Url.user_id == user_id).order_by(Url.created_at.desc())
-    return jsonify([model_to_dict(u, backrefs=False) for u in urls])
+    resp = jsonify([model_to_dict(u, backrefs=False) for u in urls])
+    resp.headers["Cache-Control"] = "public, max-age=30"
+    return resp
 
 
 @urls_bp.route("/urls/<int:url_id>/events", methods=["GET"])
@@ -201,7 +209,9 @@ def list_url_events(url_id):
         return jsonify({"error": "URL not found"}), 404
 
     events = Event.select().where(Event.url_id == url_id).order_by(Event.timestamp.desc())
-    return jsonify([model_to_dict(e, backrefs=False) for e in events])
+    resp = jsonify([model_to_dict(e, backrefs=False) for e in events])
+    resp.headers["Cache-Control"] = "public, max-age=30"
+    return resp
 
 
 @urls_bp.route("/<short_code>")
@@ -212,7 +222,9 @@ def redirect_to_url(short_code):
     if cached is not None:
         if not cached["active"]:
             return jsonify({"error": "This URL has been deactivated"}), 410
-        return redirect(cached["url"], code=302)
+        resp = redirect(cached["url"], code=302)
+        resp.headers["Cache-Control"] = "public, max-age=300"
+        return resp
 
     # Cache miss — fall back to DB
     try:
@@ -226,4 +238,6 @@ def redirect_to_url(short_code):
     if not url.is_active:
         return jsonify({"error": "This URL has been deactivated"}), 410
 
-    return redirect(url.original_url, code=302)
+    resp = redirect(url.original_url, code=302)
+    resp.headers["Cache-Control"] = "public, max-age=300"
+    return resp
