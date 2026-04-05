@@ -127,11 +127,16 @@ def list_urls():
         return resp
 
     query = Url.select().order_by(Url.created_at.desc())
+
+    user_id = request.args.get("user_id", type=int)
+    if user_id is not None:
+        query = query.where(Url.user_id == user_id)
+
     total = query.count()
     urls = query.paginate(page, per_page)
 
     result = {
-        "data": [model_to_dict(u, backrefs=False) for u in urls],
+        "data": [model_to_dict(u, backrefs=False, recurse=False) for u in urls],
         "page": page,
         "per_page": per_page,
         "total": total,
