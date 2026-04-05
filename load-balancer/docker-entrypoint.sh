@@ -79,6 +79,10 @@ case "${NGINX_RESOLVER}" in
 esac
 echo "load-balancer: nginx resolver ${NGINX_RESOLVER} (re-resolve upstream hostnames; avoids stale IPs after Railway redeploys)" >&2
 
+# Must match dashboard-backend LOAD_TEST_BYPASS_TOKEN so k6 can send X-Load-Test-Bypass. If unset, use a
+# value no client will send — edge limiting stays strictly per-IP for everyone.
+LOAD_TEST_BYPASS_TOKEN_EFFECTIVE="${LOAD_TEST_BYPASS_TOKEN:-__no_load_test_bypass__}"
+
 # Railway sets PORT; Compose publishes container port 80 -> omit PORT (default 80).
 NGINX_LISTEN_PORT="${PORT:-80}"
 
@@ -86,6 +90,7 @@ sed -e "s|@UPSTREAM_A@|${UPSTREAM_A}|g" \
     -e "s|@UPSTREAM_B@|${UPSTREAM_B}|g" \
     -e "s|@NGINX_LISTEN_PORT@|${NGINX_LISTEN_PORT}|g" \
     -e "s|@NGINX_RESOLVER@|${NGINX_RESOLVER}|g" \
+    -e "s|@LOAD_TEST_BYPASS_TOKEN@|${LOAD_TEST_BYPASS_TOKEN_EFFECTIVE}|g" \
     /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
 
 # Nginx resolves upstream names at startup; wait until each replica answers /live so DNS exists

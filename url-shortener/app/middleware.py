@@ -18,6 +18,7 @@ from peewee import OperationalError as PeeweeOperationalError
 from app.dynamic_rate_limit import get_current_rate_limit, record_request
 from app.instance_info import get_instance_id, increment_request_count, record_request_latency_ms
 from app.ip_ban import is_banned, record_violation
+from app.load_test_bypass import is_load_test_bypass_request
 from app.metrics import HTTP_REQUEST_DURATION, HTTP_REQUESTS
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,8 @@ def register_middleware(app):
     def _check_ip_ban():
         """Block banned IPs before any processing."""
         if request.path in _EXEMPT_PATHS or request.path.startswith(_EXEMPT_PREFIXES):
+            return
+        if is_load_test_bypass_request():
             return
         ip = request.remote_addr
         banned, info = is_banned(ip)
@@ -143,6 +146,9 @@ def register_middleware(app):
     @app.errorhandler(429)
     def _rate_limited(e):
         ip = request.remote_addr
+        if is_load_test_bypass_request():
+            return jsonify({"error": "Rate limit exceeded."}), 429
+
         result = record_violation(ip)
         action = result.get("action", "none")
 

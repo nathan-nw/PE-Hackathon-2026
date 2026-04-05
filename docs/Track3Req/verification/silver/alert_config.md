@@ -14,6 +14,4 @@ Rather than panicking on a single 500 error, these triggers evaluate queries mat
 ### Configuration Verification
 Below is a screenshot verifying our specific `YAML` code configurations for the Service Down and High Error Rate logic.
 
-*(To capture the perfect screenshot for this requirement, open `prometheus/rules/slo.yml` in your code editor and take a clean picture showing the `ServiceDown` or `HighErrorRate` YAML code blocks!)*
-
-*[Insert Screenshot of slo.yml Here]*
+<img width="1130" height="793" alt="Screenshot 2026-04-05 at 10 36 43 AM" src="https://github.com/user-attachments/assets/e6714025-8264-4c61-8254-dd83c7ab1730" />

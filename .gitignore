@@ -37,3 +37,6 @@ Thumbs.db
 judging/
 
 .npm-cache/
+
+# Node / npm (watchdog-service, local tooling, etc.)
+node_modules/
