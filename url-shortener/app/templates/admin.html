@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin - IP Ban Control</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e1e4e8; padding: 2rem; }
+    h1 { font-size: 1.5rem; margin-bottom: 1.5rem; color: #fff; }
+    h2 { font-size: 1.1rem; margin-bottom: 1rem; color: #c9d1d9; }
+
+    .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1.5rem; margin-bottom: 1.5rem; }
+
+    .toggle-row { display: flex; align-items: center; gap: 1rem; }
+    .toggle-label { font-size: 0.95rem; }
+    .toggle { position: relative; width: 48px; height: 26px; cursor: pointer; }
+    .toggle input { display: none; }
+    .toggle .slider { position: absolute; inset: 0; background: #484f58; border-radius: 13px; transition: 0.2s; }
+    .toggle .slider::before { content: ''; position: absolute; width: 20px; height: 20px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: 0.2s; }
+    .toggle input:checked + .slider { background: #238636; }
+    .toggle input:checked + .slider::before { transform: translateX(22px); }
+
+    .status { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: 600; }
+    .status.on { background: #238636; color: #fff; }
+    .status.off { background: #da3633; color: #fff; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    th { text-align: left; padding: 0.6rem 0.8rem; border-bottom: 1px solid #30363d; color: #8b949e; font-weight: 600; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.05em; }
+    td { padding: 0.6rem 0.8rem; border-bottom: 1px solid #21262d; }
+    tr:hover td { background: #1c2128; }
+
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; font-weight: 600; }
+    .badge.perm { background: #da3633; color: #fff; }
+    .badge.temp { background: #d29922; color: #fff; }
+
+    .btn { padding: 6px 14px; border: none; border-radius: 6px; font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: 0.15s; }
+    .btn-unban { background: #238636; color: #fff; }
+    .btn-unban:hover { background: #2ea043; }
+    .btn-refresh { background: #30363d; color: #c9d1d9; }
+    .btn-refresh:hover { background: #484f58; }
+    .btn-unban-all { background: #da3633; color: #fff; }
+    .btn-unban-all:hover { background: #f85149; }
+
+    .actions { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+    .empty { color: #8b949e; padding: 2rem; text-align: center; }
+    .toast { position: fixed; bottom: 1.5rem; right: 1.5rem; padding: 0.8rem 1.2rem; border-radius: 8px; font-size: 0.85rem; font-weight: 600; color: #fff; opacity: 0; transition: opacity 0.3s; z-index: 100; }
+    .toast.show { opacity: 1; }
+    .toast.success { background: #238636; }
+    .toast.error { background: #da3633; }
+  </style>
+</head>
+<body>
+  <h1>IP Ban Control Panel</h1>
+
+  <div class="card">
+    <h2>Ban System</h2>
+    <div class="toggle-row">
+      <label class="toggle">
+        <input type="checkbox" id="ban-toggle" onchange="toggleBanSystem(this.checked)">
+        <span class="slider"></span>
+      </label>
+      <span class="toggle-label">IP Ban Enforcement</span>
+      <span class="status" id="ban-status">-</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Banned IPs</h2>
+    <div class="actions">
+      <button class="btn btn-refresh" onclick="loadBans()">Refresh</button>
+      <button class="btn btn-unban-all" id="unban-all-btn" onclick="unbanAll()" style="display:none">Unban All</button>
+    </div>
+    <div id="bans-table"></div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script>
+    const BASE = window.location.origin;
+
+    function toast(msg, type) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.className = `toast show ${type}`;
+      setTimeout(() => el.className = 'toast', 2500);
+    }
+
+    async function loadToggle() {
+      try {
+        const res = await fetch(`${BASE}/admin/bans/toggle`);
+        const data = await res.json();
+        document.getElementById('ban-toggle').checked = data.enabled;
+        const s = document.getElementById('ban-status');
+        s.textContent = data.enabled ? 'Enabled' : 'Disabled';
+        s.className = `status ${data.enabled ? 'on' : 'off'}`;
+      } catch { /* ignore */ }
+    }
+
+    async function toggleBanSystem(enabled) {
+      try {
+        const res = await fetch(`${BASE}/admin/bans/toggle`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled }),
+        });
+        const data = await res.json();
+        const s = document.getElementById('ban-status');
+        s.textContent = data.enabled ? 'Enabled' : 'Disabled';
+        s.className = `status ${data.enabled ? 'on' : 'off'}`;
+        toast(`Ban system ${data.enabled ? 'enabled' : 'disabled'}`, 'success');
+      } catch {
+        toast('Failed to toggle', 'error');
+      }
+    }
+
+    async function loadBans() {
+      const container = document.getElementById('bans-table');
+      try {
+        const res = await fetch(`${BASE}/admin/bans`);
+        const bans = await res.json();
+
+        document.getElementById('unban-all-btn').style.display = bans.length ? '' : 'none';
+
+        if (!bans.length) {
+          container.innerHTML = '<div class="empty">No banned IPs</div>';
+          return;
+        }
+
+        container.innerHTML = `
+          <table>
+            <thead><tr><th>IP Address</th><th>Type</th><th>Hour Bans</th><th>Strikes</th><th>Remaining</th><th></th></tr></thead>
+            <tbody>
+              ${bans.map(b => `
+                <tr>
+                  <td><code>${b.ip}</code></td>
+                  <td><span class="badge ${b.permanent ? 'perm' : 'temp'}">${b.permanent ? 'Permanent' : 'Temporary'}</span></td>
+                  <td>${b.hour_bans}</td>
+                  <td>${b.strikes}</td>
+                  <td>${b.permanent ? '-' : Math.ceil((b.ban_remaining_s || 0) / 60) + 'm'}</td>
+                  <td><button class="btn btn-unban" onclick="unbanIp('${b.ip}')">Unban</button></td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>`;
+      } catch {
+        container.innerHTML = '<div class="empty">Failed to load bans</div>';
+      }
+    }
+
+    async function unbanIp(ip) {
+      try {
+        const res = await fetch(`${BASE}/admin/bans/${ip}/unban`, { method: 'POST' });
+        if (res.ok) {
+          toast(`Unbanned ${ip}`, 'success');
+          loadBans();
+        } else {
+          toast('Failed to unban', 'error');
+        }
+      } catch {
+        toast('Failed to unban', 'error');
+      }
+    }
+
+    async function unbanAll() {
+      try {
+        const res = await fetch(`${BASE}/admin/bans`);
+        const bans = await res.json();
+        await Promise.all(bans.map(b => fetch(`${BASE}/admin/bans/${b.ip}/unban`, { method: 'POST' })));
+        toast(`Unbanned ${bans.length} IPs`, 'success');
+        loadBans();
+      } catch {
+        toast('Failed to unban all', 'error');
+      }
+    }
+
+    loadToggle();
+    loadBans();
+    setInterval(loadBans, 5000);
+  </script>
+</body>
+</html>
