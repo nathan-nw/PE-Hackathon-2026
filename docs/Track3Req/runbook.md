@@ -1,70 +1,68 @@
 # 🚨 In Case of Emergency: Incident Response Runbook
 
-This guide tells you exactly what to do when an alert fires in Discord. Follow these steps calmly. You do not need deep technical knowledge to use this guide.
+This guide contains **explicit, highly actionable alert-response procedures**. When a Discord alert fires at 3 AM and your brain is non-functional, do not think. Just read and execute exactly these steps.
 
-## 🔴 Critical Alerts (Act Now)
+## 🔴 Critical Alerts (Drop Everything & Fix)
+*Service is completely broken. Users are organically impacted.*
 
-These alerts mean something is fundamentally broken and users are directly impacted.
-
-### 1. `ServiceDown`
-**What it means:** The entire application is completely offline. No users can access it.
-**How to fix it:**
-1. Check if the application containers stopped running:
+### 1. `ServiceDown` (Total Outage)
+**Definition:** The entire backend is completely offline. 
+**Immediate Actionable Procedure:**
+1. **Verify Outage Scope:** Open the Live Dashboard UI. Check the "Traffic" and "Latency" graphs. Are they completely flatlining?
+2. **Check Container Status:** Open your terminal and execute:
    ```bash
-   docker compose ps
+   docker compose ps url-shortener-a url-shortener-b
    ```
-2. Restart the app services to try to bring them back online:
+3. **Emergency Resurrection:** If their states are `Exited` or `Dead`, explicitly force them to spin back up to stop the bleeding:
    ```bash
    docker compose start url-shortener-a url-shortener-b
    ```
-3. If they crash again immediately, check why they are crashing:
+4. **Identify the Root Cause:** If the containers immediately crash again, pull the exact stack trace:
    ```bash
-   docker compose logs url-shortener-a url-shortener-b
+   docker compose logs --tail=50 url-shortener-a
    ```
+   *(Look for explicitly red `SystemExit`, `MemoryError`, or `DBConnectionTimeout` strings at the bottom).*
 
-### 2. `APITargetDown`
-**What it means:** One of our application servers crashed. The system is still partially running, but it has less capacity.
-**How to fix it:**
-1. Check the Discord alert to see which specific target went down (e.g. `url-shortener-a`).
-2. Restart the crashed server:
+### 2. `APITargetDown` (Partial Node Failure)
+**Definition:** One instance nodes failed. The Nginx load balancer is struggling but surviving.
+**Immediate Actionable Procedure:**
+1. **Identify Target:** Look at the exact Discord alert text. It will specify the exact node (e.g., `url-shortener-a`).
+2. **Resurrect Node:** Restart the distinct crashed target without disrupting the healthy ones:
    ```bash
-   docker compose start url-shortener-a
+   # Replace <node-name> with the crashed node
+   docker compose start <node-name>
    ```
-3. Verify it is running again:
+3. **Verify Restoration:** Confirm it returns to a healthy status:
    ```bash
    docker compose ps
    ```
 
-### 3. `HighErrorRate`
-**What it means:** More than 10% of users are seeing immediate errors right now.
-**How to fix it:**
-1. This is usually caused by the database breaking. Check if the database (`db`) is running:
-   ```bash
-   docker compose ps
-   ```
-2. If the database is stopped or stuck, restart it:
+### 3. `HighErrorRate` (Bleeding 5xx Errors)
+**Definition:** >10% of users are getting 500 errors. The app process is up, but functionality is broken.
+**Immediate Actionable Procedure:**
+1. **Isolate Component:** Open the Dashboard UI and check the structured JSON output. Filter explicitly for `ERROR`.
+2. **Database CPR:** If the logs explicitly mention `psycopg2.OperationalError` or Postgres:
    ```bash
    docker compose restart db
    ```
-3. If the database was already running normally, you need to check the app logs to see what the exact error is:
+3. **Cache CPR:** If the logs explicitly mention `redis.exceptions.ConnectionError`:
    ```bash
-   docker compose logs url-shortener-a | grep ERROR
+   docker compose restart redis
    ```
+4. **Rollback:** If this alert fired within 15 minutes of a new feature merge and infrastructure is stable, immediately revert the last repository commit.
 
 ---
 
 ## 🟠 Warning Alerts (Investigate Tomorrow)
+*System is stressed, but natively surviving. Do not wake up for these. Fix them during regular explicitly scheduled hours.*
 
-These alerts mean the system is struggling but still working. You don't need to wake up for these, but review them during normal business hours.
+### 1. `HighLatencyP99` (It's Slow)
+**Actionable Procedure:**
+1. Open the UI Dashboard. Is the "Saturation" (CPU/RAM) graph explicitly maxed out?
+2. If Traffic is normal but Latency is consistently high, the codebase relies on an unoptimized database query. Pinpoint the query using backend logs and add explicit Redis caching.
 
-### 1. `High5xxRate`
-**What it means:** A steady stream of backend errors is happening, but it hasn't crossed the 10% critical threshold.
-**How to investigate:** Look at the error logs. A single broken link or feature might be causing this for a specific group of users.
-
-### 2. `HighLatencyP99`
-**What it means:** The application is responding very slowly (taking longer than 2 seconds) for some users.
-**How to investigate:** The database might need optimization, or the system might be receiving more traffic than it can handle. Check the metrics dashboard to see the total traffic volume.
-
-### 3. `High429Rate`
-**What it means:** Users are hitting our application too fast and getting blocked by our rate limiter.
-**How to investigate:** Check the server logs. If it's a single IP address acting aggressively, they are already blocked automatically. If it's lots of normal users, we may need to increase our servers' capacities.
+### 2. `High429Rate` (Rate Limiting Wall)
+**Actionable Procedure:**
+1. Open the Dashboard Logs UI. The JSON payload will explicitly list the offending `ip_address` spamming requests.
+2. If it is a malicious vulnerability scraper, they are actively banned. No action needed.
+3. If it is a legitimate high-volume enterprise user, alert the customer success team to upgrade their tier limits explicitly.
