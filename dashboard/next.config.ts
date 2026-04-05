@@ -2,7 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  serverExternalPackages: ["dockerode", "@kubernetes/client-node"],
+  serverExternalPackages: ["dockerode"],
   turbopack: {
     root: process.cwd(),
   },

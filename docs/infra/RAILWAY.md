@@ -105,7 +105,27 @@ Older setups used one API service. This repo now expects **`url-shortener-a`**, 
 
 ## Dashboard Ops tab (hosted)
 
-There is no Docker socket on Railway, so the Next.js dashboard cannot use **`dockerode`**. With **`SYNC_VARIABLES=1`**, **`setup-railway.js`** sets **`RAILWAY_PROJECT_ID`**, **`RAILWAY_ENVIRONMENT_ID`**, and **`VISIBILITY_ALERTMANAGER_DISABLED=1`** on the **`dashboard`** service. You still need a **Railway API token** on that service so server-side routes can call the [GraphQL API](https://docs.railway.com/reference/public-api).
+There is no Docker socket on Railway, so the Next.js dashboard cannot use **`dockerode`**. With **`SYNC_VARIABLES=1`**, **`setup-railway.js`** sets **`RAILWAY_PROJECT_ID`**, **`RAILWAY_ENVIRONMENT_ID`**, **`VISIBILITY_ALERTMANAGER_DISABLED=1`**, **`CHAOS_KILL_ENABLED=1`**, and **`RAILWAY_WATCHDOG_AUTO_RECOVER=1`** on the **`dashboard`** service. The hosted watchdog **auto-redeploys only when a deployment is CRASHED or FAILED** — it does **not** redeploy after **Chaos Kill** (`deploymentStop`), so an intentional kill stays down until you **Reboot** or redeploy in Railway. You still need a **Railway API token** on that service so server-side routes can call the [GraphQL API](https://docs.railway.com/reference/public-api).
+
+### Where the “watchdog” runs (hosted)
+
+Production uses a dedicated Git-linked service **`railway-watchdog`** (see **`watchdog-service/`**, root directory **`.`**, Dockerfile **`/watchdog-service/Dockerfile`**). It polls Railway GraphQL and public HTTP heartbeats on an interval and exposes **`GET /v1/status`** and **`GET /v1/stream`** (SSE). **`SYNC_VARIABLES=1`** sets **`WATCHDOG_SERVICE_URL`** on **`dashboard`** to the worker’s private URL so the Next.js app **proxies** the Chaos watchdog card instead of running the loop in-process (avoids duplicate work when several users open the dashboard). Run **`node setup-railway.js`** after adding the service so **watch patterns** and variables stay aligned; **`watchdog-service/railway.toml`** uses a broad **`/**`** watch pattern so deployments are not **SKIPPED** with “No changes to watched files” when your commit only touched paths outside the old narrow list. Keep **one replica** for **`railway-watchdog`**. If a deploy was skipped or the service is offline, use **Redeploy** in Railway or push any commit after pulling this config.
+
+If **`WATCHDOG_SERVICE_URL`** is unset (e.g. local dev), the dashboard falls back to **in-process** polling via API routes. **`compose-watchdog`** in **`docker-compose.yml`** is the separate container for **local Docker** only (Compose container restarts, etc.); it is not the hosted Railway worker.
+
+**Watchdog HTTP heartbeats:** Railway’s GraphQL deployment `url` / `staticUrl` fields are often **hostnames without `https://`**, which breaks `fetch` unless normalized. The shared **`service-heartbeat`** logic prepends **`https://`** for public probes. On the **`railway-watchdog`** service (and any process with **`RAILWAY_PRIVATE_DOMAIN`**), heartbeats default to the **private mesh**: `http://<service-name>.railway.internal:<port>/path` (port **`8080`** or **`RAILWAY_HEARTBEAT_INTERNAL_PORT`**), which matches how **`setup-railway.js`** wires internal URLs elsewhere. Set **`RAILWAY_HEARTBEAT_USE_PRIVATE_URL=0`** on the worker to force public HTTPS probes only.
+
+To apply variable sync from your machine (after **`DASHBOARD_RAILWAY_PROJECT_TOKEN`** is in **`.env.railway.setup`**):
+
+```powershell
+$env:RAILWAY_API_TOKEN = "your-account-token"
+$env:SYNC_VARIABLES = "1"
+node setup-railway.js
+```
+
+Then **redeploy the `dashboard` service** in Railway so it picks up **`CHAOS_KILL_ENABLED`** and the token. If Kill/Reboot stay disabled, open the **dashboard** service → **Variables** and confirm **`CHAOS_KILL_ENABLED=1`**, **`RAILWAY_PROJECT_ID`**, **`RAILWAY_ENVIRONMENT_ID`**, and **`RAILWAY_PROJECT_TOKEN`** (or **`RAILWAY_API_TOKEN`**) are present with **no leading/trailing spaces** in the variable names.
+
+If Railway **service names** in the project do not match the default allowlist (e.g. **`url-shortener-a`**), set **`CHAOS_ALLOWED_SERVICES`** on **`dashboard`** to a comma-separated list of **exact** names from the Ops table, or add **`CHAOS_ALLOWED_SERVICES=...`** to **`.env.railway.setup`** and run **`SYNC_VARIABLES=1`** again.
 
 **Where to add it (pick one):**
 

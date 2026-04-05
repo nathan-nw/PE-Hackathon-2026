@@ -1,0 +1,16 @@
+# Repository root is the service root (see setup-railway.js) so Docker can COPY dashboard/src/lib/watchdog-core.
+# Run a single replica: duplicate timers would double GraphQL load and redeploy attempts.
+#
+# Watch paths are gitignore-style from repo root. A *narrow* list caused SKIPPED deployments
+# ("No changes to watched files") when commits only touched e.g. .gitignore, setup-railway.js,
+# or other services. Matching all paths ensures this service actually builds when you push.
+# (Slightly more rebuilds than strictly necessary; safe for a small worker image.)
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "/watchdog-service/Dockerfile"
+watchPatterns = ["/**", "/*", "/.*"]
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 60

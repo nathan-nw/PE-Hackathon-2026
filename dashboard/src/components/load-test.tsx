@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Card,
   CardContent,
@@ -14,12 +14,20 @@ import { Loader2 } from "lucide-react";
 
 const STATUS_POLL_MS = 2_000;
 
+type K6SeriesPoint = {
+  t: number;
+  vus: number;
+  avg_ms: number;
+};
+
 type K6Status = {
   running: boolean;
   preset: string;
   vus: number;
   duration: string;
   target_url: string;
+  /** API base for k6 (dashboard-backend LOAD_TEST_TARGET_URL); use for hosted custom tests */
+  default_target_url?: string;
   started_at: number;
   elapsed_s: number;
   requests: number;
@@ -29,6 +37,8 @@ type K6Status = {
   p95_duration_ms: number;
   current_vus: number;
   finished: boolean;
+  /** Samples ~0.75s apart: elapsed seconds from test start, active VUs, rolling avg latency */
+  series?: K6SeriesPoint[];
   summary?: Record<string, string>;
   error?: string;
 };
@@ -50,6 +60,181 @@ function StatBox({ label, value, sub }: { label: string; value: string; sub?: st
   );
 }
 
+/** Dual-axis line chart: elapsed time (s) vs active VUs (left) and avg latency ms (right). */
+function VuLatencyChart({
+  series,
+  running,
+}: {
+  series: K6SeriesPoint[];
+  running: boolean;
+}) {
+  const width = 900;
+  const height = 260;
+  const padTop = 22;
+  const padBottom = 40;
+  const padLeft = 48;
+  const padRight = 52;
+  const chartW = width - padLeft - padRight;
+  const chartH = height - padTop - padBottom;
+
+  const { pathVu, pathMs, maxVu, maxMs, ticksX } = useMemo(() => {
+    if (series.length === 0) {
+      return {
+        pathVu: "",
+        pathMs: "",
+        maxVu: 1,
+        maxMs: 1,
+        ticksX: [] as { x: number; label: string }[],
+      };
+    }
+    const maxT = Math.max(...series.map((p) => p.t), 0.1);
+    const maxVu = Math.max(...series.map((p) => p.vus), 1);
+    const maxMs = Math.max(...series.map((p) => p.avg_ms), 1);
+    const xScale = (t: number) => padLeft + (t / maxT) * chartW;
+    const yVu = (v: number) => padTop + chartH - (v / maxVu) * chartH;
+    const yMs = (m: number) => padTop + chartH - (m / maxMs) * chartH;
+
+    const pathVu = series
+      .map((p, i) => `${i === 0 ? "M" : "L"}${xScale(p.t)},${yVu(p.vus)}`)
+      .join(" ");
+    const pathMs = series
+      .map((p, i) => `${i === 0 ? "M" : "L"}${xScale(p.t)},${yMs(p.avg_ms)}`)
+      .join(" ");
+
+    const nX = Math.min(6, Math.max(2, Math.ceil(maxT / 5)));
+    const ticksX: { x: number; label: string }[] = [];
+    for (let i = 0; i <= nX; i++) {
+      const t = (maxT * i) / nX;
+      ticksX.push({ x: xScale(t), label: `${t.toFixed(0)}s` });
+    }
+
+    return { pathVu, pathMs, maxT, maxVu, maxMs, ticksX };
+  }, [series, chartW, chartH, padLeft, padTop]);
+
+  if (series.length === 0) {
+    return (
+      <div
+        className="text-muted-foreground flex min-h-[200px] items-center justify-center rounded-lg border border-dashed text-sm"
+        role="status"
+      >
+        {running ? "Collecting samples…" : "No samples for this run."}
+      </div>
+    );
+  }
+
+  const vuTicks = 4;
+  const msTicks = 4;
+
+  return (
+    <div className="relative w-full">
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        className="w-full text-foreground"
+        style={{ maxHeight: height + 24 }}
+        aria-label="Active VUs and average latency over elapsed time"
+      >
+        {/* Grid + left axis (VUs) */}
+        {Array.from({ length: vuTicks + 1 }, (_, i) => {
+          const v = (maxVu / vuTicks) * i;
+          const y = padTop + chartH - (v / maxVu) * chartH;
+          return (
+            <g key={`vu-${i}`}>
+              <line
+                x1={padLeft}
+                y1={y}
+                x2={padLeft + chartW}
+                y2={y}
+                className="stroke-muted-foreground/15"
+                strokeWidth={1}
+              />
+              <text
+                x={padLeft - 6}
+                y={y + 4}
+                textAnchor="end"
+                className="fill-muted-foreground text-[10px]"
+              >
+                {Math.round(v)}
+              </text>
+            </g>
+          );
+        })}
+        {/* Right axis (ms) */}
+        {Array.from({ length: msTicks + 1 }, (_, i) => {
+          const m = (maxMs / msTicks) * i;
+          const y = padTop + chartH - (m / maxMs) * chartH;
+          return (
+            <text
+              key={`ms-${i}`}
+              x={padLeft + chartW + 8}
+              y={y + 4}
+              className="fill-muted-foreground text-[10px]"
+            >
+              {m.toFixed(0)}ms
+            </text>
+          );
+        })}
+        {/* X ticks */}
+        {ticksX.map((xl, i) => (
+          <text
+            key={i}
+            x={xl.x}
+            y={height - 10}
+            textAnchor="middle"
+            className="fill-muted-foreground text-[10px]"
+          >
+            {xl.label}
+          </text>
+        ))}
+        <text x={padLeft} y={14} className="fill-primary text-[11px] font-medium">
+          Active VUs
+        </text>
+        <text
+          x={padLeft + chartW}
+          y={14}
+          textAnchor="end"
+          className="fill-amber-600 dark:fill-amber-400 text-[11px] font-medium"
+        >
+          Avg latency
+        </text>
+        <text
+          x={width / 2}
+          y={height - 2}
+          textAnchor="middle"
+          className="fill-muted-foreground text-[10px]"
+        >
+          Elapsed time
+        </text>
+        <path
+          d={pathVu}
+          fill="none"
+          className="stroke-primary"
+          strokeWidth={2}
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+        <path
+          d={pathMs}
+          fill="none"
+          className="stroke-amber-600 dark:stroke-amber-400"
+          strokeWidth={2}
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+      </svg>
+      <div className="text-muted-foreground mt-2 flex flex-wrap gap-4 text-xs">
+        <span className="flex items-center gap-1.5">
+          <span className="bg-primary inline-block h-2 w-4 rounded-sm" />
+          Active virtual users (left axis)
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-2 w-4 rounded-sm bg-amber-600 dark:bg-amber-400" />
+          Average latency (right axis)
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function LoadTest() {
   const [status, setStatus] = useState<K6Status | null>(null);
   const [starting, setStarting] = useState(false);
@@ -59,7 +244,9 @@ export function LoadTest() {
   // Custom form state
   const [customVus, setCustomVus] = useState(100);
   const [customDuration, setCustomDuration] = useState("30s");
-  const [customUrl, setCustomUrl] = useState("http://load-balancer:80");
+  const [customUrl, setCustomUrl] = useState(
+    process.env.NEXT_PUBLIC_LOAD_TEST_TARGET_URL ?? "http://load-balancer:80",
+  );
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -75,10 +262,20 @@ export function LoadTest() {
     fetchStatus();
   }, [fetchStatus]);
 
+  // Hosted: replace Compose-only default so custom tests do not target http://load-balancer:80.
   useEffect(() => {
-    const id = window.setInterval(fetchStatus, STATUS_POLL_MS);
+    const d = status?.default_target_url?.trim();
+    if (!d) return;
+    setCustomUrl((prev) =>
+      prev === "http://load-balancer:80" || prev === "http://127.0.0.1:8080" ? d : prev,
+    );
+  }, [status?.default_target_url]);
+
+  useEffect(() => {
+    const pollMs = status?.running ? 1_000 : STATUS_POLL_MS;
+    const id = window.setInterval(fetchStatus, pollMs);
     return () => window.clearInterval(id);
-  }, [fetchStatus]);
+  }, [fetchStatus, status?.running]);
 
   const startTest = async (body: Record<string, unknown>) => {
     setStarting(true);
@@ -265,6 +462,18 @@ export function LoadTest() {
             </CardDescription>
           </CardHeader>
           <CardContent>
+            <div className="mb-6 space-y-2">
+              <div className="text-sm font-medium">Load over time</div>
+              <p className="text-muted-foreground text-xs">
+                Active virtual users (primary) and rolling average HTTP latency (amber), sampled about
+                once per second while the test runs.
+              </p>
+              <VuLatencyChart
+                series={status.series ?? []}
+                running={isRunning}
+              />
+            </div>
+
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
               <StatBox
                 label="Active VUs"

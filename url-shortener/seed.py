@@ -162,7 +162,7 @@ if __name__ == "__main__":
                     print("Not using PostgreSQL; nothing to do.")
                 else:
                     _reset_postgres_serial_sequences()
-                    print("PostgreSQL serial sequences updated (users, urls, events).")
+                    print("PostgreSQL serial sequences updated (users, urls, events, load_test_results).")
             else:
                 seed(
                     args.csv_dir,
