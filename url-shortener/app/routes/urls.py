@@ -132,6 +132,10 @@ def list_urls():
     if user_id is not None:
         query = query.where(Url.user_id == user_id)
 
+    is_active = request.args.get("is_active")
+    if is_active is not None:
+        query = query.where(Url.is_active == (is_active.lower() == "true"))
+
     total = query.count()
     urls = query.paginate(page, per_page)
 
