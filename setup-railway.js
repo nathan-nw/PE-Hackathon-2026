@@ -33,6 +33,7 @@
  *   DASHBOARD_RAILWAY_PROJECT_TOKEN=…  — optional; with SYNC_VARIABLES=1, upserts RAILWAY_PROJECT_TOKEN on the dashboard service (Ops tab GraphQL)
  *   DASHBOARD_RAILWAY_API_TOKEN=…  — optional; same but RAILWAY_API_TOKEN (account token); used only if project token is unset
  *   USER_FRONTEND_BACKEND_URL=…  — optional; with SYNC_VARIABLES=1, sets user-frontend BACKEND_URL to this literal (e.g. https://load-balancer-….up.railway.app) instead of the load-balancer service reference
+ *   LOG_INGEST_TOKEN=…  — shared secret for HTTP log shipping when no Kafka plugin: set the same value on dashboard-backend and url-shortener replicas (required for /api/ingest on hosted)
  */
 
 const fs = require("fs");
@@ -378,6 +379,16 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
   const kafka = kafkaService;
   const pgDashboard = dashboardPg || pg;
 
+  const logIngestToken = (process.env.LOG_INGEST_TOKEN || "").trim();
+  const logIngestUrl =
+    byName.has("dashboard-backend") && !kafka && logIngestToken
+      ? "http://" +
+        varRef("dashboard-backend", "RAILWAY_PRIVATE_DOMAIN") +
+        ":" +
+        varRef("dashboard-backend", "PORT") +
+        "/api/ingest"
+      : null;
+
   // url-shortener-a / url-shortener-b: same env as compose replicas (shared DB; distinct INSTANCE_ID).
   // Explicit PORT so ${{ url-shortener-a.PORT }} resolves on the load-balancer (runtime-only PORT is
   // not referenceable from other services — see Railway variables docs / Help Station).
@@ -391,6 +402,9 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
       ? { RATE_LIMIT_STORAGE: varRef(redis, "REDIS_URL") }
       : { RATE_LIMIT_STORAGE: "memory://" }),
     ...(kafka ? { KAFKA_BOOTSTRAP_SERVERS: kafkaBootstrapRef(kafka) } : {}),
+    ...(logIngestUrl
+      ? { LOG_INGEST_URL: logIngestUrl, LOG_INGEST_TOKEN: logIngestToken }
+      : {}),
   };
   await upsert("url-shortener-a", { ...urlShortenerBase, INSTANCE_ID: "1" });
   await upsert("url-shortener-b", { ...urlShortenerBase, INSTANCE_ID: "2" });
@@ -407,6 +421,11 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
     console.warn(
       `(Variable sync) No Kafka-like service — KAFKA_BOOTSTRAP_SERVERS not set (compose uses kafka:9092; add a broker + RAILWAY_KAFKA_SERVICE_NAME if you want log shipping).`
     );
+    if (byName.has("dashboard-backend") && !logIngestToken) {
+      console.warn(
+        `(Variable sync) No LOG_INGEST_TOKEN in .env.railway.setup — API logs will not reach dashboard-backend over HTTP. Add LOG_INGEST_TOKEN=<secret> and re-run SYNC_VARIABLES=1, or add a Kafka plugin.`
+      );
+    }
   } else {
     console.log(
       `(Variable sync) Kafka service: "${kafka}" (bootstrap var: ${process.env.RAILWAY_KAFKA_BOOTSTRAP_VAR || "KAFKA_URL"})`
@@ -440,6 +459,7 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
     CACHE_MAX_ENTRIES: "1000",
     DB_FLUSH_INTERVAL: "30",
     ...(kafka ? { KAFKA_BOOTSTRAP_SERVERS: kafkaBootstrapRef(kafka) } : {}),
+    ...(logIngestToken ? { LOG_INGEST_TOKEN: logIngestToken } : {}),
   };
   await upsert("dashboard-backend", dashboardBackendVars);
 

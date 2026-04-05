@@ -11,7 +11,7 @@ import os
 import threading
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from cache import LogCache
@@ -28,6 +28,12 @@ KAFKA_TOPIC = os.environ.get("KAFKA_LOG_TOPIC", "app-logs")
 # Set empty, omit, or DISABLED for hosts without Kafka (e.g. Railway); logs tab stays empty.
 KAFKA_ENABLED = bool(
     KAFKA_BOOTSTRAP_SERVERS.strip() and KAFKA_BOOTSTRAP_SERVERS.strip().upper() != "DISABLED"
+)
+LOG_INGEST_TOKEN = os.environ.get("LOG_INGEST_TOKEN", "").strip()
+ALLOW_INSECURE_LOG_INGEST = os.environ.get("ALLOW_INSECURE_LOG_INGEST", "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
 )
 CACHE_MAX_ENTRIES = int(os.environ.get("CACHE_MAX_ENTRIES", "1000"))
 DB_FLUSH_INTERVAL = float(os.environ.get("DB_FLUSH_INTERVAL", "30"))
@@ -75,9 +81,57 @@ def health():
     return {
         "status": "ok",
         "kafka_topic": KAFKA_TOPIC,
+        "kafka_enabled": KAFKA_ENABLED,
+        "http_ingest_enabled": bool(LOG_INGEST_TOKEN) or ALLOW_INSECURE_LOG_INGEST,
         "log_cache_ingested": st["total_ingested"],
         "log_cache_buffered": st["buffered_logs"],
     }
+
+
+@app.post("/api/ingest")
+async def ingest_logs(request: Request):
+    """Receive the same JSON payloads as the Kafka topic (Railway without Kafka).
+
+    When ``LOG_INGEST_TOKEN`` is set, require header ``X-Log-Ingest-Token`` (or
+    ``Authorization: Bearer …``). If unset, reject unless ``ALLOW_INSECURE_LOG_INGEST=1``
+    (local development only).
+    """
+    if LOG_INGEST_TOKEN:
+        got = request.headers.get("x-log-ingest-token") or ""
+        if not got:
+            auth = request.headers.get("authorization") or ""
+            if auth.lower().startswith("bearer "):
+                got = auth[7:].strip()
+        if got != LOG_INGEST_TOKEN:
+            raise HTTPException(status_code=401, detail="Invalid log ingest token")
+    elif not ALLOW_INSECURE_LOG_INGEST:
+        raise HTTPException(
+            status_code=503,
+            detail="Set LOG_INGEST_TOKEN on this service (and the same value as LOG_INGEST_TOKEN on url-shortener replicas), or ALLOW_INSECURE_LOG_INGEST=1 for local dev only",
+        )
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON body required") from None
+
+    if isinstance(body, list):
+        entries = body
+    elif isinstance(body, dict) and "entries" in body:
+        entries = body["entries"]
+        if not isinstance(entries, list):
+            raise HTTPException(status_code=400, detail="entries must be a list")
+    elif isinstance(body, dict):
+        entries = [body]
+    else:
+        raise HTTPException(status_code=400, detail="Expected JSON object or array")
+
+    n = 0
+    for e in entries:
+        if isinstance(e, dict):
+            cache.add(e)
+            n += 1
+    return {"ingested": n, "status": "ok"}
 
 
 @app.get("/api/logs")

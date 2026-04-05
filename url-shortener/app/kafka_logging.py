@@ -10,6 +10,21 @@ from datetime import UTC, datetime
 from typing import Any
 
 
+def log_record_to_payload(record: logging.LogRecord, instance_id: str) -> dict[str, Any]:
+    """Structured log dict — same shape consumed by dashboard-backend (Kafka or HTTP ingest)."""
+    payload: dict[str, Any] = {
+        "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "level": record.levelname,
+        "logger": record.name,
+        "message": record.getMessage(),
+        "instance_id": instance_id,
+    }
+    for key in ("request_id", "trace_id", "method", "path", "status_code", "duration_ms"):
+        if hasattr(record, key):
+            payload[key] = getattr(record, key)
+    return payload
+
+
 class KafkaLogHandler(logging.Handler):
     """Logging handler that sends JSON log records to a Kafka topic.
 
@@ -53,18 +68,9 @@ class KafkaLogHandler(logging.Handler):
             if producer is None:
                 return
 
-            payload: dict[str, Any] = {
-                "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                "level": record.levelname,
-                "logger": record.name,
-                "message": record.getMessage(),
-                "instance_id": self._instance_id,
-            }
+            payload = log_record_to_payload(record, self._instance_id)
             if record.exc_info and record.exc_info[0] is not None:
                 payload["exc_info"] = self.format(record) if self.formatter else str(record.exc_info)
-            for key in ("request_id", "trace_id", "method", "path", "status_code", "duration_ms"):
-                if hasattr(record, key):
-                    payload[key] = getattr(record, key)
 
             producer.produce(
                 self._topic,
