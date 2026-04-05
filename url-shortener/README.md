@@ -67,7 +67,7 @@ docker compose up -d --build
 # API via LB:        http://localhost:8080/health
 # Liveness / ready:  GET http://localhost:8080/live   GET http://localhost:8080/ready
 # Prometheus UI:     http://localhost:9090  (scrapes replicas directly on the Docker network)
-# NGINX stub_status: http://localhost:8081/nginx_status  (LB-level; allow rules in load-balancer/nginx.conf)
+# NGINX stub_status: http://localhost:8081/nginx_status  (LB-level; allow rules in load-balancer/nginx.conf.template)
 # Per-replica metrics: GET http://localhost:8080/metrics  (Prometheus; per Gunicorn worker unless multiprocess mode)
 # Dashboard:         http://localhost:3001/
 # User UI:           http://localhost:3002/

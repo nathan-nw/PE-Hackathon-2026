@@ -194,7 +194,7 @@ class TestInitDb:
     def test_retries_and_fails(self, mock_get_conn, mock_sleep):
         result = init_db()
         assert result is False
-        assert mock_get_conn.call_count == 30
+        assert mock_get_conn.call_count == 20
 
 
 # ---------------------------------------------------------------------------
