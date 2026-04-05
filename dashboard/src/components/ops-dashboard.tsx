@@ -389,10 +389,10 @@ export function OpsDashboard() {
     );
   }, [docker]);
 
-  const showDockerStats =
-    includeStats && docker?.source !== "railway";
+  /** CPU/memory columns: Docker via container stats; Railway via GraphQL metrics. */
+  const showResourceStats = includeStats;
 
-  const serviceTableColCount = showDockerStats ? 9 : 6;
+  const serviceTableColCount = showResourceStats ? 9 : 6;
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-8">
@@ -408,17 +408,15 @@ export function OpsDashboard() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {docker?.source !== "railway" && (
-            <label className="text-muted-foreground flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={includeStats}
-                onChange={(e) => setIncludeStats(e.target.checked)}
-                className="accent-primary rounded border"
-              />
-              Docker stats
-            </label>
-          )}
+          <label className="text-muted-foreground flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={includeStats}
+              onChange={(e) => setIncludeStats(e.target.checked)}
+              className="accent-primary rounded border"
+            />
+            Show stats
+          </label>
           <label className="text-muted-foreground flex items-center gap-2 text-sm">
             <input
               type="checkbox"
@@ -525,7 +523,7 @@ export function OpsDashboard() {
                     <TableHead>State</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="w-[120px]">App logs</TableHead>
-                    {showDockerStats && (
+                    {showResourceStats && (
                       <>
                         <TableHead>CPU %</TableHead>
                         <TableHead>Memory</TableHead>
@@ -617,7 +615,7 @@ export function OpsDashboard() {
                             );
                           })()}
                         </TableCell>
-                        {showDockerStats && (
+                        {showResourceStats && (
                           <>
                             <TableCell>
                               {c.cpuPercent != null

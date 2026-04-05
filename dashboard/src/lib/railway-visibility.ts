@@ -26,11 +26,18 @@ export type RailwayVisibilityRow = {
   railwayServiceId: string;
   railwayDeploymentId?: string;
   railwayPublicUrl?: string;
+  /** From Railway metrics API when `includeStats` (same units as Docker rows for the Ops table). */
+  cpuPercent?: number;
+  memUsage?: number;
+  memLimit?: number;
 };
 
 type GqlResponse<T> = { data?: T; errors?: { message: string }[] };
 
-async function gql<T>(query: string, variables?: Record<string, string>): Promise<T> {
+async function gql<T>(
+  query: string,
+  variables?: Record<string, unknown>
+): Promise<T> {
   const res = await fetch(ENDPOINT, {
     method: "POST",
     headers: {
@@ -150,6 +157,144 @@ function buildBatchDeploymentsQuery(
   return { query, aliasKeys };
 }
 
+const Q_ENV_METRICS = `
+  query RailwayEnvMetrics(
+    $environmentId: String!
+    $startDate: DateTime!
+    $measurements: [MetricMeasurement!]!
+    $groupBy: [MetricTag!]
+  ) {
+    metrics(
+      environmentId: $environmentId
+      startDate: $startDate
+      measurements: $measurements
+      groupBy: $groupBy
+    ) {
+      measurement
+      tags {
+        serviceId
+      }
+      values {
+        ts
+        value
+      }
+    }
+  }
+`;
+
+type MetricsQueryData = {
+  metrics: {
+    measurement: string;
+    tags: { serviceId?: string | null } | null;
+    values: { ts: string; value: number }[] | null;
+  }[] | null;
+};
+
+type ServiceMetricAcc = {
+  cpuUsage?: number;
+  cpuLimit?: number;
+  memUsageGb?: number;
+  memLimitGb?: number;
+};
+
+function latestMetricValue(
+  values: { ts: string; value: number }[] | null | undefined
+): number | undefined {
+  if (!values?.length) return undefined;
+  let best = values[0]!;
+  let bestT = new Date(best.ts).getTime();
+  for (let i = 1; i < values.length; i++) {
+    const v = values[i]!;
+    const t = new Date(v.ts).getTime();
+    if (t >= bestT) {
+      bestT = t;
+      best = v;
+    }
+  }
+  return best.value;
+}
+
+/**
+ * Latest CPU/memory per service from Railway observability (GraphQL `metrics`).
+ * Requires the same token scope as other project queries.
+ */
+async function fetchRailwayServiceMetricsByServiceId(
+  environmentId: string
+): Promise<Map<string, ServiceMetricAcc>> {
+  const out = new Map<string, ServiceMetricAcc>();
+  const startDate = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+  let data: MetricsQueryData;
+  try {
+    data = await gql<MetricsQueryData>(Q_ENV_METRICS, {
+      environmentId,
+      startDate,
+      measurements: [
+        "CPU_USAGE",
+        "CPU_LIMIT",
+        "MEMORY_USAGE_GB",
+        "MEMORY_LIMIT_GB",
+      ],
+      groupBy: ["SERVICE_ID"],
+    });
+  } catch {
+    return out;
+  }
+
+  const rows = data.metrics;
+  if (!rows?.length) return out;
+
+  for (const row of rows) {
+    const sid = row.tags?.serviceId;
+    if (!sid) continue;
+    let acc = out.get(sid);
+    if (!acc) {
+      acc = {};
+      out.set(sid, acc);
+    }
+    const v = latestMetricValue(row.values ?? undefined);
+    if (v == null || Number.isNaN(v)) continue;
+    const m = row.measurement;
+    if (m === "CPU_USAGE") acc.cpuUsage = v;
+    else if (m === "CPU_LIMIT") acc.cpuLimit = v;
+    else if (m === "MEMORY_USAGE_GB") acc.memUsageGb = v;
+    else if (m === "MEMORY_LIMIT_GB") acc.memLimitGb = v;
+  }
+
+  return out;
+}
+
+function applyRailwayMetricsToRows(
+  rows: RailwayVisibilityRow[],
+  byService: Map<string, ServiceMetricAcc>
+): RailwayVisibilityRow[] {
+  const gb = 1024 ** 3;
+  return rows.map((row) => {
+    const acc = byService.get(row.railwayServiceId);
+    if (!acc) return row;
+
+    let cpuPercent: number | undefined;
+    if (
+      acc.cpuUsage != null &&
+      acc.cpuLimit != null &&
+      acc.cpuLimit > 0
+    ) {
+      cpuPercent = (acc.cpuUsage / acc.cpuLimit) * 100;
+    }
+
+    let memUsage: number | undefined;
+    let memLimit: number | undefined;
+    if (acc.memUsageGb != null) memUsage = acc.memUsageGb * gb;
+    if (acc.memLimitGb != null) memLimit = acc.memLimitGb * gb;
+
+    return {
+      ...row,
+      ...(cpuPercent != null ? { cpuPercent } : {}),
+      ...(memUsage != null ? { memUsage } : {}),
+      ...(memLimit != null ? { memLimit } : {}),
+    };
+  });
+}
+
 export function railwayIdsConfigured(): boolean {
   return Boolean(
     runtimeEnv("RAILWAY_PROJECT_ID") && runtimeEnv("RAILWAY_ENVIRONMENT_ID")
@@ -160,7 +305,9 @@ export function railwayVisibilityConfigured(): boolean {
   return railwayIdsConfigured() && hasRailwayGraphqlCredential();
 }
 
-export async function fetchRailwayVisibilityRows(): Promise<{
+export async function fetchRailwayVisibilityRows(options?: {
+  includeStats?: boolean;
+}): Promise<{
   project: string;
   projectId: string;
   containers: RailwayVisibilityRow[];
@@ -241,6 +388,16 @@ export async function fetchRailwayVisibilityRows(): Promise<{
       railwayDeploymentId: dep?.id,
       railwayPublicUrl: publicUrl ?? undefined,
     });
+  }
+
+  const includeStats = Boolean(options?.includeStats);
+  if (includeStats && rows.length > 0) {
+    const byService = await fetchRailwayServiceMetricsByServiceId(environmentId);
+    return {
+      project: projectName,
+      projectId,
+      containers: applyRailwayMetricsToRows(rows, byService),
+    };
   }
 
   return { project: projectName, projectId, containers: rows };

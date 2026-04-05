@@ -54,7 +54,7 @@ export async function GET(request: NextRequest) {
           : {}),
       });
     }
-    const r = await fetchRailwayVisibilityRows();
+    const r = await fetchRailwayVisibilityRows({ includeStats: stats });
     return NextResponse.json({
       source: "railway" as const,
       project: r.project,
