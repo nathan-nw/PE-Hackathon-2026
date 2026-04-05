@@ -1,3 +1,4 @@
+import contextlib
 import csv
 import os
 from datetime import UTC, datetime
@@ -47,7 +48,10 @@ def create_user():
         return jsonify({"error": "email and username are required"}), 400
 
     now = datetime.now(UTC)
-    user = User.create(username=username, email=email, created_at=now)
+    try:
+        user = User.create(username=username, email=email, created_at=now)
+    except Exception:
+        return jsonify({"error": "User with that username or email already exists"}), 409
 
     return jsonify(model_to_dict(user, backrefs=False)), 201
 
@@ -74,6 +78,7 @@ def bulk_load_users():
         return jsonify({"error": "No file provided"}), 400
 
     created = 0
+    skipped = 0
     with db.atomic():
         for row in rows:
             username = row.get("username", "").strip()
@@ -82,8 +87,21 @@ def bulk_load_users():
                 continue
             created_at = row.get("created_at", "").strip()
             row_id = row.get("id", "").strip()
-            # Skip duplicates
+            # Upsert by id: if row has an explicit id, replace existing row
+            if row_id:
+                int_id = int(row_id)
+                existing = User.select().where(User.id == int_id).first()
+                if existing:
+                    existing.username = username
+                    existing.email = email
+                    if created_at:
+                        existing.created_at = created_at
+                    existing.save()
+                    created += 1
+                    continue
+            # Skip if username or email already taken
             if User.select().where((User.username == username) | (User.email == email)).exists():
+                skipped += 1
                 continue
             fields = {"username": username, "email": email, "created_at": created_at or datetime.now(UTC)}
             if row_id:
@@ -91,4 +109,8 @@ def bulk_load_users():
             User.create(**fields)
             created += 1
 
-    return jsonify({"message": f"Imported {created} users", "row_count": created}), 201
+    # Fix PostgreSQL sequence after explicit id inserts
+    with contextlib.suppress(Exception):
+        db.execute_sql("SELECT setval('users_id_seq', (SELECT COALESCE(MAX(id), 1) FROM users));")
+
+    return jsonify({"message": f"Imported {created} users", "row_count": created, "skipped": skipped}), 201
