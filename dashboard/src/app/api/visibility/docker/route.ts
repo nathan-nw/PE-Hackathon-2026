@@ -1,6 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { ContainerStats } from "dockerode";
 import { getDockerConnectionOptions } from "@/lib/docker-options";
+import {
+  debugEnvEnabled,
+  getRailwayEnvDebugSnapshot,
+  runtimeEnv,
+} from "@/lib/server-runtime-env";
+import {
+  fetchRailwayVisibilityRows,
+  railwayIdsConfigured,
+  railwayVisibilityConfigured,
+} from "@/lib/railway-visibility";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,7 +36,33 @@ function cpuPercentFromStats(stats: ContainerStats): number | undefined {
 export async function GET(request: NextRequest) {
   const stats = request.nextUrl.searchParams.get("stats") === "1";
   const project =
-    process.env.VISIBILITY_COMPOSE_PROJECT || "pe-hackathon-2026";
+    runtimeEnv("VISIBILITY_COMPOSE_PROJECT") || "pe-hackathon-2026";
+
+  if (railwayIdsConfigured()) {
+    if (!railwayVisibilityConfigured()) {
+      const pid = runtimeEnv("RAILWAY_PROJECT_ID") ?? "";
+      const baseError =
+        "Set RAILWAY_PROJECT_TOKEN or RAILWAY_API_TOKEN on the dashboard service (variable names must not have leading/trailing spaces). Redeploy after fixing.";
+      return NextResponse.json({
+        source: "railway" as const,
+        project: pid,
+        projectId: pid,
+        containers: [],
+        error: baseError,
+        ...(debugEnvEnabled()
+          ? { envDebug: getRailwayEnvDebugSnapshot() }
+          : {}),
+      });
+    }
+    const r = await fetchRailwayVisibilityRows({ includeStats: stats });
+    return NextResponse.json({
+      source: "railway" as const,
+      project: r.project,
+      projectId: r.projectId,
+      containers: r.containers,
+      error: r.error,
+    });
+  }
 
   try {
     const docker = await getDocker();
@@ -80,11 +116,15 @@ export async function GET(request: NextRequest) {
       })
     );
 
-    return NextResponse.json({ project, containers: rows });
+    return NextResponse.json({
+      source: "docker" as const,
+      project,
+      containers: rows,
+    });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Unknown error";
     return NextResponse.json(
-      { error: message, project, containers: [] },
+      { source: "docker" as const, error: message, project, containers: [] },
       { status: 503 }
     );
   }

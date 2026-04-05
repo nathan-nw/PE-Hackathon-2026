@@ -5,9 +5,11 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Load `.env` before importing `app.metrics` so INSTANCE_ID is visible to Prometheus registration.
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+# Do not override variables already set by the host / `railway run` (e.g. DATABASE_URL).
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
 
-from flask import Flask, jsonify, render_template  # noqa: E402
+from flask import Flask, jsonify, render_template, request  # noqa: E402
+from flask_cors import CORS  # noqa: E402
 
 from app.cache import init_cache  # noqa: E402
 from app.circuit_breaker import db_circuit_breaker  # noqa: E402
@@ -21,6 +23,13 @@ from app.routes import register_routes  # noqa: E402
 
 def create_app():
     app = Flask(__name__)
+
+    # Browser clients (e.g. user-frontend on another port / Railway subdomain) call POST /shorten.
+    _cors = os.environ.get("CORS_ORIGINS", "*").strip()
+    if _cors == "*":
+        CORS(app)
+    else:
+        CORS(app, origins=[o.strip() for o in _cors.split(",") if o.strip()])
 
     configure_logging()
 
@@ -36,6 +45,8 @@ def create_app():
         key_func=get_remote_address,
         default_limits=[os.environ.get("RATE_LIMIT_DEFAULT", "5000 per minute")],
         storage_uri=os.environ.get("RATE_LIMIT_STORAGE", "memory://"),
+        # CORS preflight must not get 429 without Access-Control-* (browsers show generic CORS failure).
+        default_limits_exempt_when=lambda: request.method == "OPTIONS",
     )
     app.limiter = limiter
 
@@ -68,6 +79,12 @@ def create_app():
             )
 
     # Register before API blueprints so `/`, `/health`, and `/metrics` are not shadowed by `/<short_code>`.
+    @app.route("/favicon.ico")
+    @limiter.exempt
+    def favicon():
+        """Avoid /<short_code> treating 'favicon.ico' as a code (and hitting the DB)."""
+        return ("", 204)
+
     @app.route("/")
     def index():
         return render_template("index.html")

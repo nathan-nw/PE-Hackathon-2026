@@ -1,0 +1,8 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+watchPatterns = ["/user-frontend/**"]
+
+[deploy]
+healthcheckPath = "/"
+healthcheckTimeout = 30

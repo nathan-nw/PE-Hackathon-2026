@@ -13,6 +13,8 @@ EOF
 WORKDIR /app
 COPY . .
 
-EXPOSE 8000
+# Railway sets PORT at runtime (sync script pins 8080 to match url-shortener / variable references).
+EXPOSE 8080
+ENV PORT=8080
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"]

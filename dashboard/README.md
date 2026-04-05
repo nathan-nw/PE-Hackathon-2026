@@ -1,6 +1,6 @@
 # Dashboard (Next.js)
 
-Operations visibility UI for the Compose stack: Docker containers filtered by Compose project, optional Kubernetes pods, Alertmanager alerts, **Kafka-backed app logs** (via `dashboard-backend`), and links to Prometheus and Alertmanager.
+Operations visibility UI: **Docker** (Compose project filter) or **Railway** (GraphQL — no Docker socket in the cloud), optional Kubernetes pods, Alertmanager alerts, **Kafka-backed app logs** (via `dashboard-backend`), and links to Prometheus and Alertmanager.
 
 ## Run locally
 
@@ -37,6 +37,9 @@ docker build \
 | `NEXT_PUBLIC_PROMETHEUS_URL` | Browser link base for Prometheus (baked at build). |
 | `NEXT_PUBLIC_ALERTMANAGER_PUBLIC_URL` | Browser link base for Alertmanager UI (baked at build). |
 | `DASHBOARD_BACKEND_URL` | FastAPI service that caches Kafka logs (`http://dashboard-backend:8000` in Compose; `http://127.0.0.1:8000` for `next dev` when the backend is published on the host). |
+| `RAILWAY_PROJECT_ID` / `RAILWAY_ENVIRONMENT_ID` | When both are set, the Ops tab uses the Railway GraphQL API instead of Docker (required on Railway hosting). |
+| `RAILWAY_PROJECT_TOKEN` or `RAILWAY_API_TOKEN` | Token for that API ([project token](https://docs.railway.com/reference/public-api#project-token) or account token). **Server-side only** — never `NEXT_PUBLIC_*`. |
+| `VISIBILITY_ALERTMANAGER_DISABLED` | Set to `1` when Alertmanager is not deployed (e.g. hosted Railway); the Alerts tab returns an empty list without erroring. |
 
 ## Kafka logs (Logs tab)
 
