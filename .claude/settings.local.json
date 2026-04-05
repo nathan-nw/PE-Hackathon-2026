@@ -18,7 +18,8 @@
       "Bash(cmd.exe:*)",
       "Bash(python -m json.tool)",
       "Bash(docker exec hackathon_redis:*)",
-      "Bash(python -m ruff check .)"
+      "Bash(python -m ruff check .)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('id'\\)\\)\")"
     ]
   }
 }

@@ -8,6 +8,7 @@ from playhouse.shortcuts import model_to_dict
 
 from app.database import db
 from app.models.user import User
+from app.request_helpers import parse_json_body
 
 CSV_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "csv_data")
 
@@ -38,9 +39,9 @@ def get_user(user_id):
 
 @users_bp.route("/users", methods=["POST"])
 def create_user():
-    data = request.get_json(silent=True)
-    if data is None or not isinstance(data, dict):
-        return jsonify({"error": "Invalid or missing JSON body"}), 400
+    data, err = parse_json_body()
+    if err:
+        return err
 
     email = data.get("email")
     username = data.get("username")
@@ -71,9 +72,9 @@ def update_user(user_id):
     except User.DoesNotExist:
         return jsonify({"error": "User not found"}), 404
 
-    data = request.get_json(silent=True)
-    if data is None or not isinstance(data, dict):
-        return jsonify({"error": "Invalid or missing JSON body"}), 400
+    data, err = parse_json_body()
+    if err:
+        return err
 
     if "username" in data:
         if not isinstance(data["username"], str) or not data["username"].strip():

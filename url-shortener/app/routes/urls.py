@@ -18,6 +18,7 @@ from app.database import db
 from app.models.event import Event
 from app.models.url import Url
 from app.models.user import User
+from app.request_helpers import parse_json_body
 
 
 def _validate_url(url_string):
@@ -46,19 +47,9 @@ def generate_short_code(length=6):
 @urls_bp.route("/shorten", methods=["POST"])
 @urls_bp.route("/urls", methods=["POST"])
 def create_short_url():
-    data = request.get_json(silent=True)
-    if data is None:
-        return (
-            jsonify(
-                {
-                    "error": "Invalid or missing JSON body",
-                    "hint": "Send a JSON object with Content-Type: application/json",
-                }
-            ),
-            400,
-        )
-    if not isinstance(data, dict):
-        return jsonify({"error": "Request body must be a JSON object"}), 400
+    data, err = parse_json_body()
+    if err:
+        return err
     if "original_url" not in data or "user_id" not in data:
         return jsonify({"error": "original_url and user_id are required"}), 400
 
@@ -175,18 +166,10 @@ def update_url(url_id):
     except Url.DoesNotExist:
         return jsonify({"error": "URL not found"}), 404
 
-    data = request.get_json(silent=True)
-    if data is None:
-        return (
-            jsonify(
-                {
-                    "error": "Invalid or missing JSON body",
-                    "hint": "Send a JSON object with Content-Type: application/json",
-                }
-            ),
-            400,
-        )
-    if not isinstance(data, dict) or len(data) == 0:
+    data, err = parse_json_body()
+    if err:
+        return err
+    if len(data) == 0:
         return jsonify({"error": "No data provided"}), 400
 
     if "original_url" in data:
