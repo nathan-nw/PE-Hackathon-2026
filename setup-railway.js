@@ -34,8 +34,10 @@
  *   DASHBOARD_RAILWAY_API_TOKEN=…  — optional; same but RAILWAY_API_TOKEN (account token); used only if project token is unset
  *   USER_FRONTEND_BACKEND_URL=…  — optional; with SYNC_VARIABLES=1, sets user-frontend BACKEND_URL to this literal (e.g. https://load-balancer-….up.railway.app) instead of the load-balancer service reference
  *   LOG_INGEST_TOKEN=…  — shared secret for HTTP log shipping when no Kafka plugin: set the same value on dashboard-backend and url-shortener replicas (required for /api/ingest on hosted)
+ *   SKIP_LOG_INGEST_AUTO_TOKEN=1  — do not auto-generate LOG_INGEST_TOKEN when unset (SYNC_VARIABLES + no Kafka)
  */
 
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
@@ -59,6 +61,97 @@ function loadOptionalEnvFile() {
     }
     if (process.env[key] === undefined) process.env[key] = val;
   }
+}
+
+function readLogIngestTokenFromFile(setupPath) {
+  if (!fs.existsSync(setupPath)) return "";
+  const text = fs.readFileSync(setupPath, "utf8");
+  for (const line of text.split(/\r?\n/)) {
+    const s = line.trim();
+    if (!s || s.startsWith("#")) continue;
+    const eq = s.indexOf("=");
+    if (eq <= 0) continue;
+    const key = s.slice(0, eq).trim();
+    if (key !== "LOG_INGEST_TOKEN") continue;
+    let val = s.slice(eq + 1).trim();
+    if (
+      (val.startsWith('"') && val.endsWith('"')) ||
+      (val.startsWith("'") && val.endsWith("'"))
+    ) {
+      val = val.slice(1, -1);
+    }
+    const trimmed = val.trim();
+    if (trimmed) return trimmed;
+  }
+  return "";
+}
+
+/**
+ * When there is no Kafka broker, API replicas ship logs to dashboard-backend via HTTP POST /api/ingest.
+ * That requires the same LOG_INGEST_TOKEN on dashboard-backend and both url-shortener services.
+ * If unset, generate a secret and persist into `.env.railway.setup` (gitignored) so the next sync is stable.
+ */
+function ensureLogIngestTokenForHttpIngest(byName, kafkaService) {
+  if (kafkaService) return;
+  const skip =
+    process.env.SKIP_LOG_INGEST_AUTO_TOKEN === "1" ||
+    process.env.SKIP_LOG_INGEST_AUTO_TOKEN === "true";
+  if (skip) return;
+
+  if (!byName.has("dashboard-backend") || !byName.has("url-shortener-a")) return;
+
+  const setupPath = path.join(__dirname, ".env.railway.setup");
+  const examplePath = path.join(__dirname, ".env.railway.setup.example");
+
+  let t = (process.env.LOG_INGEST_TOKEN || "").trim();
+  if (!t) {
+    t = readLogIngestTokenFromFile(setupPath);
+    if (t) process.env.LOG_INGEST_TOKEN = t;
+  }
+  if ((process.env.LOG_INGEST_TOKEN || "").trim()) return;
+
+  t = crypto.randomBytes(32).toString("hex");
+  process.env.LOG_INGEST_TOKEN = t;
+
+  if (!fs.existsSync(setupPath)) {
+    if (fs.existsSync(examplePath)) {
+      fs.copyFileSync(examplePath, setupPath);
+    } else {
+      fs.writeFileSync(
+        setupPath,
+        "# Railway setup — see RAILWAY.md\nRAILWAY_API_TOKEN=\n",
+        "utf8"
+      );
+    }
+  }
+  let text = fs.readFileSync(setupPath, "utf8");
+  if (/^\s*LOG_INGEST_TOKEN\s*=\s*\S/m.test(text)) {
+    const fromFile = readLogIngestTokenFromFile(setupPath);
+    if (fromFile) {
+      process.env.LOG_INGEST_TOKEN = fromFile;
+    } else {
+      console.warn(
+        "(Variable sync) .env.railway.setup has a LOG_INGEST_TOKEN line that could not be parsed; fix the file or export LOG_INGEST_TOKEN in the shell."
+      );
+    }
+    return;
+  }
+  if (/^\s*LOG_INGEST_TOKEN\s*=/m.test(text)) {
+    text = text.replace(/^(\s*LOG_INGEST_TOKEN\s*=\s*).*$/m, `$1${t}`);
+    fs.writeFileSync(setupPath, text, "utf8");
+  } else {
+    fs.appendFileSync(
+      setupPath,
+      `\n# HTTP log ingest → dashboard-backend /api/ingest (no Kafka)\nLOG_INGEST_TOKEN=${t}\n`,
+      "utf8"
+    );
+  }
+
+  console.log(
+    "\n(Variable sync) Generated LOG_INGEST_TOKEN and saved it to .env.railway.setup (gitignored).\n" +
+      "Redeploy url-shortener-a, url-shortener-b, and dashboard-backend so they pick up variables " +
+      `(e.g. run again with SKIP_DEPLOY_ON_VARIABLE_SYNC=0, or redeploy in the Railway UI).\n`
+  );
 }
 
 const ENDPOINT = "https://backboard.railway.com/graphql/v2";
@@ -379,6 +472,9 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
   const kafka = kafkaService;
   const pgDashboard = dashboardPg || pg;
 
+  if (!dry) {
+    ensureLogIngestTokenForHttpIngest(byName, kafka);
+  }
   const logIngestToken = (process.env.LOG_INGEST_TOKEN || "").trim();
   const logIngestUrl =
     byName.has("dashboard-backend") && !kafka && logIngestToken

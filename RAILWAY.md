@@ -28,6 +28,17 @@ The Docker Compose stack is for **local** development. On [Railway](https://rail
 
 **Load balancer NGINX** uses the resolver from `/etc/resolv.conf` and **variable `proxy_pass`** so `*.railway.internal` names are **re-resolved** periodically. A plain `upstream { server name:port }` caches DNS at start and can hit **stale IPs** after API replicas redeploy (symptom: `upstream timed out while connecting to upstream` / 504). Override the resolver with **`NGINX_RESOLVER`** if needed (set the raw address; the entrypoint **brackets IPv6** DNS like `fd12::10` for nginx). If you set **`NGINX_RESOLVER` yourself**, use **`[fd12::10]`** form for IPv6.
 
+## Dashboard logs in Postgres (`kafka_logs`)
+
+Without a Kafka plugin, **`url-shortener-a`** / **`url-shortener-b`** still ship structured logs to **`dashboard-backend`** over HTTP (`POST /api/ingest`). The backend persists them to the **`kafka_logs`** table in **`dashboard_db`** (same shape as the Kafka topic).
+
+- **`SYNC_VARIABLES=1`** sets **`LOG_INGEST_URL`** to the private **`dashboard-backend`** URL and **`LOG_INGEST_TOKEN`** on the API replicas and the backend.
+- If **`LOG_INGEST_TOKEN`** is not in **`.env.railway.setup`**, **`setup-railway.js`** generates one and saves it there (gitignored) so the next run stays consistent.
+- After the first sync with a new token, **redeploy** **`url-shortener-a`**, **`url-shortener-b`**, and **`dashboard-backend`** (or run variable sync with **`SKIP_DEPLOY_ON_VARIABLE_SYNC=0`** once) so containers pick up the variables.
+- Verify: **`GET https://<dashboard-backend>/api/health`** should show **`http_ingest_enabled`: true** and **`persisted_kafka_logs`** increasing after traffic and a flush interval (~30s).
+
+To use a **Kafka / Redpanda** plugin instead, add the broker and run **`SYNC_VARIABLES=1`**; **`KAFKA_BOOTSTRAP_SERVERS`** is wired automatically when a Kafka-like service is detected. Set **`SKIP_LOG_INGEST_AUTO_TOKEN=1`** if you want HTTP ingest disabled when Kafka is absent.
+
 ## Seed CSV data (production)
 
 Migrations create tables; **`url-shortener/seed.py`** loads **`csv_data/*.csv`** (users, urls, events). Both API replicas share the same Postgres **`DATABASE_URL`**, so you only need to seed **once** (either service’s env is fine).
