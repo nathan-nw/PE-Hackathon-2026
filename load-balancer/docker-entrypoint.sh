@@ -69,6 +69,14 @@ NGINX_RESOLVER="${NGINX_RESOLVER:-$(awk '/^nameserver[[:space:]]/{print $2; exit
 if [ -z "${NGINX_RESOLVER}" ]; then
   NGINX_RESOLVER="127.0.0.11"
 fi
+# Nginx `resolver` requires IPv6 literals in brackets (e.g. [fd12::10]). A bare fd12::10 is parsed as
+# "host:port" and fails with: invalid port in resolver "fd12::10" (Railway often uses IPv6 DNS).
+case "${NGINX_RESOLVER}" in
+  \[*) ;;
+  *:*)
+    NGINX_RESOLVER="[${NGINX_RESOLVER}]"
+    ;;
+esac
 echo "load-balancer: nginx resolver ${NGINX_RESOLVER} (re-resolve upstream hostnames; avoids stale IPs after Railway redeploys)" >&2
 
 # Railway sets PORT; Compose publishes container port 80 -> omit PORT (default 80).

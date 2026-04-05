@@ -26,7 +26,7 @@ The Docker Compose stack is for **local** development. On [Railway](https://rail
 
 `railway.toml` files under each app folder define Docker builds, health checks, and **watch paths** so changes in one folder do not rebuild unrelated services.
 
-**Load balancer NGINX** uses the resolver from `/etc/resolv.conf` and **variable `proxy_pass`** so `*.railway.internal` names are **re-resolved** periodically. A plain `upstream { server name:port }` caches DNS at start and can hit **stale IPs** after API replicas redeploy (symptom: `upstream timed out while connecting to upstream` / 504). Override the resolver with **`NGINX_RESOLVER`** if needed.
+**Load balancer NGINX** uses the resolver from `/etc/resolv.conf` and **variable `proxy_pass`** so `*.railway.internal` names are **re-resolved** periodically. A plain `upstream { server name:port }` caches DNS at start and can hit **stale IPs** after API replicas redeploy (symptom: `upstream timed out while connecting to upstream` / 504). Override the resolver with **`NGINX_RESOLVER`** if needed (set the raw address; the entrypoint **brackets IPv6** DNS like `fd12::10` for nginx). If you set **`NGINX_RESOLVER` yourself**, use **`[fd12::10]`** form for IPv6.
 
 ## Seed CSV data (production)
 
