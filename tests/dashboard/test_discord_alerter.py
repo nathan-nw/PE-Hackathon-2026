@@ -30,19 +30,31 @@ def _make_entry(**overrides):
 
 
 class TestShouldAlert:
-    def test_get_request_triggers(self):
+    def test_5xx_triggers(self):
         alerter = DiscordAlerter(webhook_url="https://example.com/webhook")
-        assert alerter.should_alert(_make_entry(method="GET")) is True
+        assert alerter.should_alert(_make_entry(status_code=500)) is True
 
-    def test_post_request_does_not_trigger(self):
+    def test_503_triggers(self):
         alerter = DiscordAlerter(webhook_url="https://example.com/webhook")
-        assert alerter.should_alert(_make_entry(method="POST")) is False
+        assert alerter.should_alert(_make_entry(status_code=503)) is True
 
-    def test_delete_request_does_not_trigger(self):
+    def test_error_level_triggers(self):
         alerter = DiscordAlerter(webhook_url="https://example.com/webhook")
-        assert alerter.should_alert(_make_entry(method="DELETE")) is False
+        assert alerter.should_alert(_make_entry(level="ERROR")) is True
 
-    def test_missing_method_does_not_trigger(self):
+    def test_critical_level_triggers(self):
+        alerter = DiscordAlerter(webhook_url="https://example.com/webhook")
+        assert alerter.should_alert(_make_entry(level="CRITICAL")) is True
+
+    def test_200_does_not_trigger(self):
+        alerter = DiscordAlerter(webhook_url="https://example.com/webhook")
+        assert alerter.should_alert(_make_entry(status_code=200, level="INFO")) is False
+
+    def test_404_does_not_trigger(self):
+        alerter = DiscordAlerter(webhook_url="https://example.com/webhook")
+        assert alerter.should_alert(_make_entry(status_code=404, level="WARNING")) is False
+
+    def test_missing_fields_does_not_trigger(self):
         alerter = DiscordAlerter(webhook_url="https://example.com/webhook")
         assert alerter.should_alert({}) is False
 
@@ -100,7 +112,7 @@ class TestSendAlert:
     def test_handles_http_error(self, mock_urlopen):
         alerter = DiscordAlerter(webhook_url="https://example.com/webhook")
         # Should not raise
-        alerter.maybe_alert(_make_entry())
+        alerter.maybe_alert(_make_entry(status_code=500))
 
     @patch("discord_alerter.urllib.request.urlopen")
     def test_rate_limiting(self, mock_urlopen):

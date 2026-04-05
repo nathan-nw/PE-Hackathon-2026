@@ -29,12 +29,10 @@ class DiscordAlerter:
             logger.info("Discord alerter disabled (no webhook URL)")
 
     def should_alert(self, entry: dict) -> bool:
-        """Decide whether this log entry should trigger a Discord alert.
-
-        Phase 1: alert on every GET request.
-        To switch to errors: return int(entry.get("status_code", 0)) >= 500
-        """
-        return entry.get("method") == "GET"
+        """Decide whether this log entry should trigger a Discord alert."""
+        status = int(entry.get("status_code", 0))
+        level = entry.get("level", "").upper()
+        return status >= 500 or level in ("ERROR", "CRITICAL")
 
     def send_alert(self, entry: dict) -> None:
         """POST a formatted embed to the Discord webhook."""
