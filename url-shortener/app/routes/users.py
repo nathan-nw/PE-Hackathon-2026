@@ -39,13 +39,15 @@ def get_user(user_id):
 @users_bp.route("/users", methods=["POST"])
 def create_user():
     data = request.get_json(silent=True)
-    if data is None:
+    if data is None or not isinstance(data, dict):
         return jsonify({"error": "Invalid or missing JSON body"}), 400
 
     email = data.get("email")
     username = data.get("username")
     if not email or not username:
         return jsonify({"error": "email and username are required"}), 400
+    if not isinstance(email, str) or not isinstance(username, str):
+        return jsonify({"error": "email and username must be strings"}), 400
 
     now = datetime.now(UTC)
     try:
@@ -64,7 +66,7 @@ def update_user(user_id):
         return jsonify({"error": "User not found"}), 404
 
     data = request.get_json(silent=True)
-    if data is None:
+    if data is None or not isinstance(data, dict):
         return jsonify({"error": "Invalid or missing JSON body"}), 400
 
     if "username" in data:

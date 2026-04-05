@@ -110,7 +110,7 @@ def create_short_url():
     cache_redirect(short_code, original_url, True)
     invalidate_url_lists()
 
-    return jsonify(model_to_dict(url, backrefs=False)), 201
+    return jsonify(model_to_dict(url, backrefs=False, recurse=False)), 201
 
 
 @urls_bp.route("/urls", methods=["GET"])
@@ -160,7 +160,7 @@ def get_url(url_id):
     except Url.DoesNotExist:
         return jsonify({"error": "URL not found"}), 404
 
-    resp = jsonify(model_to_dict(url, backrefs=False))
+    resp = jsonify(model_to_dict(url, backrefs=False, recurse=False))
     resp.headers["Cache-Control"] = "public, max-age=60"
     return resp
 
@@ -216,7 +216,7 @@ def update_url(url_id):
     invalidate_redirect(url.short_code)
     invalidate_url_lists()
 
-    return jsonify(model_to_dict(url, backrefs=False))
+    return jsonify(model_to_dict(url, backrefs=False, recurse=False))
 
 
 @urls_bp.route("/urls/<int:url_id>", methods=["DELETE"])
@@ -282,6 +282,12 @@ def redirect_to_url(short_code):
     if cached is not None:
         if not cached["active"]:
             return jsonify({"error": "This URL has been deactivated"}), 410
+        # Log click event — need the DB record for url_id/user_id
+        try:
+            url = Url.get(Url.short_code == short_code)
+            _log_click_event(url)
+        except Url.DoesNotExist:
+            pass
         resp = redirect(cached["url"], code=302)
         resp.headers["Cache-Control"] = "public, max-age=300"
         return resp
@@ -298,6 +304,21 @@ def redirect_to_url(short_code):
     if not url.is_active:
         return jsonify({"error": "This URL has been deactivated"}), 410
 
+    # Log click event for active URLs only
+    _log_click_event(url)
+
     resp = redirect(url.original_url, code=302)
     resp.headers["Cache-Control"] = "public, max-age=300"
     return resp
+
+
+def _log_click_event(url):
+    """Record a click event for an active redirect."""
+    now = datetime.now(UTC)
+    Event.create(
+        url_id=url.id,
+        user_id=url.user_id,
+        event_type="click",
+        timestamp=now,
+        details='{"source": "redirect"}',
+    )

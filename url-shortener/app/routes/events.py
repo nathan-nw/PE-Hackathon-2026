@@ -41,12 +41,21 @@ def create_event():
     data = request.get_json(silent=True)
     if data is None:
         return jsonify({"error": "Invalid or missing JSON body"}), 400
+    if not isinstance(data, dict):
+        return jsonify({"error": "Request body must be a JSON object"}), 400
 
     url_id = data.get("url_id")
     user_id = data.get("user_id")
     event_type = data.get("event_type")
     if not url_id or not user_id or not event_type:
         return jsonify({"error": "url_id, user_id, and event_type are required"}), 400
+
+    if not isinstance(url_id, int):
+        return jsonify({"error": "url_id must be an integer"}), 400
+    if not isinstance(user_id, int):
+        return jsonify({"error": "user_id must be an integer"}), 400
+    if not isinstance(event_type, str):
+        return jsonify({"error": "event_type must be a string"}), 400
 
     try:
         Url.get_by_id(url_id)
@@ -59,8 +68,10 @@ def create_event():
         return jsonify({"error": "User not found"}), 404
 
     details = data.get("details", {})
-    if isinstance(details, dict):
+    if isinstance(details, (dict, list)):
         details = json.dumps(details)
+    elif not isinstance(details, str):
+        return jsonify({"error": "details must be a JSON object or string"}), 400
 
     now = datetime.now(UTC)
     event = Event.create(
