@@ -20,6 +20,8 @@ type K6Status = {
   vus: number;
   duration: string;
   target_url: string;
+  /** API base for k6 (dashboard-backend LOAD_TEST_TARGET_URL); use for hosted custom tests */
+  default_target_url?: string;
   started_at: number;
   elapsed_s: number;
   requests: number;
@@ -76,6 +78,15 @@ export function LoadTest() {
   useEffect(() => {
     fetchStatus();
   }, [fetchStatus]);
+
+  // Hosted: replace Compose-only default so custom tests do not target http://load-balancer:80.
+  useEffect(() => {
+    const d = status?.default_target_url?.trim();
+    if (!d) return;
+    setCustomUrl((prev) =>
+      prev === "http://load-balancer:80" || prev === "http://127.0.0.1:8080" ? d : prev,
+    );
+  }, [status?.default_target_url]);
 
   useEffect(() => {
     const id = window.setInterval(fetchStatus, STATUS_POLL_MS);

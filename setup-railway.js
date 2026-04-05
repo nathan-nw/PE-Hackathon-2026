@@ -673,6 +673,18 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
         varRef("dashboard-backend", "RAILWAY_PRIVATE_DOMAIN") +
         ":" +
         varRef("dashboard-backend", "PORT"),
+      // Ops Load Test tab (client): sane default for custom k6 target (build-time; redeploy if changed).
+      ...(byName.has("load-balancer")
+        ? {
+            NEXT_PUBLIC_LOAD_TEST_TARGET_URL:
+              "https://" + varRef("load-balancer", "RAILWAY_PUBLIC_DOMAIN"),
+          }
+        : byName.has("url-shortener-a")
+          ? {
+              NEXT_PUBLIC_LOAD_TEST_TARGET_URL:
+                "https://" + varRef("url-shortener-a", "RAILWAY_PUBLIC_DOMAIN"),
+            }
+          : {}),
       VISIBILITY_K8S_ENABLED: "false",
       VISIBILITY_COMPOSE_PROJECT: "pe-hackathon-2026",
       // Ops tab: list services via Railway GraphQL (no Docker socket in the cloud).

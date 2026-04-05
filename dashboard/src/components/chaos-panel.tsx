@@ -28,6 +28,7 @@ type ChaosAction = "kill" | "restart";
 /** Mirrors server default allowlist if /chaos/config omits allowedServices. */
 const FALLBACK_ALLOWED_SERVICES = [
   "db",
+  "postgres",
   "redis",
   "zookeeper",
   "kafka",
@@ -133,7 +134,6 @@ export function ChaosPanel() {
     container: DockerContainer;
     action: ChaosAction;
   } | null>(null);
-  const [confirmText, setConfirmText] = useState("");
   const [chaosBusy, setChaosBusy] = useState(false);
   const [chaosError, setChaosError] = useState<string | null>(null);
 
@@ -262,7 +262,6 @@ export function ChaosPanel() {
 
   const openChaos = (c: DockerContainer, action: ChaosAction) => {
     setChaosError(null);
-    setConfirmText("");
     setPendingChaos({ container: c, action });
   };
 
@@ -271,10 +270,6 @@ export function ChaosPanel() {
     const { container, action } = pendingChaos;
     const svc = container.service.trim().toLowerCase();
     const serviceWatch = container.service;
-    if (confirmText.trim().toLowerCase() !== svc) {
-      setChaosError("Type the exact service name to confirm.");
-      return;
-    }
     setChaosBusy(true);
     setChaosError(null);
     const url =
@@ -299,13 +294,36 @@ export function ChaosPanel() {
               }
         ),
       });
-      const j = (await res.json()) as { ok?: boolean; error?: string };
+      const j = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        message?: string;
+        railwayMethod?: string;
+      };
       if (!res.ok) {
         setChaosError(j.error ?? `HTTP ${res.status}`);
         return;
       }
+      const okMsg =
+        j.message ??
+        (action === "kill"
+          ? docker?.source === "railway"
+            ? "Kill requested (Railway)."
+            : "Kill sent."
+          : docker?.source === "railway"
+            ? "Reboot requested (Railway)."
+            : "Reboot sent.");
+      setWatchdogToasts((prev) => {
+        const row = {
+          id: `chaos-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+          message: `${container.service}: ${okMsg}${
+            j.railwayMethod ? ` (${j.railwayMethod})` : ""
+          }`,
+          at: new Date().toISOString(),
+        };
+        return [row, ...prev].slice(0, 8);
+      });
       setPendingChaos(null);
-      setConfirmText("");
       setWatchService(serviceWatch);
       void fetchDocker();
     } catch (e) {
@@ -657,7 +675,11 @@ export function ChaosPanel() {
           <Card className="bg-background w-full max-w-md shadow-lg">
             <CardHeader>
               <CardTitle id="chaos-action-title">
-                {pendingChaos.action === "kill" ? "Confirm SIGKILL" : "Confirm reboot"}
+                {pendingChaos.action === "kill"
+                  ? docker?.source === "railway"
+                    ? "Confirm deployment stop"
+                    : "Confirm SIGKILL"
+                  : "Confirm reboot"}
               </CardTitle>
               <CardDescription>
                 {pendingChaos.action === "kill" ? (
@@ -692,26 +714,17 @@ export function ChaosPanel() {
             </CardHeader>
             <CardContent className="space-y-3">
               <p className="text-sm">
-                Type the service name{" "}
+                Target:{" "}
                 <span className="text-foreground font-mono font-semibold">
                   {pendingChaos.container.service}
-                </span>{" "}
-                to confirm:
+                </span>
               </p>
-              <input
-                type="text"
-                className="border-input bg-background w-full rounded-md border px-3 py-2 text-sm font-mono"
-                value={confirmText}
-                onChange={(e) => setConfirmText(e.target.value)}
-                placeholder="service name"
-                autoComplete="off"
-              />
               {chaosError && (
                 <p className="text-destructive text-sm" role="alert">
                   {chaosError}
                 </p>
               )}
-              <div className="flex justify-end gap-2">
+              <div className="flex flex-wrap justify-end gap-2">
                 <Button
                   type="button"
                   variant="outline"
@@ -729,7 +742,11 @@ export function ChaosPanel() {
                   {chaosBusy ? (
                     <Loader2 className="size-4 animate-spin" />
                   ) : pendingChaos.action === "kill" ? (
-                    docker?.source === "railway" ? "Stop deployment" : "Kill container"
+                    docker?.source === "railway" ? (
+                      "Delete"
+                    ) : (
+                      "Kill container"
+                    )
                   ) : docker?.source === "railway" ? (
                     "Restart deployment"
                   ) : (

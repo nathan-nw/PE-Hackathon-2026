@@ -17,9 +17,21 @@ logger = logging.getLogger(__name__)
 
 LOAD_TEST_SCRIPT = os.path.join(os.path.dirname(__file__), "load-test.js")
 
+# Must match docker-compose.yml `${LOAD_TEST_BYPASS_TOKEN:-…}` and setup-railway.js default so k6
+# always sends X-Load-Test-Bypass when the host env omits the variable (hosted misconfigs).
+DEFAULT_LOAD_TEST_BYPASS_TOKEN = "pe-hackathon-k6-edge-bypass"
+
+
 # Compose: http://load-balancer:80. Hosted: set LOAD_TEST_TARGET_URL to the public API base (https://…).
 def _default_target_url() -> str:
     return os.environ.get("LOAD_TEST_TARGET_URL", "http://load-balancer:80").strip()
+
+
+def _effective_load_test_bypass_token() -> str:
+    return (
+        os.environ.get("LOAD_TEST_BYPASS_TOKEN") or ""
+    ).strip() or DEFAULT_LOAD_TEST_BYPASS_TOKEN
+
 
 # Max VUs for each preset (must match stages in load-test.js)
 PRESET_MAX_VUS = {
@@ -58,7 +70,9 @@ class K6Stats:
             "duration": self.duration,
             "target_url": self.target_url,
             "started_at": self.started_at,
-            "elapsed_s": round(time.time() - self.started_at, 1) if self.running else self.elapsed_s,
+            "elapsed_s": round(time.time() - self.started_at, 1)
+            if self.running
+            else self.elapsed_s,
             "requests": self.requests,
             "errors": self.errors,
             "error_rate": round(self.error_rate, 4),
@@ -95,6 +109,8 @@ class K6Runner:
 
         env = os.environ.copy()
         env["K6_TARGET_URL"] = resolved_url
+        # k6 load-test.js reads __ENV.LOAD_TEST_BYPASS_TOKEN; without it, edge + app treat all VUs as one IP.
+        env["LOAD_TEST_BYPASS_TOKEN"] = _effective_load_test_bypass_token()
 
         if preset:
             env["K6_PRESET"] = preset.lower()
@@ -113,7 +129,9 @@ class K6Runner:
                 stderr=subprocess.PIPE,
             )
         except FileNotFoundError:
-            return {"error": "k6 binary not found. Rebuild the container with k6 installed."}
+            return {
+                "error": "k6 binary not found. Rebuild the container with k6 installed."
+            }
 
         # Resolve the correct max VUs for presets
         max_vus = PRESET_MAX_VUS.get(preset.lower(), vus) if preset else vus
@@ -135,11 +153,14 @@ class K6Runner:
         self._reader_thread.start()
 
         logger.info(
-            "k6 started: preset=%s vus=%d duration=%s target=%s",
+            "k6 started: preset=%s vus=%d duration=%s target=%s bypass=%s",
             preset,
             vus,
             duration,
             resolved_url,
+            "env"
+            if (os.environ.get("LOAD_TEST_BYPASS_TOKEN") or "").strip()
+            else "default",
         )
         return {"status": "started", "preset": preset, "vus": vus, "duration": duration}
 
@@ -191,7 +212,9 @@ class K6Runner:
                 if metric == "http_reqs":
                     self._stats.requests += 1
                 elif metric == "load_test_error_checks":
-                    self._stats.errors += int(value) if isinstance(value, (int, float)) else 0
+                    self._stats.errors += (
+                        int(value) if isinstance(value, (int, float)) else 0
+                    )
                     total = self._stats.requests or 1
                     self._stats.error_rate = min(1.0, self._stats.errors / total)
                 elif metric == "http_req_duration":
@@ -217,4 +240,8 @@ class K6Runner:
             self._stats.finished = True
             self._stats.elapsed_s = round(time.time() - self._stats.started_at, 1)
 
-        logger.info("k6 finished: requests=%d errors=%d", self._stats.requests, self._stats.errors)
+        logger.info(
+            "k6 finished: requests=%d errors=%d",
+            self._stats.requests,
+            self._stats.errors,
+        )

@@ -8,10 +8,9 @@ import { getDockerConnectionOptions } from "@/lib/docker-options";
 import {
   getRailwayChaosRowForService,
   railwayDeploymentRestart,
-  railwayIdsConfigured,
-  railwayVisibilityConfigured,
+  railwayChaosLog,
 } from "@/lib/railway-visibility";
-import { runtimeEnv } from "@/lib/server-runtime-env";
+import { hasRailwayGraphqlCredential, runtimeEnv } from "@/lib/server-runtime-env";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -62,8 +61,20 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (railwayIdsConfigured()) {
-    if (!railwayVisibilityConfigured()) {
+  const railwayServiceId = (body.railwayServiceId ?? "").trim();
+  const useRailwayChaos = Boolean(railwayServiceId);
+
+  if (useRailwayChaos) {
+    console.info("[dashboard][chaos/restart] Railway request", {
+      confirmService,
+      railwayServiceIdPrefix: `${railwayServiceId.slice(0, 8)}…`,
+    });
+    railwayChaosLog("restart:incoming", {
+      confirmService,
+      railwayServiceIdPrefix: `${railwayServiceId.slice(0, 8)}…`,
+    });
+
+    if (!hasRailwayGraphqlCredential()) {
       return NextResponse.json(
         {
           error:
@@ -73,14 +84,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const railwayServiceId = (body.railwayServiceId ?? "").trim();
-    if (!railwayServiceId) {
+    const projectId = runtimeEnv("RAILWAY_PROJECT_ID");
+    const environmentId = runtimeEnv("RAILWAY_ENVIRONMENT_ID");
+    if (!projectId || !environmentId) {
       return NextResponse.json(
         {
           error:
-            "railwayServiceId and confirmService are required for Railway chaos (reboot restarts the active deployment).",
+            "RAILWAY_PROJECT_ID and RAILWAY_ENVIRONMENT_ID must be set on the dashboard service (e.g. via setup-railway variable sync).",
         },
-        { status: 400 }
+        { status: 503 }
       );
     }
 

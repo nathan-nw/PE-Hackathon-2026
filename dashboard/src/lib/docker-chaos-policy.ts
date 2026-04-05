@@ -11,6 +11,7 @@ const BLOCKED_SERVICES = new Set(["dashboard"]);
 /** When CHAOS_ALLOWED_SERVICES is unset, only these Compose services may be killed. */
 const DEFAULT_ALLOWED_SERVICES = new Set([
   "db",
+  "postgres",
   "redis",
   "zookeeper",
   "kafka",

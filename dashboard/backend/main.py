@@ -38,9 +38,12 @@ KAFKA_BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "")
 KAFKA_TOPIC = os.environ.get("KAFKA_LOG_TOPIC", "app-logs")
 # Set empty, omit, or DISABLED for hosts without Kafka (e.g. Railway); logs tab stays empty.
 KAFKA_ENABLED = bool(
-    KAFKA_BOOTSTRAP_SERVERS.strip() and KAFKA_BOOTSTRAP_SERVERS.strip().upper() != "DISABLED"
+    KAFKA_BOOTSTRAP_SERVERS.strip()
+    and KAFKA_BOOTSTRAP_SERVERS.strip().upper() != "DISABLED"
 )
-ALLOW_INSECURE_LOG_INGEST = os.environ.get("ALLOW_INSECURE_LOG_INGEST", "").strip().lower() in (
+ALLOW_INSECURE_LOG_INGEST = os.environ.get(
+    "ALLOW_INSECURE_LOG_INGEST", ""
+).strip().lower() in (
     "1",
     "true",
     "yes",
@@ -220,7 +223,9 @@ def get_logs(
     limit: int = Query(100, ge=1, le=50000),
     level: str | None = Query(None),
     instance_id: str | None = Query(None),
-    search: str | None = Query(None, description="Case-insensitive substring in message/logger/path"),
+    search: str | None = Query(
+        None, description="Case-insensitive substring in message/logger/path"
+    ),
     status_code: str | None = Query(
         None,
         description="HTTP status filter: single code, comma list, or 2xx/3xx/4xx/5xx",
@@ -337,7 +342,9 @@ def get_logs_insights(
         recent_buckets = sorted_buckets[-5:]
         recent_total = sum(b["total"] for b in recent_buckets)
         recent_errors = sum(b["errors"] for b in recent_buckets)
-        current_rate = round((recent_errors / recent_total) * 100, 2) if recent_total > 0 else 0.0
+        current_rate = (
+            round((recent_errors / recent_total) * 100, 2) if recent_total > 0 else 0.0
+        )
 
         return {
             "buckets": sorted_buckets,
@@ -419,7 +426,9 @@ def get_errors(
         recent_buckets = sorted_buckets[-5:]
         recent_total = sum(b["total"] for b in recent_buckets)
         recent_errors = sum(b["errors"] for b in recent_buckets)
-        current_rate = round((recent_errors / recent_total) * 100, 2) if recent_total > 0 else 0.0
+        current_rate = (
+            round((recent_errors / recent_total) * 100, 2) if recent_total > 0 else 0.0
+        )
 
         return {
             "buckets": sorted_buckets,
@@ -440,6 +449,7 @@ def get_errors(
 def clear_errors():
     """Clear all log data from both DB and in-memory cache."""
     from db import clear_logs
+
     cache.clear()
     deleted = clear_logs()
     return {"status": "cleared", "deleted_rows": deleted}
@@ -474,7 +484,10 @@ def k6_run(req: K6RunRequest):
 @app.get("/api/k6/status")
 def k6_status():
     """Get live stats from the running k6 test."""
-    return k6.get_status()
+    data = k6.get_status()
+    # Hosted UI: client default must not stay on Compose-only http://load-balancer:80.
+    data["default_target_url"] = _default_load_test_target_url()
+    return data
 
 
 @app.post("/api/k6/stop")
