@@ -36,7 +36,6 @@ KAFKA_TOPIC = os.environ.get("KAFKA_LOG_TOPIC", "app-logs")
 KAFKA_ENABLED = bool(
     KAFKA_BOOTSTRAP_SERVERS.strip() and KAFKA_BOOTSTRAP_SERVERS.strip().upper() != "DISABLED"
 )
-LOG_INGEST_TOKEN = os.environ.get("LOG_INGEST_TOKEN", "").strip()
 ALLOW_INSECURE_LOG_INGEST = os.environ.get("ALLOW_INSECURE_LOG_INGEST", "").strip().lower() in (
     "1",
     "true",
@@ -46,6 +45,11 @@ CACHE_MAX_ENTRIES = int(os.environ.get("CACHE_MAX_ENTRIES", "1000"))
 DB_FLUSH_INTERVAL = float(os.environ.get("DB_FLUSH_INTERVAL", "30"))
 
 cache = LogCache(max_entries=CACHE_MAX_ENTRIES)
+
+
+def _log_ingest_token() -> str:
+    """Read at call time so Railway/runtime env updates are visible (avoid stale import-time snapshot)."""
+    return (os.environ.get("LOG_INGEST_TOKEN") or "").strip()
 
 
 def _log_entry_key(entry: dict[str, Any]) -> tuple:
@@ -134,7 +138,7 @@ def health():
         "service": "dashboard-backend",
         "kafka_topic": KAFKA_TOPIC,
         "kafka_enabled": KAFKA_ENABLED,
-        "http_ingest_enabled": bool(LOG_INGEST_TOKEN) or ALLOW_INSECURE_LOG_INGEST,
+        "http_ingest_enabled": bool(_log_ingest_token()) or ALLOW_INSECURE_LOG_INGEST,
         "log_cache_ingested": st["total_ingested"],
         "log_cache_buffered": st["buffered_logs"],
         "database_connected": db_ok,
@@ -164,13 +168,14 @@ async def ingest_logs(request: Request):
     ``Authorization: Bearer …``). If unset, reject unless ``ALLOW_INSECURE_LOG_INGEST=1``
     (local development only).
     """
-    if LOG_INGEST_TOKEN:
+    expected = _log_ingest_token()
+    if expected:
         got = request.headers.get("x-log-ingest-token") or ""
         if not got:
             auth = request.headers.get("authorization") or ""
             if auth.lower().startswith("bearer "):
                 got = auth[7:].strip()
-        if got != LOG_INGEST_TOKEN:
+        if got != expected:
             raise HTTPException(status_code=401, detail="Invalid log ingest token")
     elif not ALLOW_INSECURE_LOG_INGEST:
         raise HTTPException(
