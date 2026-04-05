@@ -14,9 +14,14 @@ is_railway() {
     [ -n "${RAILWAY_PUBLIC_DOMAIN:-}" ]
 }
 
+# Per-replica port: Railway sets PORT per service (Gunicorn binds to it) — not necessarily 5000.
+# Optional: URL_SHORTENER_A_PORT / URL_SHORTENER_B_PORT, else URL_SHORTENER_PORT, else 5000 (Compose).
+_shortener_port_a="${URL_SHORTENER_A_PORT:-${URL_SHORTENER_PORT:-5000}}"
+_shortener_port_b="${URL_SHORTENER_B_PORT:-${URL_SHORTENER_PORT:-5000}}"
+
 # --- upstream host:port -------------------------------------------------
 if [ -n "${URL_SHORTENER_A_HOST:-}" ]; then
-  UPSTREAM_A="${URL_SHORTENER_A_HOST}:${URL_SHORTENER_PORT:-5000}"
+  UPSTREAM_A="${URL_SHORTENER_A_HOST}:${_shortener_port_a}"
 elif [ -n "${UPSTREAM_A:-}" ]; then
   :
 elif is_railway; then
@@ -28,7 +33,7 @@ else
 fi
 
 if [ -n "${URL_SHORTENER_B_HOST:-}" ]; then
-  UPSTREAM_B="${URL_SHORTENER_B_HOST}:${URL_SHORTENER_PORT:-5000}"
+  UPSTREAM_B="${URL_SHORTENER_B_HOST}:${_shortener_port_b}"
 elif [ -n "${UPSTREAM_B:-}" ]; then
   :
 elif is_railway; then

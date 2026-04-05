@@ -413,7 +413,9 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
     await upsert("load-balancer", {
       URL_SHORTENER_A_HOST: varRef("url-shortener-a", "RAILWAY_PRIVATE_DOMAIN"),
       URL_SHORTENER_B_HOST: varRef("url-shortener-b", "RAILWAY_PRIVATE_DOMAIN"),
-      URL_SHORTENER_PORT: "5000",
+      // Gunicorn binds to Railway's PORT (runtime) — not the Dockerfile's 5000 default.
+      URL_SHORTENER_A_PORT: varRef("url-shortener-a", "PORT"),
+      URL_SHORTENER_B_PORT: varRef("url-shortener-b", "PORT"),
     });
   } else if (byName.has("load-balancer")) {
     console.warn(
