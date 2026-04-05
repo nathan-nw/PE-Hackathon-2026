@@ -421,6 +421,12 @@ const M_DEPLOYMENT_STOP = `
   }
 `;
 
+const M_DEPLOYMENT_REMOVE = `
+  mutation DeploymentRemove($id: String!) {
+    deploymentRemove(id: $id)
+  }
+`;
+
 const M_SERVICE_INSTANCE_DEPLOY = `
   mutation ServiceInstanceDeploy(
     $environmentId: String!
@@ -450,17 +456,88 @@ export async function railwayDeploymentRestart(deploymentId: string): Promise<vo
   }
 }
 
-/** Stop the deployment — service goes down until redeployed (chaos “kill”). */
-export async function railwayDeploymentStop(deploymentId: string): Promise<void> {
-  const data = await railwayGraphql<{ deploymentStop?: boolean | null }>(
-    M_DEPLOYMENT_STOP,
-    {
-      id: deploymentId,
+/** Set `CHAOS_RAILWAY_LOG=0` on the dashboard service to silence chaos Railway logs. */
+export function railwayChaosLog(
+  event: string,
+  data: Record<string, unknown>
+): void {
+  if (runtimeEnv("CHAOS_RAILWAY_LOG") === "0") return;
+  console.info(`[dashboard][railway-chaos] ${event}`, data);
+}
+
+/**
+ * Halt the active deployment (Chaos Kill on hosted Railway).
+ * Tries `deploymentStop` first, then `deploymentRemove` if stop fails, returns false, or returns null
+ * (some tokens/API versions return null on success; remove is the reliable teardown for “kill”).
+ */
+export async function railwayChaosHaltDeployment(
+  deploymentId: string
+): Promise<{ method: "deploymentStop" | "deploymentRemove" }> {
+  const idShort = `${deploymentId.slice(0, 10)}…`;
+  railwayChaosLog("halt:begin", { deploymentId: idShort });
+
+  let stopErr: Error | undefined;
+  let stopResult: boolean | null | undefined;
+
+  try {
+    const data = await railwayGraphql<{ deploymentStop?: boolean | null }>(
+      M_DEPLOYMENT_STOP,
+      { id: deploymentId }
+    );
+    stopResult = data.deploymentStop;
+    railwayChaosLog("halt:deploymentStop_response", {
+      deploymentId: idShort,
+      deploymentStop: stopResult === undefined ? "undefined" : stopResult,
+    });
+    if (stopResult === true) {
+      return { method: "deploymentStop" };
     }
-  );
-  if (data.deploymentStop === false) {
+  } catch (e) {
+    stopErr = e instanceof Error ? e : new Error(String(e));
+    railwayChaosLog("halt:deploymentStop_error", {
+      deploymentId: idShort,
+      message: stopErr.message,
+    });
+  }
+
+  if (stopResult === false) {
+    railwayChaosLog("halt:deploymentStop_false_try_remove", {
+      deploymentId: idShort,
+    });
+  } else if (!stopErr && stopResult !== true) {
+    railwayChaosLog("halt:deploymentStop_not_true_try_remove", {
+      deploymentId: idShort,
+      deploymentStop: stopResult === undefined ? "undefined" : stopResult,
+    });
+  }
+
+  try {
+    const data2 = await railwayGraphql<{ deploymentRemove?: boolean | null }>(
+      M_DEPLOYMENT_REMOVE,
+      { id: deploymentId }
+    );
+    railwayChaosLog("halt:deploymentRemove_response", {
+      deploymentId: idShort,
+      deploymentRemove:
+        data2.deploymentRemove === undefined ? "undefined" : data2.deploymentRemove,
+    });
+    if (data2.deploymentRemove === false) {
+      throw new Error("deploymentRemove returned false");
+    }
+    return { method: "deploymentRemove" };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    railwayChaosLog("halt:deploymentRemove_error", {
+      deploymentId: idShort,
+      message: msg,
+    });
+    if (stopErr) {
+      throw new Error(
+        `Railway halt failed: deploymentStop (${stopErr.message}); deploymentRemove (${msg})`
+      );
+    }
     throw new Error(
-      "Railway deploymentStop returned false — check token permissions and that the deployment is stoppable."
+      `Railway halt failed: deploymentStop did not return true; deploymentRemove (${msg})`
     );
   }
 }

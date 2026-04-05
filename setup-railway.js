@@ -549,6 +549,10 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
           "/api/ingest"
       : null;
 
+  const loadTestBypass =
+    (process.env.LOAD_TEST_BYPASS_TOKEN || "").trim() ||
+    "pe-hackathon-k6-edge-bypass";
+
   // url-shortener-a / url-shortener-b: same env as compose replicas (shared DB; distinct INSTANCE_ID).
   // Explicit PORT so ${{ url-shortener-a.PORT }} resolves on the load-balancer (runtime-only PORT is
   // not referenceable from other services — see Railway variables docs / Help Station).
@@ -565,6 +569,7 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
     ...(logIngestUrl
       ? { LOG_INGEST_URL: logIngestUrl, LOG_INGEST_TOKEN: logIngestToken }
       : {}),
+    LOAD_TEST_BYPASS_TOKEN: loadTestBypass,
   };
   await upsert("url-shortener-a", { ...urlShortenerBase, INSTANCE_ID: "1" });
   await upsert("url-shortener-b", { ...urlShortenerBase, INSTANCE_ID: "2" });
@@ -604,6 +609,7 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
       // Gunicorn binds to Railway's PORT (synced above — typically 8080 on Railway).
       URL_SHORTENER_A_PORT: varRef("url-shortener-a", "PORT"),
       URL_SHORTENER_B_PORT: varRef("url-shortener-b", "PORT"),
+      LOAD_TEST_BYPASS_TOKEN: loadTestBypass,
     });
   } else if (byName.has("load-balancer")) {
     console.warn(
@@ -621,6 +627,18 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
     KAFKA_LOG_TOPIC: "app-logs",
     CACHE_MAX_ENTRIES: "1000",
     DB_FLUSH_INTERVAL: "30",
+    LOAD_TEST_BYPASS_TOKEN: loadTestBypass,
+    ...(byName.has("load-balancer")
+      ? {
+          LOAD_TEST_TARGET_URL:
+            "https://" + varRef("load-balancer", "RAILWAY_PUBLIC_DOMAIN"),
+        }
+      : byName.has("url-shortener-a")
+        ? {
+            LOAD_TEST_TARGET_URL:
+              "https://" + varRef("url-shortener-a", "RAILWAY_PUBLIC_DOMAIN"),
+          }
+        : {}),
     ...(kafka ? { KAFKA_BOOTSTRAP_SERVERS: kafkaBootstrapRef(kafka) } : {}),
     ...(logIngestToken ? { LOG_INGEST_TOKEN: logIngestToken } : {}),
   };

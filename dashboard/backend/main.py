@@ -14,7 +14,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from cache import LogCache
 from db import (
@@ -448,11 +448,16 @@ def clear_errors():
 # ── k6 Load Testing ─────────────────────────────────────────────────────────
 
 
+def _default_load_test_target_url() -> str:
+    """Compose default: private LB hostname. Hosted: set LOAD_TEST_TARGET_URL on dashboard-backend."""
+    return os.environ.get("LOAD_TEST_TARGET_URL", "http://load-balancer:80").strip()
+
+
 class K6RunRequest(BaseModel):
     preset: str = ""
     vus: int = 50
     duration: str = "30s"
-    target_url: str = "http://load-balancer:80"
+    target_url: str = Field(default_factory=_default_load_test_target_url)
 
 
 @app.post("/api/k6/run")

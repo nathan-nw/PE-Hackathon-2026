@@ -7,7 +7,8 @@ import {
 import { getDockerConnectionOptions } from "@/lib/docker-options";
 import {
   getRailwayChaosRowForService,
-  railwayDeploymentStop,
+  railwayChaosHaltDeployment,
+  railwayChaosLog,
   railwayIdsConfigured,
   railwayVisibilityConfigured,
 } from "@/lib/railway-visibility";
@@ -125,13 +126,23 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      await railwayDeploymentStop(depId);
+      railwayChaosLog("kill:validated", {
+        service: row.service,
+        railwayServiceId: `${railwayServiceId.slice(0, 8)}…`,
+        deploymentId: `${depId.slice(0, 8)}…`,
+        deploymentStatus: row.deploymentStatus ?? "unknown",
+      });
+
+      const halt = await railwayChaosHaltDeployment(depId);
 
       return NextResponse.json({
         ok: true,
         service: row.service,
+        railwayMethod: halt.method,
         message:
-          "Deployment stopped via Railway API (deploymentStop). Enable RAILWAY_WATCHDOG_AUTO_RECOVER (default) so the watchdog redeploys latest, or redeploy manually.",
+          halt.method === "deploymentStop"
+            ? "Deployment halted via deploymentStop. Check Railway dashboard / Ops table for status. Redeploy or use Reboot to bring it back."
+            : "Deployment halted via deploymentRemove (deploymentStop did not confirm). Check Railway dashboard / Ops table for status. Redeploy or use Reboot to bring it back.",
       });
     } catch (e) {
       const message = e instanceof Error ? e.message : "Unknown error";

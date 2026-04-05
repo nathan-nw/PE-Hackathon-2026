@@ -40,13 +40,20 @@ def create_app():
     from flask_limiter import Limiter
     from flask_limiter.util import get_remote_address
 
+    def _default_limits_exempt_when():
+        # CORS preflight must not get 429 without Access-Control-* (browsers show generic CORS failure).
+        if request.method == "OPTIONS":
+            return True
+        from app.load_test_bypass import is_load_test_bypass_request
+
+        return is_load_test_bypass_request()
+
     limiter = Limiter(
         app=app,
         key_func=get_remote_address,
         default_limits=[os.environ.get("RATE_LIMIT_DEFAULT", "5000 per minute")],
         storage_uri=os.environ.get("RATE_LIMIT_STORAGE", "memory://"),
-        # CORS preflight must not get 429 without Access-Control-* (browsers show generic CORS failure).
-        default_limits_exempt_when=lambda: request.method == "OPTIONS",
+        default_limits_exempt_when=_default_limits_exempt_when,
     )
     app.limiter = limiter
 

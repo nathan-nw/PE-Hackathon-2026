@@ -112,6 +112,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       RATE_LIMIT_STORAGE: redis://redis:6379/1
       RATE_LIMIT_DEFAULT: "50000 per minute"
+      # Must match load-balancer + dashboard-backend so k6 X-Load-Test-Bypass skips app IP ban + Flask-Limiter.
+      LOAD_TEST_BYPASS_TOKEN: ${LOAD_TEST_BYPASS_TOKEN:-pe-hackathon-k6-edge-bypass}
       FLASK_DEBUG: "false"
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
@@ -148,6 +150,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       RATE_LIMIT_STORAGE: redis://redis:6379/1
       RATE_LIMIT_DEFAULT: "50000 per minute"
+      LOAD_TEST_BYPASS_TOKEN: ${LOAD_TEST_BYPASS_TOKEN:-pe-hackathon-k6-edge-bypass}
       FLASK_DEBUG: "false"
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
@@ -308,6 +311,8 @@ services:
     environment:
       # k6 load-test.js sends this as X-Load-Test-Bypass — must match load-balancer (edge limit off for k6 only).
       LOAD_TEST_BYPASS_TOKEN: ${LOAD_TEST_BYPASS_TOKEN:-pe-hackathon-k6-edge-bypass}
+      # k6 hits this API base (Compose: private LB). On Railway, sync sets https://<load-balancer public domain>.
+      LOAD_TEST_TARGET_URL: ${LOAD_TEST_TARGET_URL:-http://load-balancer:80}
       # Override image default (8080) so published port 8000 matches the process (local dev).
       PORT: "8000"
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092

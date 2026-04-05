@@ -59,7 +59,9 @@ export function LoadTest() {
   // Custom form state
   const [customVus, setCustomVus] = useState(100);
   const [customDuration, setCustomDuration] = useState("30s");
-  const [customUrl, setCustomUrl] = useState("http://load-balancer:80");
+  const [customUrl, setCustomUrl] = useState(
+    process.env.NEXT_PUBLIC_LOAD_TEST_TARGET_URL ?? "http://load-balancer:80",
+  );
 
   const fetchStatus = useCallback(async () => {
     try {

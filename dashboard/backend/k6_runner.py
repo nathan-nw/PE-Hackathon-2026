@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 
 LOAD_TEST_SCRIPT = os.path.join(os.path.dirname(__file__), "load-test.js")
 
+# Compose: http://load-balancer:80. Hosted: set LOAD_TEST_TARGET_URL to the public API base (https://…).
+def _default_target_url() -> str:
+    return os.environ.get("LOAD_TEST_TARGET_URL", "http://load-balancer:80").strip()
+
 # Max VUs for each preset (must match stages in load-test.js)
 PRESET_MAX_VUS = {
     "bronze": 50,
@@ -81,14 +85,16 @@ class K6Runner:
         preset: str = "",
         vus: int = 50,
         duration: str = "30s",
-        target_url: str = "http://load-balancer:80",
+        target_url: str = "",
     ) -> dict:
         with self._lock:
             if self._proc and self._proc.poll() is None:
                 return {"error": "A test is already running. Stop it first."}
 
+        resolved_url = (target_url or "").strip() or _default_target_url()
+
         env = os.environ.copy()
-        env["K6_TARGET_URL"] = target_url
+        env["K6_TARGET_URL"] = resolved_url
 
         if preset:
             env["K6_PRESET"] = preset.lower()
@@ -120,7 +126,7 @@ class K6Runner:
                 preset=preset,
                 vus=max_vus,
                 duration=duration,
-                target_url=target_url,
+                target_url=resolved_url,
                 started_at=time.time(),
             )
 
@@ -128,7 +134,13 @@ class K6Runner:
         self._reader_thread = threading.Thread(target=self._read_output, daemon=True)
         self._reader_thread.start()
 
-        logger.info("k6 started: preset=%s vus=%d duration=%s target=%s", preset, vus, duration, target_url)
+        logger.info(
+            "k6 started: preset=%s vus=%d duration=%s target=%s",
+            preset,
+            vus,
+            duration,
+            resolved_url,
+        )
         return {"status": "started", "preset": preset, "vus": vus, "duration": duration}
 
     def stop(self) -> dict:
@@ -178,11 +190,10 @@ class K6Runner:
             with self._lock:
                 if metric == "http_reqs":
                     self._stats.requests += 1
-                elif metric == "errors":
-                    if value == 1:
-                        self._stats.errors += 1
+                elif metric == "load_test_error_checks":
+                    self._stats.errors += int(value) if isinstance(value, (int, float)) else 0
                     total = self._stats.requests or 1
-                    self._stats.error_rate = self._stats.errors / total
+                    self._stats.error_rate = min(1.0, self._stats.errors / total)
                 elif metric == "http_req_duration":
                     self._durations.append(value)
                     n = len(self._durations)
