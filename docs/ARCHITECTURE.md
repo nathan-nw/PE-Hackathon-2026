@@ -10,30 +10,71 @@ flowchart TB
         Browser[Browser / curl]
     end
 
-    subgraph edge [Edge]
-        LB[NGINX load balancer :8080]
+    subgraph edge [Edge Layer]
+        LB["NGINX Load Balancer :8080"]
     end
 
-    subgraph app [Stateless API tier]
-        A["url-shortener-a (INSTANCE 1)"]
-        B["url-shortener-b (INSTANCE 2)"]
+    subgraph app [Stateless API Tier]
+        A["url-shortener-a :5000<br/>(INSTANCE 1)"]
+        B["url-shortener-b :5000<br/>(INSTANCE 2)"]
     end
 
-    subgraph data [Data tier]
-        PG[(PostgreSQL)]
+    subgraph data [Data Tier]
+        PG[(PostgreSQL :15432<br/>App DB)]
+        Redis[(Redis :6379<br/>Cache + Rate Limits)]
     end
 
-    subgraph obs [Observability optional]
-        Prom[Prometheus :9090]
+    subgraph streaming [Event Streaming]
+        ZK[Zookeeper]
+        Kafka[Kafka :29092]
+    end
+
+    subgraph consumers [Kafka Consumers]
+        LogConsumer[kafka-log-consumer<br/>stdout printer]
+        DashBackend["dashboard-backend :8000<br/>FastAPI log cache + alerter"]
+    end
+
+    subgraph frontends [Frontends]
+        Dashboard["Dashboard :3001<br/>Next.js Ops UI"]
+        UserFE["user-frontend :3002<br/>Public URL Shortening UI"]
+    end
+
+    subgraph obs [Observability]
+        Prom["Prometheus :9090"]
+        AM["Alertmanager :9093"]
+        Discord[Discord Webhooks]
+    end
+
+    subgraph infra [Infrastructure]
+        DashDB[(Dashboard DB :15433)]
+        DBBackup[db-backup<br/>Daily pg_dump]
+        Watchdog["compose-watchdog :8099<br/>Auto-restart manager"]
     end
 
     Browser --> LB
+    Browser --> Dashboard
+    Browser --> UserFE
     LB --> A
     LB --> B
     A --> PG
     B --> PG
+    A --> Redis
+    B --> Redis
+    A --> Kafka
+    B --> Kafka
+    ZK --- Kafka
+    Kafka --> LogConsumer
+    Kafka --> DashBackend
+    DashBackend --> DashDB
+    DashBackend --> Discord
+    Dashboard --> DashBackend
     Prom --> A
     Prom --> B
+    Prom --> AM
+    AM --> Discord
+    DBBackup --> PG
+    Watchdog -.->|monitors & restarts| A
+    Watchdog -.->|monitors & restarts| B
 ```
 
 ## Request path

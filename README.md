@@ -31,17 +31,44 @@ That's it. The app auto-creates tables and seeds a default user on first boot.
 ## Architecture at a Glance
 
 ```
-Clients --> NGINX LB (:8080) --> url-shortener-a/b --> PostgreSQL
-                                       |
-                                   Kafka (app-logs)
-                                       |
-                        +--------------+---------------+
-                        |              |               |
-                 log-consumer   dashboard-backend   discord-alerter
-                 (stdout)       (FastAPI + cache)    (webhook alerts)
+                            ┌──────────────────┐
+                            │  Browser / curl   │
+                            └────────┬─────────┘
+                                     │
+                         ┌───────────▼───────────┐
+                         │  NGINX Load Balancer   │
+                         │       :8080            │
+                         └─────┬───────────┬─────┘
+                               │           │
+                    ┌──────────▼──┐   ┌────▼──────────┐
+                    │ shortener-a │   │  shortener-b   │
+                    │  (Flask)    │   │   (Flask)      │
+                    └──┬───┬──┬──┘   └──┬───┬──┬──────┘
+                       │   │  │         │   │  │
+              ┌────────▼┐ ┌▼──▼─────┐ ┌─▼───▼┐ │
+              │PostgreSQL│ │  Redis  │ │      │ │
+              │  :15432  │ │  :6379  │ │      │ │
+              └──────────┘ └────────┘  │ Kafka│◄┘
+                                       │:29092│
+                         ┌─────────────┼──────┤
+                         │             │      │
+                   ┌─────▼─────┐ ┌─────▼────┐ │
+                   │  log-     │ │dashboard-│ │
+                   │  consumer │ │ backend  │ │
+                   │ (stdout)  │ │ (FastAPI)│ │
+                   └───────────┘ └──┬────┬──┘ │
+                                    │    │    │
+                              ┌─────▼┐ ┌─▼────▼──────┐
+                              │Dash  │ │   Discord    │
+                              │DB    │ │   Webhooks   │
+                              └──────┘ └─────────────┘
+
+  Observability: Prometheus :9090 ──► Alertmanager :9093 ──► Discord
+  Infra: compose-watchdog (auto-restart) · db-backup (daily pg_dump)
+  Frontends: Dashboard :3001 · User UI :3002
 ```
 
-Two stateless Flask replicas behind NGINX (`least_conn`). Every HTTP request streams to Kafka, consumed independently by three services. Full details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Two stateless Flask replicas behind NGINX (`least_conn`). Every HTTP request streams to Kafka, consumed independently by the log consumer and dashboard-backend. Redis handles caching and rate limiting. Full Mermaid diagram in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Project Structure
 
