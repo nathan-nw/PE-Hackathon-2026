@@ -19,4 +19,5 @@ Because `user_id` strongly requires an integer schema and the system natively un
 
 *(Capture a screenshot of your terminal executing the bad request and getting the safe JSON response back!)*
 
-*[Insert Screenshot Here]*
+<img width="898" height="81" alt="Screenshot 2026-04-05 at 9 59 59 AM" src="https://github.com/user-attachments/assets/09be9e68-4e7e-42e9-bb39-fc9647bb43cc" />
+
