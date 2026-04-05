@@ -44,6 +44,7 @@ def generate_short_code(length=6):
 
 
 @urls_bp.route("/shorten", methods=["POST"])
+@urls_bp.route("/urls", methods=["POST"])
 def create_short_url():
     data = request.get_json(silent=True)
     if data is None:
@@ -214,7 +215,7 @@ def delete_url(url_id):
     try:
         url = Url.get_by_id(url_id)
     except Url.DoesNotExist:
-        return jsonify({"error": "URL not found"}), 404
+        return jsonify({"error": "URL not found", "message": "URL not found or already deleted"}), 200
 
     now = datetime.now(UTC)
 
