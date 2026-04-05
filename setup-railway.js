@@ -452,7 +452,10 @@ async function syncInternalDatabaseVariables(projectId, environmentId, byName, d
   }
 
   // dashboard-backend: mirrors compose dashboard-backend + dashboard-db
+  // Explicit PORT=8080 (same as url-shortener) so ${{ dashboard-backend.PORT }} resolves when other
+  // services reference it; uvicorn uses Railway's PORT. Without this, cross-service PORT refs can be empty.
   const dashboardBackendVars = {
+    PORT: "8080",
     DASHBOARD_DATABASE_URL: varRef(pgDashboard, dbUrlKey),
     DASHBOARD_DB_NAME: "dashboard_db",
     KAFKA_LOG_TOPIC: "app-logs",

@@ -270,6 +270,8 @@ services:
     ports:
       - "8000:8000"
     environment:
+      # Override image default (8080) so published port 8000 matches the process (local dev).
+      PORT: "8000"
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       KAFKA_LOG_TOPIC: app-logs
       CACHE_MAX_ENTRIES: "1000"
